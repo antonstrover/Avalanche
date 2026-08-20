@@ -3,8 +3,8 @@
 The functions are the step 1 and the steps 3 to 6 of the movement tick.
 They release the arrivals, serve the lift queues, advance the skiers,
 end an edge, and start an edge.
-Each function reads a mask over the population arrays.
-Stage 3 keeps a loop over the selected skiers, because issue #26 removes it.
+Each function selects a group of skiers with a mask and writes that group at once.
+No loop goes over the skiers.
 """
 
 from dataclasses import dataclass, field
@@ -79,51 +79,57 @@ def serve_lift_queues(
 
     The lift throughput is a count of skiers in each hour.
     The service of one tick is that rate times the tick length.
-    The queue ticket gives the order of the service.
+    The service takes a whole skier, so the capacity truncates to an integer.
+    The queue ticket gives the order of the service, which is first in and first out.
     """
-    queued = np.nonzero(pop.location_kind == LocationKind.QUEUE)[0]
+    queued = np.flatnonzero(pop.location_kind == LocationKind.QUEUE)
     if queued.size == 0:
         return
 
     edges = pop.location_index[queued]
     members, rank = group_rank(edges, pop.queue_ticket[queued])
-    for order, index in enumerate(queued[members]):
-        edge = int(pop.location_index[index])
-        rate = float(topology.edge_lift_throughput[edge]) / SECONDS_IN_HOUR
-        if rank[order] >= int(rate * tick_seconds):
-            continue
-        pop.location_kind[index] = LocationKind.LIFT
-        pop.progress[index] = 0.0
-        pop.queue_ticket[index] = -1
+    capacity = (
+        topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR
+    ) * tick_seconds
+    served = queued[members][rank < capacity[edges[members]].astype(np.int64)]
+
+    pop.location_kind[served] = LocationKind.LIFT
+    pop.progress[served] = 0.0
+    pop.queue_ticket[served] = -1
     count_queues(pop, state)
 
 
-def advance_on_edges(pop: SkierArrays, topology: Topology, tick_seconds: float) -> None:
+def advance_on_edges(
+    pop: SkierArrays,
+    topology: Topology,
+    state: DynamicState,
+    tick_seconds: float,
+) -> None:
     """Advance each skier on a piste edge and on a lift edge.
 
     The advance is the tick length divided by the nominal travel time of the edge.
     The progress stops at 1.0.
+    An edge with a travel time of zero takes the skier to 1.0 in one tick.
+    Stage 4 reads the effective speed of `state` here.
     """
-    moving = np.isin(pop.location_kind, ON_EDGE)
-    for index in np.nonzero(moving)[0]:
-        travel_time = float(
-            topology.edge_nominal_travel_time[pop.location_index[index]]
-        )
-        if travel_time <= 0.0:
-            pop.progress[index] = 1.0
-        else:
-            pop.progress[index] = min(
-                1.0, pop.progress[index] + tick_seconds / travel_time
-            )
+    moving = np.flatnonzero(np.isin(pop.location_kind, ON_EDGE))
+    travel_time = topology.edge_nominal_travel_time[pop.location_index[moving]].astype(
+        np.float64
+    )
+    positive = travel_time > 0.0
+    step = tick_seconds / np.where(positive, travel_time, 1.0)
+    pop.progress[moving] = np.minimum(
+        1.0, np.where(positive, pop.progress[moving] + step, 1.0)
+    )
 
 
 def arrive_at_nodes(pop: SkierArrays, topology: Topology) -> None:
     """Move each skier that finishes an edge to the destination node of that edge."""
     finished = np.isin(pop.location_kind, ON_EDGE) & (pop.progress >= 1.0)
-    for index in np.nonzero(finished)[0]:
-        pop.location_kind[index] = LocationKind.NODE
-        pop.location_index[index] = topology.edge_destination[pop.location_index[index]]
-        pop.progress[index] = 0.0
+    destination = topology.edge_destination[pop.location_index[finished]]
+    pop.location_kind[finished] = LocationKind.NODE
+    pop.location_index[finished] = destination
+    pop.progress[finished] = 0.0
 
 
 def select_next_edges(
@@ -138,25 +144,35 @@ def select_next_edges(
     A skier that takes a lift edge joins the queue of that lift.
     A skier waits at the node when the next edge is closed or does not exist.
     """
-    at_node = pop.location_kind == LocationKind.NODE
-    for index in np.nonzero(at_node)[0]:
-        if pop.location_index[index] == pop.destination[index]:
-            pop.location_kind[index] = LocationKind.FINISHED
-            pop.status[index] = Status.COMPLETE
-            continue
+    at_node = np.flatnonzero(pop.location_kind == LocationKind.NODE)
+    arrived = pop.location_index[at_node] == pop.destination[at_node]
 
-        edge = int(routes.next_edge[pop.location_index[index], pop.destination[index]])
-        if edge == NO_EDGE or state.closed[edge]:
-            continue
+    complete = at_node[arrived]
+    pop.location_kind[complete] = LocationKind.FINISHED
+    pop.status[complete] = Status.COMPLETE
 
-        pop.location_index[index] = edge
-        pop.progress[index] = 0.0
-        if topology.edge_type[edge] == LIFT_EDGE:
-            pop.location_kind[index] = LocationKind.QUEUE
-            pop.queue_ticket[index] = pop.next_ticket
-            pop.next_ticket += 1
-        else:
-            pop.location_kind[index] = LocationKind.PISTE
+    travelling = at_node[~arrived]
+    next_edge = routes.next_edge[
+        pop.location_index[travelling], pop.destination[travelling]
+    ]
+
+    # A skier waits when no edge exists and when the edge is closed.
+    open_edge = next_edge != NO_EDGE
+    closed = np.asarray(state.closed, dtype=np.bool_)
+    open_edge[open_edge] = ~closed[next_edge[open_edge]]
+    starters = travelling[open_edge]
+    taken = next_edge[open_edge]
+
+    pop.location_index[starters] = taken
+    pop.progress[starters] = 0.0
+    lift = topology.edge_type[taken] == LIFT_EDGE
+    pop.location_kind[starters] = np.where(lift, LocationKind.QUEUE, LocationKind.PISTE)
+
+    # The joiners take the tickets in the ascending skier order, so the run is
+    # deterministic.
+    joiners = starters[lift]
+    pop.queue_ticket[joiners] = pop.next_ticket + np.arange(joiners.size)
+    pop.next_ticket += int(joiners.size)
     count_queues(pop, state)
 
 

@@ -28,7 +28,7 @@ TICK_LIMIT = 2000
 def run_tick(pop, topology, routes, state):
     """Run the steps 3 to 6 of one movement tick."""
     serve_lift_queues(pop, topology, state, TICK_SECONDS)
-    advance_on_edges(pop, topology, TICK_SECONDS)
+    advance_on_edges(pop, topology, state, TICK_SECONDS)
     arrive_at_nodes(pop, topology)
     select_next_edges(pop, topology, routes, state)
     accumulate_times(pop, TICK_SECONDS)
