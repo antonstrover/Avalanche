@@ -128,7 +128,9 @@ class MountainSim:
         arrive_at_nodes(pop, self.topology)
         # 6. Select the next edge for each skier at a node.
         #    This step also applies the closures of the step 7.
-        select_next_edges(pop, self.topology, self.routes, self.state)
+        select_next_edges(
+            pop, self.topology, self.routes, self.state, self.streams["choice"]
+        )
         # 7. Apply the ability limits and the capacity limits. Stage 3 adds these.
         # 8. Calculate the density, the speeds, and the hazards. Stage 4 adds this.
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
