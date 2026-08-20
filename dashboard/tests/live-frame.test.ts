@@ -4,13 +4,22 @@ import { describe, expect, it } from "vitest";
 import {
     decodeFrame,
     interpolatePositions,
+    type DisplayState,
     type FrameState,
     type PositionTable,
 } from "../src/workers/live-frame";
 
+const display: DisplayState = {
+    weather: { wind: 12, visibility: 700, snowfall: 4, temperature: -3 },
+    failures: [],
+    hazards: [],
+    closures: [],
+    timeline: [],
+};
+
 function packedFrame(sequence = 0): ArrayBuffer {
     const packed = encode({
-        version: 1,
+        version: 2,
         type: sequence === 0 ? "snapshot" : "frame",
         session_id: "session-1",
         sequence,
@@ -22,6 +31,7 @@ function packedFrame(sequence = 0): ArrayBuffer {
             location_kind: new Uint8Array([1, 5]),
             location_index: new Uint8Array(new Int32Array([0, 0]).buffer),
             progress: new Uint8Array(new Float32Array([0.5, 0]).buffer),
+            display,
         },
     });
     return packed.buffer.slice(packed.byteOffset, packed.byteOffset + packed.byteLength) as ArrayBuffer;
@@ -30,7 +40,7 @@ function packedFrame(sequence = 0): ArrayBuffer {
 describe("live frame handling", () => {
     it("decodes the shared stream contract fixture", () => {
         const encoded = readFileSync(
-            "../tests/fixtures/live-frame-v1.msgpack.b64",
+            "../tests/fixtures/live-frame-v2.msgpack.b64",
             "utf8",
         );
         const bytes = Buffer.from(encoded.trim(), "base64");
@@ -47,6 +57,7 @@ describe("live frame handling", () => {
 
         expect(result.frame?.sequence).toBe(3);
         expect(result.frame?.progress[0]).toBe(0.5);
+        expect(result.frame?.display.weather.wind).toBe(12);
     });
 
     it("decodes the binary population arrays", () => {
@@ -62,7 +73,7 @@ describe("live frame handling", () => {
     });
 
     it("rejects an unexpected stream version", () => {
-        const packed = encode({ version: 2, type: "frame" });
+        const packed = encode({ version: 1, type: "frame" });
         const buffer = packed.buffer.slice(
             packed.byteOffset,
             packed.byteOffset + packed.byteLength,
@@ -74,7 +85,7 @@ describe("live frame handling", () => {
 
     it("rejects an invalid binary array length", () => {
         const packed = encode({
-            version: 1,
+            version: 2,
             type: "snapshot",
             session_id: "session-1",
             sequence: 0,
@@ -85,6 +96,7 @@ describe("live frame handling", () => {
                 location_kind: new Uint8Array([1]),
                 location_index: new Uint8Array(8),
                 progress: new Uint8Array(8),
+                display,
             },
         });
         const buffer = packed.buffer.slice(
@@ -106,6 +118,7 @@ describe("live frame handling", () => {
             kind: new Int8Array([1, 5]),
             index: new Int32Array([0, 0]),
             progress: new Float32Array([progress, 0]),
+            display,
         });
         const table: PositionTable = {
             nodePositions: new Float32Array([0, 0, 0]),
@@ -133,6 +146,7 @@ describe("live frame handling", () => {
             kind: new Int8Array([1]),
             index: new Int32Array([index]),
             progress: new Float32Array([0.5]),
+            display,
         });
         const table: PositionTable = {
             nodePositions: new Float32Array(0),

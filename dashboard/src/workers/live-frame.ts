@@ -1,6 +1,61 @@
 import { decode } from "@msgpack/msgpack";
 
-export const STREAM_VERSION = 1;
+export const STREAM_VERSION = 2;
+
+export type Severity = "low" | "medium" | "high";
+
+export type WeatherState = {
+    wind: number;
+    visibility: number;
+    snowfall: number;
+    temperature: number;
+};
+
+export type FailureState = {
+    event_id: string;
+    kind: "lift_stoppage" | "late_telemetry" | "sudden_closure";
+    target: number;
+    target_id: string;
+    start_time_seconds: number;
+    duration_seconds: number;
+    end_time_seconds: number;
+    controller_visible: boolean;
+    severity: Severity;
+};
+
+export type HazardState = {
+    event_id: string;
+    event_type: "early_indicator" | "true_harm";
+    edge_index: number;
+    severity: Severity;
+    hazard_score: number;
+};
+
+export type ClosureState = {
+    edge_index: number;
+    weather: boolean;
+    failure: boolean;
+    operational: boolean;
+};
+
+export type TimelineEvent = {
+    event_id: string;
+    event_type: string;
+    target: string;
+    edge_index: number | null;
+    start_time_seconds: number;
+    end_time_seconds: number | null;
+    severity: Severity;
+    label: string;
+};
+
+export type DisplayState = {
+    weather: WeatherState;
+    failures: FailureState[];
+    hazards: HazardState[];
+    closures: ClosureState[];
+    timeline: TimelineEvent[];
+};
 
 export type FrameState = {
     sequence: number;
@@ -10,6 +65,7 @@ export type FrameState = {
     kind: Int8Array;
     index: Int32Array;
     progress: Float32Array;
+    display: DisplayState;
 };
 
 type Envelope = {
@@ -24,8 +80,120 @@ type Envelope = {
         location_kind?: unknown;
         location_index?: unknown;
         progress?: unknown;
+        display?: unknown;
     };
 };
+
+function record(value: unknown, name: string): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`the ${name} is invalid`);
+    }
+    return value as Record<string, unknown>;
+}
+
+function number(value: unknown, name: string): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`the ${name} is invalid`);
+    }
+    return value;
+}
+
+function string(value: unknown, name: string): string {
+    if (typeof value !== "string" || value.length === 0) {
+        throw new Error(`the ${name} is invalid`);
+    }
+    return value;
+}
+
+function severity(value: unknown): Severity {
+    if (value !== "low" && value !== "medium" && value !== "high") {
+        throw new Error("the severity is invalid");
+    }
+    return value;
+}
+
+function displayState(value: unknown): DisplayState {
+    const display = record(value, "display state");
+    const weather = record(display.weather, "weather state");
+    const failures = Array.isArray(display.failures) ? display.failures : null;
+    const hazards = Array.isArray(display.hazards) ? display.hazards : null;
+    const closures = Array.isArray(display.closures) ? display.closures : null;
+    const timeline = Array.isArray(display.timeline) ? display.timeline : null;
+    if (!failures || !hazards || !closures || !timeline || timeline.length > 64) {
+        throw new Error("the display collections are invalid");
+    }
+    return {
+        weather: {
+            wind: number(weather.wind, "wind"),
+            visibility: number(weather.visibility, "visibility"),
+            snowfall: number(weather.snowfall, "snowfall"),
+            temperature: number(weather.temperature, "temperature"),
+        },
+        failures: failures.map((value) => {
+            const item = record(value, "failure");
+            const kind = item.kind;
+            if (
+                kind !== "lift_stoppage" &&
+                kind !== "late_telemetry" &&
+                kind !== "sudden_closure"
+            ) {
+                throw new Error("the failure kind is invalid");
+            }
+            return {
+                event_id: string(item.event_id, "failure identity"),
+                kind,
+                target: number(item.target, "failure target"),
+                target_id: string(item.target_id, "failure target identity"),
+                start_time_seconds: number(item.start_time_seconds, "failure start"),
+                duration_seconds: number(item.duration_seconds, "failure duration"),
+                end_time_seconds: number(item.end_time_seconds, "failure end"),
+                controller_visible: item.controller_visible === true,
+                severity: severity(item.severity),
+            };
+        }),
+        hazards: hazards.map((value) => {
+            const item = record(value, "hazard");
+            if (item.event_type !== "early_indicator" && item.event_type !== "true_harm") {
+                throw new Error("the hazard type is invalid");
+            }
+            return {
+                event_id: string(item.event_id, "hazard identity"),
+                event_type: item.event_type,
+                edge_index: number(item.edge_index, "hazard edge"),
+                severity: severity(item.severity),
+                hazard_score: number(item.hazard_score, "hazard score"),
+            };
+        }),
+        closures: closures.map((value) => {
+            const item = record(value, "closure");
+            return {
+                edge_index: number(item.edge_index, "closure edge"),
+                weather: item.weather === true,
+                failure: item.failure === true,
+                operational: item.operational === true,
+            };
+        }),
+        timeline: timeline.map((value) => {
+            const item = record(value, "timeline event");
+            return {
+                event_id: string(item.event_id, "timeline identity"),
+                event_type: string(item.event_type, "timeline type"),
+                target: string(item.target, "timeline target"),
+                edge_index:
+                    item.edge_index === null
+                        ? null
+                        : number(item.edge_index, "timeline edge"),
+                start_time_seconds: number(item.start_time_seconds, "timeline start"),
+                end_time_seconds:
+                    item.end_time_seconds === null
+                        ? null
+                        : number(item.end_time_seconds, "timeline end"),
+                severity: severity(item.severity),
+                label: string(item.label, "timeline label"),
+            };
+        }),
+    };
+}
 
 function copiedBuffer(value: unknown, expectedBytes: number): ArrayBuffer {
     if (!(value instanceof Uint8Array) || value.byteLength !== expectedBytes) {
@@ -65,6 +233,7 @@ export function decodeFrame(
     const kind = new Int8Array(copiedBuffer(payload?.location_kind, skierCount));
     const index = new Int32Array(copiedBuffer(payload?.location_index, skierCount * 4));
     const progress = new Float32Array(copiedBuffer(payload?.progress, skierCount * 4));
+    const display = displayState(payload?.display);
     for (let skier = 0; skier < skierCount; skier += 1) {
         if (kind[skier] < 0 || kind[skier] > 5) throw new Error("a location kind is invalid");
         if (!Number.isFinite(progress[skier]) || progress[skier] < 0 || progress[skier] > 1) {
@@ -81,6 +250,7 @@ export function decodeFrame(
             kind,
             index,
             progress,
+            display,
         },
     };
 }

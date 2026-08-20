@@ -32,3 +32,15 @@ test("a live session draws 5000 skiers smoothly", async ({ page }) => {
     expect(frames / 5).toBeGreaterThanOrEqual(30);
     await expect(page.getByTestId("live-status")).toHaveText("Live status: live");
 });
+
+test("a live failure appears on the timeline", async ({ page }) => {
+    await page.goto("/");
+    await waitForScene(page);
+    await page.getByRole("button", { name: "Start failure demo" }).click();
+    await expect(page.getByTestId("live-status")).toHaveText("Live status: live", {
+        timeout: 15000,
+    });
+    const marker = page.locator('[data-event-type="failure_started"]');
+    await expect(marker).toContainText("lift stoppage", { timeout: 15000 });
+    await expect(marker).toContainText("lift1_base->lift1_top");
+});

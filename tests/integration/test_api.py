@@ -5,10 +5,12 @@ import msgpack
 from fastapi.testclient import TestClient
 
 from avalanche.api.app import app
+from avalanche.api.sessions import MOUNTAIN_PATH, TIMELINE_LIMIT, display_state
+from avalanche.sim import MountainSim
 
 client = TestClient(app)
 CONTRACT_FIXTURE = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "live-frame-v1.msgpack.b64"
+    Path(__file__).resolve().parents[1] / "fixtures" / "live-frame-v2.msgpack.b64"
 )
 
 
@@ -43,15 +45,22 @@ def test_live_session_streams_a_complete_population():
 
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
         first = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        assert first["version"] == 1
+        assert first["version"] == 2
         assert first["type"] == "snapshot"
         assert first["session_id"] == session_id
         assert len(first["payload"]["location_kind"]) == 5000
         assert len(first["payload"]["location_index"]) == 5000 * 4
         assert len(first["payload"]["progress"]) == 5000 * 4
+        assert set(first["payload"]["display"]) == {
+            "weather",
+            "failures",
+            "hazards",
+            "closures",
+            "timeline",
+        }
 
         websocket.send_bytes(
-            msgpack.packb({"version": 1, "type": "snapshot_request"}, use_bin_type=True)
+            msgpack.packb({"version": 2, "type": "snapshot_request"}, use_bin_type=True)
         )
         recovered = msgpack.unpackb(websocket.receive_bytes(), raw=False)
         assert recovered["type"] == "snapshot"
@@ -76,7 +85,61 @@ def test_python_decodes_the_stream_contract_fixture():
     packed = base64.b64decode(CONTRACT_FIXTURE.read_text().strip())
     frame = msgpack.unpackb(packed, raw=False)
 
-    assert frame["version"] == 1
+    assert frame["version"] == 2
     assert frame["session_id"] == "fixture-session"
     assert frame["payload"]["skier_count"] == 2
     assert len(frame["payload"]["location_index"]) == 8
+    assert frame["payload"]["display"]["weather"]["wind"] == 12.0
+
+
+def test_failure_demo_streams_one_stable_timeline_marker():
+    response = client.post(
+        "/api/sessions",
+        json={"seed": 7, "skier_count": 20, "demo_failure": True},
+    )
+    session = response.json()
+    session_id = session["session_id"]
+
+    with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
+        marker = None
+        for _ in range(12):
+            frame = msgpack.unpackb(websocket.receive_bytes(), raw=False)
+            timeline = frame.get("payload", {}).get("display", {}).get("timeline", [])
+            marker = next(
+                (
+                    event
+                    for event in timeline
+                    if event["event_type"] == "failure_started"
+                ),
+                None,
+            )
+            if marker is not None:
+                break
+        assert marker is not None
+        assert marker["event_id"].endswith(":start")
+        assert marker["target"] == "lift1_base->lift1_top"
+
+    assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+
+
+def test_the_timeline_window_is_bounded_and_has_unique_identities():
+    failures = {
+        "schedule": [
+            {
+                "kind": "sudden_closure",
+                "target": 0,
+                "start_time_seconds": float(index),
+                "duration_seconds": 0.5,
+                "controller_visible": True,
+            }
+            for index in range(40)
+        ]
+    }
+    sim = MountainSim(MOUNTAIN_PATH)
+    sim.reset(1, {"failures": failures})
+    sim.simulation_time = 100.0
+
+    timeline = display_state(sim)["timeline"]
+    identities = {event["event_id"] for event in timeline}
+    assert len(timeline) == TIMELINE_LIMIT
+    assert len(identities) == TIMELINE_LIMIT

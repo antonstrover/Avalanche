@@ -93,7 +93,7 @@ export interface components {
         };
         /**
          * SessionCreate
-         * @description Validate the inputs of a Stage 3 live session.
+         * @description Validate the inputs of a live session.
          */
         SessionCreate: {
             /**
@@ -106,6 +106,31 @@ export interface components {
              * @default 5000
              */
             skier_count: number;
+            /**
+             * Demo Failure
+             * @default false
+             */
+            demo_failure: boolean;
+        };
+        /**
+         * SessionResponse
+         * @description Describe one live session.
+         */
+        SessionResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Status */
+            status: string;
+            /** Skier Count */
+            skier_count: number;
+            /** Simulation Speed */
+            simulation_speed: number;
+            /** Frame Interval Ms */
+            frame_interval_ms: number;
+            /** Topology Version */
+            topology_version: string;
+            /** Demo Failure */
+            demo_failure: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -192,9 +217,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["SessionResponse"];
                 };
             };
             /** @description Validation Error */
