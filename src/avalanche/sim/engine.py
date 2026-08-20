@@ -302,6 +302,13 @@ class MountainSim:
             ("failure_closed", self.state.failure_closed),
             ("lift_stopped", self.state.lift_stopped),
             ("telemetry_late", self.state.telemetry_late),
+            ("lift_capacity_factor", self.state.lift_capacity_factor),
+            ("crowd_messages", self.state.crowd_messages),
+            ("telemetry_override", self.state.telemetry_override),
+            (
+                "telemetry_override_enabled",
+                self.state.telemetry_override_enabled,
+            ),
             ("occupancy", self.state.occupancy),
             ("queue_length", self.state.queue_length),
             ("speed_factor", self.state.speed_factor),

@@ -158,7 +158,11 @@ def validate_action(
 
 def sample_valid_action(action_space: spaces.Dict, masks: ActionMasks) -> Action:
     """Sample an action and clear each command on a masked target."""
-    action = action_space.sample()
+    return apply_action_masks(action_space.sample(), masks)
+
+
+def apply_action_masks(action: Action, masks: ActionMasks) -> Action:
+    """Clear each command on a masked target and return the action."""
     edge_mask = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
         masks["lifts"], dtype=bool
     )
