@@ -1,0 +1,16 @@
+name: Assign issues
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign to antonstrover
+        run: gh issue edit "$ISSUE_NUMBER" --add-assignee antonstrover
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GH_REPO: ${{ github.repository }}
