@@ -1,5 +1,6 @@
 # The small resort fixture.
 # The lifts go up the mountain. The pistes go down the mountain.
+# The lift throughput is a count of skiers in each hour.
 
 name: small-resort
 

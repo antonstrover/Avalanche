@@ -14,6 +14,8 @@ from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
 
 LIFT_EDGE = EDGE_TYPE_NAMES.index("lift")
 
+SECONDS_IN_HOUR = 3600.0
+
 ON_EDGE = (LocationKind.PISTE, LocationKind.LIFT)
 
 
@@ -46,13 +48,15 @@ def serve_lift_queues(
 ) -> None:
     """Move the served skiers from a lift queue onto the lift.
 
-    The service of one tick is the lift throughput times the tick length.
+    The lift throughput is a count of skiers in each hour.
+    The service of one tick is that rate times the tick length.
     The queue length limits the service.
     """
     for edge, queue in enumerate(state.queues):
         if not queue:
             continue
-        capacity = int(topology.edge_lift_throughput[edge] * tick_seconds)
+        rate = float(topology.edge_lift_throughput[edge]) / SECONDS_IN_HOUR
+        capacity = int(rate * tick_seconds)
         for _ in range(min(capacity, len(queue))):
             skier = skiers[queue.popleft()]
             skier.location_kind = LocationKind.LIFT
