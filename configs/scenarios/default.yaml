@@ -2,6 +2,13 @@ scenario:
   name: calm-day
   movement_tick_seconds: 5
   control_interval_seconds: 60
+  weather:
+    initial:
+      wind: 4.0
+      visibility: 10000.0
+      snowfall: 0.0
+      temperature: 2.0
+    schedule: []
 
 intervals:
   movement_tick_seconds: 5
