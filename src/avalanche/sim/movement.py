@@ -54,6 +54,18 @@ class DynamicState:
     speed_factor: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.float64)
     )
+    congestion_speed_factor: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    weather_speed_factor: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    weather_risk: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    weather_closed: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
     advice_edge: np.ndarray = field(
         default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.int32)
     )
@@ -70,6 +82,10 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         occupancy=np.zeros(topology.edge_count, dtype=np.int32),
         queue_length=np.zeros(topology.edge_count, dtype=np.int32),
         speed_factor=np.ones(topology.edge_count, dtype=np.float64),
+        congestion_speed_factor=np.ones(topology.edge_count, dtype=np.float64),
+        weather_speed_factor=np.ones(topology.edge_count, dtype=np.float64),
+        weather_risk=np.zeros(topology.edge_count, dtype=np.float64),
+        weather_closed=np.zeros(topology.edge_count, dtype=np.bool_),
         advice_edge=np.full(
             (topology.node_count, len(ABILITY_NAMES)), NO_EDGE, dtype=np.int32
         ),
@@ -79,7 +95,9 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
 def open_mask(edges: np.ndarray, state: DynamicState) -> np.ndarray:
     """Return the flag of each edge that exists and that is open."""
     usable = edges != NO_EDGE
-    usable[usable] = ~state.closed[edges[usable]]
+    usable[usable] = ~(
+        state.closed[edges[usable]] | state.weather_closed[edges[usable]]
+    )
     return usable
 
 
@@ -100,9 +118,14 @@ def update_congestion(
     state.queue_length = np.bincount(queued, minlength=edge_count).astype(np.int32)
 
     load = state.occupancy / np.maximum(topology.edge_safe_capacity, 1.0)
-    state.speed_factor = np.clip(
+    state.congestion_speed_factor = np.clip(
         1.0 - CONGESTION_SLOPE * load, MIN_SPEED_FACTOR, 1.0
     ).astype(np.float64)
+    state.speed_factor = np.clip(
+        state.congestion_speed_factor * state.weather_speed_factor,
+        MIN_SPEED_FACTOR,
+        1.0,
+    )
 
 
 def start_arrivals(

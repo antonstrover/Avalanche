@@ -13,7 +13,7 @@ The simulator moves up to 10,000 skiers across a small resort.
 The simulator keeps the skier state in NumPy arrays.
 The application draws the same population in 3D.
 
-The controllers, the monitors, the weather, and the experiments do not exist yet.
+The controllers, the monitors, and the experiments do not exist yet.
 
 ### The simulator
 
@@ -24,6 +24,7 @@ The controllers, the monitors, the weather, and the experiments do not exist yet
 | Routes | `src/avalanche/sim/routes.py` | gives the shortest path from each node to each destination |
 | Population | `src/avalanche/sim/population.py` | samples the skier attributes and stores the skier arrays |
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
+| Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
 | Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and the state checksum |
 
 The mountain is `configs/mountain/small-resort.yaml`.
@@ -33,6 +34,7 @@ The movement tick uses masked NumPy operations.
 The route choice groups skiers by their location and their attributes.
 The compliance value controls the probability that a skier follows the advice.
 The congestion changes the effective edge speed.
+The weather changes the piste speed, the edge risk, and the lift availability.
 
 ### The application
 
