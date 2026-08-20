@@ -36,13 +36,12 @@ jobs:
       # the job once tests exist.
       - name: Run tests (including the determinism test)
         run: |
-          uv run pytest
-          code=$?
-          if [ "$code" -eq 5 ]; then
+          uv run pytest || code=$?
+          if [ "${code:-0}" -eq 5 ]; then
             echo "No tests collected yet."
             exit 0
           fi
-          exit "$code"
+          exit "${code:-0}"
 
   dashboard:
     name: Dashboard tests and build
