@@ -10,9 +10,16 @@ from avalanche.sim.movement import (
     new_dynamic_state,
     select_next_edges,
     serve_lift_queues,
+    start_arrivals,
+)
+from avalanche.sim.population import (
+    SkierArrays,
+    empty_population,
+    group_rank,
+    population_from_starts,
 )
 from avalanche.sim.routes import RouteTable, build_route_table, walk_route
-from avalanche.sim.skier import LocationKind, Skier, Status
+from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import (
     DIFFICULTY_NAMES,
     EDGE_TYPE_NAMES,
@@ -33,11 +40,15 @@ __all__ = [
     "RouteTable",
     "build_route_table",
     "walk_route",
-    "Skier",
+    "SkierArrays",
+    "empty_population",
+    "population_from_starts",
+    "group_rank",
     "LocationKind",
     "Status",
     "DynamicState",
     "new_dynamic_state",
+    "start_arrivals",
     "serve_lift_queues",
     "advance_on_edges",
     "arrive_at_nodes",

@@ -20,7 +20,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from avalanche.sim import LocationKind, MountainSim, Skier, Status
+import numpy as np
+
+from avalanche.sim import LocationKind, MountainSim, Status, population_from_starts
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 SCENE = REPOSITORY / "dashboard" / "src" / "mountain"
@@ -54,7 +56,7 @@ def scene_indices(
 
 
 def place(
-    skier: Skier,
+    index: int,
     simulation: MountainSim,
     nodes: dict[str, int],
     edges: dict[tuple[str, str], int],
@@ -62,15 +64,18 @@ def place(
     """Return the place of one skier in the indices of the scene."""
     topology = simulation.topology
     assert topology is not None
-    kind = KIND_NAMES[skier.location_kind]
-    if skier.location_kind == LocationKind.FINISHED:
+    pop = simulation.population
+    location_kind = LocationKind(pop.location_kind[index])
+    location_index = int(pop.location_index[index])
+    kind = KIND_NAMES[location_kind]
+    if location_kind == LocationKind.FINISHED:
         return [kind, -1, 0.0]
-    if skier.location_kind == LocationKind.NODE:
-        node_id = topology.node_ids[skier.location_index]
+    if location_kind == LocationKind.NODE:
+        node_id = topology.node_ids[location_index]
         return [kind, nodes[node_id], 0.0]
-    source = topology.node_ids[topology.edge_source[skier.location_index]]
-    destination = topology.node_ids[topology.edge_destination[skier.location_index]]
-    return [kind, edges[(source, destination)], round(float(skier.progress), 4)]
+    source = topology.node_ids[topology.edge_source[location_index]]
+    destination = topology.node_ids[topology.edge_destination[location_index]]
+    return [kind, edges[(source, destination)], round(float(pop.progress[index]), 4)]
 
 
 def export(source: Path, resort_path: Path, output: Path) -> dict[str, Any]:
@@ -84,26 +89,30 @@ def export(source: Path, resort_path: Path, output: Path) -> dict[str, Any]:
     start = topology.node_index["base_village"]
     exit_node = topology.node_index["base_exit"]
     # The skiers arrive one after another, so the markers spread along the pistes.
-    arrivals = [order * ARRIVAL_TICKS for order in range(SKIER_COUNT)]
+    arrivals = [
+        order * ARRIVAL_TICKS * simulation.tick_seconds for order in range(SKIER_COUNT)
+    ]
+    simulation.population = population_from_starts(
+        starts=[start] * SKIER_COUNT,
+        destinations=exit_node,
+        arrival_times=arrivals,
+    )
+    pop = simulation.population
 
     frames = []
-    for tick in range(TICK_LIMIT):
-        if tick in arrivals:
-            simulation.add_skier(Skier(destination=exit_node, location_index=start))
+    for _ in range(TICK_LIMIT):
         simulation.tick()
-        if tick % FRAME_TICKS == 0:
+        if simulation.step % FRAME_TICKS == 1:
             frames.append(
                 {
                     "time": simulation.simulation_time,
                     "skiers": [
-                        place(skier, simulation, nodes, edges)
-                        for skier in simulation.skiers
+                        place(index, simulation, nodes, edges)
+                        for index in range(pop.arrived)
                     ],
                 }
             )
-        if len(simulation.skiers) == SKIER_COUNT and all(
-            skier.status == Status.COMPLETE for skier in simulation.skiers
-        ):
+        if pop.arrived == SKIER_COUNT and bool(np.all(pop.status == Status.COMPLETE)):
             break
 
     replay = {

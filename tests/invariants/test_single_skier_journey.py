@@ -6,7 +6,6 @@ import pytest
 
 from avalanche.sim import (
     LocationKind,
-    Skier,
     Status,
     accumulate_times,
     advance_on_edges,
@@ -14,6 +13,7 @@ from avalanche.sim import (
     build_route_table,
     load_topology,
     new_dynamic_state,
+    population_from_starts,
     select_next_edges,
     serve_lift_queues,
 )
@@ -25,13 +25,13 @@ TICK_SECONDS = 5.0
 TICK_LIMIT = 2000
 
 
-def run_tick(skiers, topology, routes, state):
+def run_tick(pop, topology, routes, state):
     """Run the steps 3 to 6 of one movement tick."""
-    serve_lift_queues(skiers, topology, state, TICK_SECONDS)
-    advance_on_edges(skiers, topology, TICK_SECONDS)
-    arrive_at_nodes(skiers, topology)
-    select_next_edges(skiers, topology, routes, state)
-    accumulate_times(skiers, TICK_SECONDS)
+    serve_lift_queues(pop, topology, state, TICK_SECONDS)
+    advance_on_edges(pop, topology, TICK_SECONDS)
+    arrive_at_nodes(pop, topology)
+    select_next_edges(pop, topology, routes, state)
+    accumulate_times(pop, TICK_SECONDS)
 
 
 @pytest.fixture(scope="module")
@@ -41,26 +41,27 @@ def journey():
     routes = build_route_table(topology)
     state = new_dynamic_state(topology)
 
-    start = topology.node_index["base_village"]
-    skier = Skier(destination=topology.node_index["base_exit"], location_index=start)
-    skiers = [skier]
+    pop = population_from_starts(
+        starts=[topology.node_index["base_village"]],
+        destinations=topology.node_index["base_exit"],
+    )
 
     kinds = []
     journey_times = []
     for _ in range(TICK_LIMIT):
-        run_tick(skiers, topology, routes, state)
-        kinds.append(skier.location_kind)
-        journey_times.append(skier.journey_time)
-        if skier.status == Status.COMPLETE:
+        run_tick(pop, topology, routes, state)
+        kinds.append(LocationKind(pop.location_kind[0]))
+        journey_times.append(float(pop.journey_time[0]))
+        if pop.status[0] == Status.COMPLETE:
             break
 
-    return skier, kinds, journey_times
+    return pop, kinds, journey_times
 
 
 def test_the_skier_completes_the_journey(journey):
-    skier, _, _ = journey
-    assert skier.status == Status.COMPLETE
-    assert skier.location_kind == LocationKind.FINISHED
+    pop, _, _ = journey
+    assert pop.status[0] == Status.COMPLETE
+    assert pop.location_kind[0] == LocationKind.FINISHED
 
 
 def test_the_journey_time_increases_in_each_tick(journey):
@@ -72,8 +73,8 @@ def test_the_journey_time_increases_in_each_tick(journey):
 
 
 def test_the_skier_passes_through_a_lift_queue_and_a_lift(journey):
-    skier, kinds, _ = journey
+    pop, kinds, _ = journey
     assert LocationKind.QUEUE in kinds
     assert LocationKind.LIFT in kinds
     assert LocationKind.PISTE in kinds
-    assert skier.wait_time > 0.0
+    assert pop.wait_time[0] > 0.0
