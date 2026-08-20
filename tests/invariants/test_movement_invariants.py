@@ -2,21 +2,22 @@
 
 Each scenario runs a few skiers on the small resort with one seed.
 The checks cover the skier count, the one valid state, a closed edge,
-the increasing time, and the progress range.
+the increasing time, the array lengths, and the progress range.
 """
 
 import random
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from avalanche.sim import (
     LocationKind,
     MountainSim,
-    Skier,
     Status,
     build_route_table,
     load_topology,
+    population_from_starts,
     walk_route,
 )
 from avalanche.sim.routes import NO_EDGE
@@ -32,7 +33,7 @@ ON_EDGE = (LocationKind.PISTE, LocationKind.LIFT, LocationKind.QUEUE)
 
 
 def build_scenario(seed):
-    """Return the skiers and the closed edge of one seed.
+    """Return the population and the closed edge of one seed.
 
     The start node and the destination node change with the seed.
     The destination must be reachable from each start node.
@@ -57,55 +58,56 @@ def build_scenario(seed):
         for start in starts
         if start == destination or routes.next_edge[start, destination] != NO_EDGE
     ]
-    skiers = [
-        Skier(destination=destination, location_index=choose.choice(reachable))
-        for _ in range(choose.randint(2, MAX_SKIERS))
-    ]
+    chosen = [choose.choice(reachable) for _ in range(choose.randint(2, MAX_SKIERS))]
+    pop = population_from_starts(starts=chosen, destinations=destination)
 
     used = {
         edge
-        for skier in skiers
-        for edge in walk_route(routes, topology, skier.location_index, destination)
+        for start in chosen
+        for edge in walk_route(routes, topology, start, destination)
     }
     spare = sorted(set(range(topology.edge_count)) - used)
-    return skiers, choose.choice(spare)
+    return pop, choose.choice(spare)
 
 
 def check_one_valid_state(sim):
     """Check that each skier has exactly one valid location and one valid status."""
-    queued = {index for queue in sim.state.queues for index in queue}
-    for index, skier in enumerate(sim.skiers):
-        assert skier.location_kind in tuple(LocationKind)
-        assert skier.status in tuple(Status)
-        assert 0.0 <= skier.progress <= 1.0
+    pop = sim.population
+    kinds = np.array(tuple(LocationKind), dtype=np.int8)
+    assert np.all(np.isin(pop.location_kind, kinds))
+    assert np.all(np.isin(pop.status, np.array(tuple(Status), dtype=np.int8)))
+    assert np.all((pop.progress >= 0.0) & (pop.progress <= 1.0))
 
-        if skier.location_kind in (LocationKind.PISTE, LocationKind.LIFT):
-            assert 0 <= skier.location_index < sim.topology.edge_count
-        elif skier.location_kind == LocationKind.QUEUE:
-            assert 0 <= skier.location_index < sim.topology.edge_count
-            # A skier in a queue waits in the queue of its own edge, and only there.
-            assert index in sim.state.queues[skier.location_index]
-        else:
-            assert 0 <= skier.location_index < sim.topology.node_count
+    on_edge = np.isin(pop.location_kind, ON_EDGE)
+    assert np.all(pop.location_index[on_edge] < sim.topology.edge_count)
+    assert np.all(pop.location_index[~on_edge] < sim.topology.node_count)
+    assert np.all(pop.location_index >= 0)
 
-        assert index in queued or skier.location_kind != LocationKind.QUEUE
-        assert index not in queued or skier.location_kind == LocationKind.QUEUE
-        assert (skier.location_kind == LocationKind.FINISHED) == (
-            skier.status == Status.COMPLETE
-        )
+    # A skier in a queue holds a ticket, and only that skier holds one.
+    queued = pop.location_kind == LocationKind.QUEUE
+    assert np.all(pop.queue_ticket[queued] >= 0)
+    assert np.all(pop.queue_ticket[~queued] == -1)
+
+    # The queue length of an edge counts the skiers that wait on that edge.
+    for edge in range(sim.topology.edge_count):
+        waiting = np.count_nonzero(queued & (pop.location_index == edge))
+        assert sim.state.queue_length[edge] == waiting
+
+    finished = pop.location_kind == LocationKind.FINISHED
+    assert np.all(finished == (pop.status == Status.COMPLETE))
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_the_movement_tick_holds_the_invariants(seed):
-    skiers, closed_edge = build_scenario(seed)
+    pop, closed_edge = build_scenario(seed)
 
     sim = MountainSim(FIXTURE)
     sim.reset(seed)
-    for skier in skiers:
-        sim.add_skier(skier)
+    sim.population = pop
     sim.state.closed[closed_edge] = True
 
-    count = len(sim.skiers)
+    count = len(sim.population)
+    lengths = {name: array.size for name, array in pop.checksum_fields()}
     time = sim.simulation_time
     finished = 0
 
@@ -113,7 +115,12 @@ def test_the_movement_tick_holds_the_invariants(seed):
         sim.tick()
 
         # The count of skiers does not change.
-        assert len(sim.skiers) == count
+        assert len(sim.population) == count
+
+        # Each array of the population keeps its length.
+        assert {
+            name: array.size for name, array in sim.population.checksum_fields()
+        } == lengths
 
         # The simulation time increases in each tick.
         assert sim.simulation_time > time
@@ -123,13 +130,13 @@ def test_the_movement_tick_holds_the_invariants(seed):
         check_one_valid_state(sim)
 
         # A closed edge accepts no new skier.
-        assert not sim.state.queues[closed_edge]
-        for skier in sim.skiers:
-            assert not (
-                skier.location_kind in ON_EDGE and skier.location_index == closed_edge
-            )
+        assert sim.state.queue_length[closed_edge] == 0
+        on_closed = np.isin(sim.population.location_kind, ON_EDGE) & (
+            sim.population.location_index == closed_edge
+        )
+        assert not np.any(on_closed)
 
-        finished = sum(1 for skier in sim.skiers if skier.status == Status.COMPLETE)
+        finished = np.count_nonzero(sim.population.status == Status.COMPLETE)
         if finished == count:
             break
 
@@ -148,13 +155,40 @@ def test_a_closed_edge_on_the_route_accepts_no_skier(seed):
 
     sim = MountainSim(FIXTURE)
     sim.reset(seed)
-    for _ in range(MAX_SKIERS):
-        sim.add_skier(Skier(destination=destination, location_index=start))
+    sim.population = population_from_starts(
+        starts=[start] * MAX_SKIERS, destinations=destination
+    )
     sim.state.closed[closed_edge] = True
 
     for _ in range(TICK_LIMIT):
         sim.tick()
-        assert not sim.state.queues[closed_edge]
-        for skier in sim.skiers:
-            assert skier.location_kind == LocationKind.NODE
-            assert skier.location_index == start
+        assert sim.state.queue_length[closed_edge] == 0
+        assert np.all(sim.population.location_kind == LocationKind.NODE)
+        assert np.all(sim.population.location_index == start)
+
+
+def test_the_array_lengths_hold_through_a_whole_run():
+    """Each array of the population must keep the length `N` through a run."""
+    topology = load_topology(FIXTURE)
+    start = topology.node_index["base_village"]
+    destination = topology.node_index["base_exit"]
+    count = MAX_SKIERS
+
+    sim = MountainSim(FIXTURE)
+    sim.reset(0)
+    sim.population = population_from_starts(
+        starts=[start] * count,
+        destinations=destination,
+        arrival_times=[order * 60.0 for order in range(count)],
+    )
+
+    for _ in range(TICK_LIMIT):
+        for name, array in sim.population.checksum_fields():
+            assert array.size == count, name
+        sim.tick()
+        if np.all(sim.population.status == Status.COMPLETE):
+            break
+
+    assert np.all(sim.population.status == Status.COMPLETE)
+    for name, array in sim.population.checksum_fields():
+        assert array.size == count, name

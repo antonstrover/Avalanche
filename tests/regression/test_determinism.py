@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from avalanche.sim import MountainSim, Skier
+from avalanche.sim import MountainSim, population_from_starts
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -15,11 +15,9 @@ def run(seed: int) -> list[str]:
     """Reset one simulator and return the checksum of each tick."""
     sim = MountainSim(FIXTURE)
     sim.reset(seed)
-    sim.add_skier(
-        Skier(
-            destination=sim.topology.node_index["base_exit"],
-            location_index=sim.topology.node_index["base_village"],
-        )
+    sim.population = population_from_starts(
+        starts=[sim.topology.node_index["base_village"]],
+        destinations=sim.topology.node_index["base_exit"],
     )
     checksums = []
     for _ in range(TICK_COUNT):
