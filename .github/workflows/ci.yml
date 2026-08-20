@@ -49,32 +49,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # dashboard/package.json does not exist yet in early stages of
-      # docs/PLAN.md. Every later step checks for it and no-ops until it does.
       - name: Set up Node
-        if: hashFiles('dashboard/package.json') != ''
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
 
       - name: Install dependencies
-        if: hashFiles('dashboard/package.json') != ''
         working-directory: dashboard
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Lint
-        if: hashFiles('dashboard/package.json') != ''
         working-directory: dashboard
         run: npm run lint --if-present
 
       - name: Unit tests
-        if: hashFiles('dashboard/package.json') != ''
         working-directory: dashboard
         run: npm run test --if-present
 
       - name: Build
-        if: hashFiles('dashboard/package.json') != ''
         working-directory: dashboard
         run: npm run build --if-present
