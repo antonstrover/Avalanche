@@ -242,8 +242,10 @@ def serve_lift_queues(
     edges = pop.location_index[queued]
     members, rank = group_rank(edges, pop.queue_ticket[queued])
     capacity = (
-        topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR
-    ) * tick_seconds * state.lift_capacity_factor
+        (topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR)
+        * tick_seconds
+        * state.lift_capacity_factor
+    )
     capacity[effective_closed(state)] = 0.0
     served = queued[members][rank < capacity[edges[members]].astype(np.int64)]
 

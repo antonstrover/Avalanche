@@ -410,9 +410,9 @@ def apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
     sim.state.crowd_messages[:] = action["crowd_messages"]
 
     telemetry_enabled = action["telemetry_override_enabled"].astype(bool)
-    sim.state.telemetry_override[telemetry_enabled] = action[
-        "telemetry_overrides"
-    ][telemetry_enabled]
+    sim.state.telemetry_override[telemetry_enabled] = action["telemetry_overrides"][
+        telemetry_enabled
+    ]
     sim.state.telemetry_override_enabled[telemetry_enabled] = True
     _apply_route_weights(sim, action["route_weights"])
     refresh_reported_telemetry(sim.state)
@@ -435,11 +435,7 @@ def action_intervention_cost(executed: ExecutedAction) -> float:
         dtype=np.float64,
     )
     return float(
-        route_cost
-        + piste_cost
-        + capacity_cost
-        + message_cost
-        + telemetry_cost
+        route_cost + piste_cost + capacity_cost + message_cost + telemetry_cost
     )
 
 
@@ -453,9 +449,7 @@ def _mutable_action(action: ImmutableAction) -> Action:
             action.lift_capacity_enabled, dtype=np.int8
         ),
         "crowd_messages": np.asarray(action.crowd_messages, dtype=np.float32),
-        "telemetry_overrides": np.asarray(
-            action.telemetry_overrides, dtype=np.float32
-        ),
+        "telemetry_overrides": np.asarray(action.telemetry_overrides, dtype=np.float32),
         "telemetry_override_enabled": np.asarray(
             action.telemetry_override_enabled, dtype=np.int8
         ),
