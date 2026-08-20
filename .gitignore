@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+uv.lock.bak
+
+# Generated runs and models (docs/PLAN.md §3)
+outputs/
+!outputs/.gitkeep
+
+# Node / dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/coverage/
+dashboard/playwright-report/
+dashboard/test-results/
+
+# Env and secrets
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
