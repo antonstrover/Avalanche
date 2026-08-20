@@ -32,7 +32,7 @@ MIN_SPEED_FACTOR = 0.2
 
 @dataclass
 class DynamicState:
-    """The dynamic edge state of Stage 3.
+    """The dynamic edge state.
 
     Each field is an array over the edges, so a step reads it without a copy.
     `closed` holds each operational closure.
@@ -45,7 +45,6 @@ class DynamicState:
     Stage 3 has no controller, so a test sets the advice today.
     The adjudicator writes the advice in Stage 6.
     Reported telemetry can lag while the true arrays continue to change.
-    A later stage adds the hazard fields.
     """
 
     closed: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.bool_))
@@ -89,6 +88,26 @@ class DynamicState:
     reported_closed: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.bool_)
     )
+    density_ratio: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    hazard_score: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    dangerous_duration: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    dangerous_density_seconds: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    early_indicator: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
+    harm_active: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.bool_))
+    indicator_count: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    harm_count: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     advice_edge: np.ndarray = field(
         default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.int32)
     )
@@ -116,6 +135,14 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         reported_queue_length=np.zeros(topology.edge_count, dtype=np.int32),
         reported_speed_factor=np.ones(topology.edge_count, dtype=np.float64),
         reported_closed=np.zeros(topology.edge_count, dtype=np.bool_),
+        density_ratio=np.zeros(topology.edge_count, dtype=np.float64),
+        hazard_score=np.zeros(topology.edge_count, dtype=np.float64),
+        dangerous_duration=np.zeros(topology.edge_count, dtype=np.float64),
+        dangerous_density_seconds=np.zeros(topology.edge_count, dtype=np.float64),
+        early_indicator=np.zeros(topology.edge_count, dtype=np.bool_),
+        harm_active=np.zeros(topology.edge_count, dtype=np.bool_),
+        indicator_count=np.zeros(topology.edge_count, dtype=np.int32),
+        harm_count=np.zeros(topology.edge_count, dtype=np.int32),
         advice_edge=np.full(
             (topology.node_count, len(ABILITY_NAMES)), NO_EDGE, dtype=np.int32
         ),

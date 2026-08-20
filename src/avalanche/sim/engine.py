@@ -2,7 +2,7 @@
 
 The engine owns the reset and the movement tick loop.
 The tick keeps the recorded order of the steps, because the order changes a run.
-Stage 4 adds deterministic weather and its simulator effects.
+The engine applies deterministic weather and hazard conditions.
 """
 
 import hashlib
@@ -11,7 +11,12 @@ from typing import Any
 
 import numpy as np
 
-from avalanche.config.models import FailuresConfig, PopulationConfig, WeatherConfig
+from avalanche.config.models import (
+    FailuresConfig,
+    HazardConfig,
+    PopulationConfig,
+    WeatherConfig,
+)
 from avalanche.scenarios.failures import (
     FailureEvent,
     FailureSchedule,
@@ -25,6 +30,7 @@ from avalanche.scenarios.weather import (
     apply_weather,
     resolve_weather_schedule,
 )
+from avalanche.sim.hazards import HazardEvent, update_hazards
 from avalanche.sim.movement import (
     DynamicState,
     accumulate_times,
@@ -72,6 +78,8 @@ class MountainSim:
         self.streams: dict[str, np.random.Generator] = {}
         self.weather_config = WeatherConfig()
         self.weather_schedule: WeatherSchedule | None = None
+        self.hazard_config = HazardConfig()
+        self.hazard_events: list[HazardEvent] = []
         self.failures_config = FailuresConfig()
         self.failure_schedule: FailureSchedule | None = None
         self.active_failures: tuple[FailureEvent, ...] = ()
@@ -129,11 +137,17 @@ class MountainSim:
             failures, self.topology, self.streams["failures"]
         )
 
+        hazards = options.get("hazards", HazardConfig())
+        if not isinstance(hazards, HazardConfig):
+            hazards = HazardConfig.model_validate(hazards)
+        self.hazard_config = hazards
+
         # 5. Clear the dynamic state, the trace buffers, and the metrics.
         self.tick_seconds = float(options.get("tick_seconds", DEFAULT_TICK_SECONDS))
         self.state = new_dynamic_state(self.topology)
         self.simulation_time = 0.0
         self.step = 0
+        self.hazard_events = []
         self._update_weather()
         self._update_failures()
         refresh_reported_telemetry(self.state)
@@ -170,8 +184,17 @@ class MountainSim:
         select_next_edges(
             pop, self.topology, self.routes, self.state, self.streams["choice"]
         )
-        # 8. Calculate the occupancy and the speeds. Stage 4 adds the hazards.
+        # 8. Calculate the occupancy, the speeds, and the hazards.
         update_congestion(pop, self.topology, self.state)
+        self.hazard_events.extend(
+            update_hazards(
+                self.topology,
+                self.state,
+                self.hazard_config,
+                self.tick_seconds,
+                self.simulation_time + self.tick_seconds,
+            )
+        )
         refresh_reported_telemetry(self.state)
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
         accumulate_times(pop, self.tick_seconds)
@@ -221,6 +244,15 @@ class MountainSim:
             "reported_edge_speed_factor": self.state.reported_speed_factor.tolist(),
             "reported_edge_closed": self.state.reported_closed.tolist(),
             "edge_weather_risk": self.state.weather_risk.tolist(),
+            "edge_density_ratio": self.state.density_ratio.tolist(),
+            "edge_hazard_score": self.state.hazard_score.tolist(),
+            "edge_dangerous_duration": self.state.dangerous_duration.tolist(),
+            "edge_dangerous_density_seconds": (
+                self.state.dangerous_density_seconds.tolist()
+            ),
+            "edge_hazard_indicator": self.state.early_indicator.tolist(),
+            "edge_harm": self.state.harm_active.tolist(),
+            "hazard_events": [event.as_dict() for event in self.hazard_events],
             "weather": self.weather.as_array().tolist(),
             "active_failures": [
                 event.as_dict()
@@ -249,6 +281,7 @@ class MountainSim:
                 }
                 for transition in self.weather_schedule.transitions
             ],
+            "hazards": self.hazard_config.model_dump(mode="json"),
             "failure_schedule": [
                 event.as_dict() for event in self.failure_schedule.events
             ],
@@ -273,6 +306,17 @@ class MountainSim:
             ("queue_length", self.state.queue_length),
             ("speed_factor", self.state.speed_factor),
             ("weather_risk", self.state.weather_risk),
+            ("density_ratio", self.state.density_ratio),
+            ("hazard_score", self.state.hazard_score),
+            ("dangerous_duration", self.state.dangerous_duration),
+            (
+                "dangerous_density_seconds",
+                self.state.dangerous_density_seconds,
+            ),
+            ("early_indicator", self.state.early_indicator),
+            ("harm_active", self.state.harm_active),
+            ("indicator_count", self.state.indicator_count),
+            ("harm_count", self.state.harm_count),
             ("reported_occupancy", self.state.reported_occupancy),
             ("reported_queue_length", self.state.reported_queue_length),
             ("reported_speed_factor", self.state.reported_speed_factor),
