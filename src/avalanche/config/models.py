@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -34,10 +34,81 @@ class IntervalsConfig(StrictModel):
     control_interval_seconds: float
 
 
+class WeatherStateConfig(StrictModel):
+    """One weather vector in physical units."""
+
+    wind: float = Field(default=0.0, ge=0.0)
+    visibility: float = Field(default=10_000.0, gt=0.0)
+    snowfall: float = Field(default=0.0, ge=0.0)
+    temperature: float = 5.0
+
+
+class WeatherScheduleEntryConfig(WeatherStateConfig):
+    """One scheduled weather change."""
+
+    start_time_seconds: float = Field(ge=0.0)
+
+
+class WeatherRangeConfig(StrictModel):
+    """The inclusive range for one sampled weather value."""
+
+    minimum: float
+    maximum: float
+
+    @model_validator(mode="after")
+    def check_order(self) -> "WeatherRangeConfig":
+        """Reject a range with reversed bounds."""
+        if self.maximum < self.minimum:
+            raise ValueError("the weather range maximum must not be below its minimum")
+        return self
+
+
+class WeatherSamplingConfig(StrictModel):
+    """The rules for a sampled weather schedule."""
+
+    interval_seconds: float = Field(gt=0.0)
+    transition_count: int = Field(ge=1)
+    wind: WeatherRangeConfig
+    visibility: WeatherRangeConfig
+    snowfall: WeatherRangeConfig
+    temperature: WeatherRangeConfig
+
+
+class WeatherEffectsConfig(StrictModel):
+    """The reference values that scale weather effects."""
+
+    reference_wind: float = Field(default=25.0, gt=0.0)
+    reference_visibility: float = Field(default=1_000.0, gt=0.0)
+    reference_snowfall: float = Field(default=10.0, gt=0.0)
+    reference_freezing: float = Field(default=20.0, gt=0.0)
+    maximum_speed_loss: float = Field(default=0.5, ge=0.0, le=1.0)
+    lift_wind_limit: float = Field(default=15.0, gt=0.0)
+
+
+class WeatherConfig(StrictModel):
+    """The initial weather and one fixed or sampled schedule."""
+
+    initial: WeatherStateConfig = WeatherStateConfig()
+    schedule: tuple[WeatherScheduleEntryConfig, ...] = ()
+    sampling: WeatherSamplingConfig | None = None
+    effects: WeatherEffectsConfig = WeatherEffectsConfig()
+
+    @model_validator(mode="after")
+    def check_schedule(self) -> "WeatherConfig":
+        """Reject two schedule sources and an unordered fixed schedule."""
+        if self.schedule and self.sampling is not None:
+            raise ValueError("the weather must use a fixed or a sampled schedule")
+        starts = [entry.start_time_seconds for entry in self.schedule]
+        if starts != sorted(starts) or len(starts) != len(set(starts)):
+            raise ValueError("the weather schedule times must be unique and ordered")
+        return self
+
+
 class ScenarioConfig(StrictModel):
     name: str
     movement_tick_seconds: float
     control_interval_seconds: float
+    weather: WeatherConfig = WeatherConfig()
 
 
 class ControllerConfig(StrictModel):
