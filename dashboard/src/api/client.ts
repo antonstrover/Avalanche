@@ -1,6 +1,6 @@
 import type { operations } from "./schema";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export type HealthResponse =
     operations["health_health_get"]["responses"][200]["content"]["application/json"];
@@ -16,4 +16,33 @@ export async function fetchHealth(): Promise<HealthResponse> {
 export async function fetchConfigOptions(): Promise<ConfigOptionsResponse> {
     const response = await fetch(`${API_BASE}/api/config-options`);
     return response.json();
+}
+
+export type LiveSession = {
+    session_id: string;
+    status: string;
+    skier_count: number;
+    simulation_speed: number;
+    frame_interval_ms: number;
+    topology_version: string;
+};
+
+export async function createLiveSession(
+    seed = 0,
+    skierCount = 5000,
+): Promise<LiveSession> {
+    const response = await fetch(`${API_BASE}/api/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seed, skier_count: skierCount }),
+    });
+    if (!response.ok) throw new Error("the live session could not start");
+    return response.json() as Promise<LiveSession>;
+}
+
+export function liveStreamUrl(sessionId: string): string {
+    const base = API_BASE || window.location.origin;
+    const url = new URL(`/api/sessions/${sessionId}/stream`, base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
 }

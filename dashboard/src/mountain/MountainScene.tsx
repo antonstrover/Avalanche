@@ -9,6 +9,7 @@ import { Skiers } from "./Skiers";
 import { Terrain } from "./Terrain";
 import { Weather } from "./Weather";
 import { selectionLabel, type Selection } from "./selection";
+import type { LiveSession } from "../api/client";
 
 // The camera preset gives the overview. The reset button returns to it.
 const CAMERA_POSITION: [number, number, number] = [152, 100, -106];
@@ -25,7 +26,15 @@ function FirstFrame({ onDrawn }: { onDrawn: () => void }) {
     return null;
 }
 
-export function MountainScene() {
+export function MountainScene({
+    session,
+    onLiveFrame,
+    onLiveError,
+}: {
+    session: LiveSession | null;
+    onLiveFrame: (count: number) => void;
+    onLiveError: () => void;
+}) {
     const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
     const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
@@ -45,8 +54,12 @@ export function MountainScene() {
                     <Lifts selection={selection} onSelect={setSelection} />
                     <Buildings selection={selection} onSelect={setSelection} />
                     <Hazards selection={selection} onSelect={setSelection} />
-                    <Skiers />
-                    <Weather />
+                    <Skiers
+                        session={session}
+                        onLiveFrame={onLiveFrame}
+                        onLiveError={onLiveError}
+                    />
+                    <Weather paused={Boolean(session)} />
                     <OrbitControls
                         ref={controls}
                         target={CAMERA_TARGET}
