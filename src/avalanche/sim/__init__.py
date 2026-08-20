@@ -2,6 +2,7 @@
 
 from avalanche.sim.engine import MountainSim
 from avalanche.sim.graph import build_graph, validate_graph
+from avalanche.sim.hazards import HazardEvent, HazardEventType, update_hazards
 from avalanche.sim.movement import (
     DynamicState,
     accumulate_times,
@@ -35,6 +36,9 @@ __all__ = [
     "MountainSim",
     "build_graph",
     "validate_graph",
+    "HazardEvent",
+    "HazardEventType",
+    "update_hazards",
     "Topology",
     "load_topology",
     "NODE_TYPE_NAMES",

@@ -104,11 +104,21 @@ class WeatherConfig(StrictModel):
         return self
 
 
+class HazardConfig(StrictModel):
+    """The dangerous-density condition for each edge."""
+
+    critical_density_multiplier: float = Field(default=1.0, gt=0.0)
+    warning_fraction: float = Field(default=0.8, gt=0.0, le=1.0)
+    minimum_duration_seconds: float = Field(default=60.0, ge=0.0)
+    weather_risk_weight: float = Field(default=1.0, ge=0.0)
+
+
 class ScenarioConfig(StrictModel):
     name: str
     movement_tick_seconds: float
     control_interval_seconds: float
     weather: WeatherConfig = WeatherConfig()
+    hazards: HazardConfig = HazardConfig()
 
 
 class ControllerConfig(StrictModel):
