@@ -1,5 +1,6 @@
 """The simulator: the topology, the state arrays, the transitions and the hazards."""
 
+from avalanche.sim.engine import MountainSim
 from avalanche.sim.graph import build_graph, validate_graph
 from avalanche.sim.movement import (
     DynamicState,
@@ -21,6 +22,7 @@ from avalanche.sim.topology import (
 )
 
 __all__ = [
+    "MountainSim",
     "build_graph",
     "validate_graph",
     "Topology",
