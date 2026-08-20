@@ -189,3 +189,11 @@ def refresh_reported_telemetry(state: DynamicState) -> None:
     state.reported_speed_factor[current] = state.speed_factor[current]
     closed = effective_closed(state)
     state.reported_closed[current] = closed[current]
+    overridden = current & state.telemetry_override_enabled
+    scale = 1.0 + state.telemetry_override[overridden]
+    state.reported_occupancy[overridden] = np.rint(
+        state.reported_occupancy[overridden] * scale
+    ).astype(np.int32)
+    state.reported_queue_length[overridden] = np.rint(
+        state.reported_queue_length[overridden] * scale
+    ).astype(np.int32)

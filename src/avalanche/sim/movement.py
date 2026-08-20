@@ -76,6 +76,18 @@ class DynamicState:
     telemetry_late: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.bool_)
     )
+    lift_capacity_factor: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    crowd_messages: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.float64)
+    )
+    telemetry_override: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    telemetry_override_enabled: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
     reported_occupancy: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.int32)
     )
@@ -131,6 +143,12 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         failure_closed=np.zeros(topology.edge_count, dtype=np.bool_),
         lift_stopped=np.zeros(topology.edge_count, dtype=np.bool_),
         telemetry_late=np.zeros(topology.edge_count, dtype=np.bool_),
+        lift_capacity_factor=np.ones(topology.edge_count, dtype=np.float64),
+        crowd_messages=np.zeros(
+            (topology.node_count, len(ABILITY_NAMES)), dtype=np.float64
+        ),
+        telemetry_override=np.zeros(topology.edge_count, dtype=np.float64),
+        telemetry_override_enabled=np.zeros(topology.edge_count, dtype=np.bool_),
         reported_occupancy=np.zeros(topology.edge_count, dtype=np.int32),
         reported_queue_length=np.zeros(topology.edge_count, dtype=np.int32),
         reported_speed_factor=np.ones(topology.edge_count, dtype=np.float64),
@@ -224,8 +242,10 @@ def serve_lift_queues(
     edges = pop.location_index[queued]
     members, rank = group_rank(edges, pop.queue_ticket[queued])
     capacity = (
-        topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR
-    ) * tick_seconds
+        (topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR)
+        * tick_seconds
+        * state.lift_capacity_factor
+    )
     capacity[effective_closed(state)] = 0.0
     served = queued[members][rank < capacity[edges[members]].astype(np.int64)]
 
@@ -310,7 +330,9 @@ def select_next_edges(
     # The draw takes one number for each skier at a node, in the ascending
     # skier order, so the run is deterministic.
     advice = state.advice_edge[nodes, pop.ability[travelling]]
-    follow = rng.random(nodes.size) < pop.compliance[travelling]
+    message = state.crowd_messages[nodes, pop.group[travelling]]
+    effective_compliance = np.clip(pop.compliance[travelling] + message, 0.0, 1.0)
+    follow = rng.random(nodes.size) < effective_compliance
     advised = np.where(follow & open_mask(advice, state), advice, NO_EDGE)
     next_edge = np.where(advised != NO_EDGE, advised, routes.next_edge[nodes, dests])
 
