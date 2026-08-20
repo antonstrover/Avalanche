@@ -59,9 +59,7 @@ def update_hazards(
         * config.critical_density_multiplier
     )
     tolerance = np.finfo(np.float32).eps * np.maximum(critical, 1.0)
-    warning = (
-        state.hazard_score >= critical * config.warning_fraction - tolerance
-    )
+    warning = state.hazard_score >= critical * config.warning_fraction - tolerance
     dangerous = state.hazard_score >= critical - tolerance
 
     previous_indicator = state.early_indicator.copy()

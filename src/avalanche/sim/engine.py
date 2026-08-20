@@ -11,7 +11,19 @@ from typing import Any
 
 import numpy as np
 
-from avalanche.config.models import HazardConfig, PopulationConfig, WeatherConfig
+from avalanche.config.models import (
+    FailuresConfig,
+    HazardConfig,
+    PopulationConfig,
+    WeatherConfig,
+)
+from avalanche.scenarios.failures import (
+    FailureEvent,
+    FailureSchedule,
+    apply_failures,
+    refresh_reported_telemetry,
+    resolve_failure_schedule,
+)
 from avalanche.scenarios.weather import (
     Weather,
     WeatherSchedule,
@@ -24,6 +36,7 @@ from avalanche.sim.movement import (
     accumulate_times,
     advance_on_edges,
     arrive_at_nodes,
+    effective_closed,
     new_dynamic_state,
     select_next_edges,
     serve_lift_queues,
@@ -67,6 +80,9 @@ class MountainSim:
         self.weather_schedule: WeatherSchedule | None = None
         self.hazard_config = HazardConfig()
         self.hazard_events: list[HazardEvent] = []
+        self.failures_config = FailuresConfig()
+        self.failure_schedule: FailureSchedule | None = None
+        self.active_failures: tuple[FailureEvent, ...] = ()
 
     def reset(
         self, seed: int, options: dict[str, Any] | None = None
@@ -113,6 +129,13 @@ class MountainSim:
         self.weather_schedule = resolve_weather_schedule(
             weather, self.streams["weather"]
         )
+        failures = options.get("failures", FailuresConfig())
+        if not isinstance(failures, FailuresConfig):
+            failures = FailuresConfig.model_validate(failures)
+        self.failures_config = failures
+        self.failure_schedule = resolve_failure_schedule(
+            failures, self.topology, self.streams["failures"]
+        )
 
         hazards = options.get("hazards", HazardConfig())
         if not isinstance(hazards, HazardConfig):
@@ -126,6 +149,8 @@ class MountainSim:
         self.step = 0
         self.hazard_events = []
         self._update_weather()
+        self._update_failures()
+        refresh_reported_telemetry(self.state)
 
         # 6. Build the first observation.
         # 7. Return the observation and the run metadata.
@@ -144,8 +169,9 @@ class MountainSim:
         pop = self.population
         # 1. Start the scheduled arrivals.
         start_arrivals(pop, self.simulation_time, self.tick_seconds)
-        # 2. Update the weather. A later issue adds the scheduled failures.
+        # 2. Update the weather and the scheduled failures.
         self._update_weather()
+        self._update_failures()
         # 3. Give lift service to the skiers in a queue.
         serve_lift_queues(pop, self.topology, self.state, self.tick_seconds)
         # 4. Move the skiers on a piste and on a lift.
@@ -169,6 +195,7 @@ class MountainSim:
                 self.simulation_time + self.tick_seconds,
             )
         )
+        refresh_reported_telemetry(self.state)
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
         accumulate_times(pop, self.tick_seconds)
         # 10. Write the material events to the trace buffer. Stage 5 adds this.
@@ -182,6 +209,13 @@ class MountainSim:
         assert self.weather_schedule is not None
         self.weather_schedule.update(self.simulation_time)
         apply_weather(self.weather, self.weather_config, self.topology, self.state)
+
+    def _update_failures(self) -> None:
+        """Apply the active scheduled failures to the simulator state."""
+        assert self.failure_schedule is not None
+        self.active_failures = apply_failures(
+            self.failure_schedule, self.simulation_time, self.state
+        )
 
     @property
     def weather(self) -> Weather:
@@ -203,7 +237,12 @@ class MountainSim:
             "edge_occupancy": self.state.occupancy.tolist(),
             "edge_queue_length": self.state.queue_length.tolist(),
             "edge_speed_factor": self.state.speed_factor.tolist(),
-            "edge_closed": (self.state.closed | self.state.weather_closed).tolist(),
+            "edge_closed": effective_closed(self.state).tolist(),
+            "edge_failure_closed": self.state.failure_closed.tolist(),
+            "reported_edge_occupancy": self.state.reported_occupancy.tolist(),
+            "reported_edge_queue_length": self.state.reported_queue_length.tolist(),
+            "reported_edge_speed_factor": self.state.reported_speed_factor.tolist(),
+            "reported_edge_closed": self.state.reported_closed.tolist(),
             "edge_weather_risk": self.state.weather_risk.tolist(),
             "edge_density_ratio": self.state.density_ratio.tolist(),
             "edge_hazard_score": self.state.hazard_score.tolist(),
@@ -215,12 +254,18 @@ class MountainSim:
             "edge_harm": self.state.harm_active.tolist(),
             "hazard_events": [event.as_dict() for event in self.hazard_events],
             "weather": self.weather.as_array().tolist(),
+            "active_failures": [
+                event.as_dict()
+                for event in self.active_failures
+                if event.controller_visible
+            ],
         }
 
     def metadata(self, seed: int) -> dict[str, Any]:
         """Return the metadata of the run."""
         assert self.topology is not None, "call the reset before the metadata"
         assert self.weather_schedule is not None, "call the reset before the metadata"
+        assert self.failure_schedule is not None, "call the reset before the metadata"
         return {
             "mountain": self.topology.name,
             "mountain_path": str(self.mountain_path),
@@ -237,6 +282,9 @@ class MountainSim:
                 for transition in self.weather_schedule.transitions
             ],
             "hazards": self.hazard_config.model_dump(mode="json"),
+            "failure_schedule": [
+                event.as_dict() for event in self.failure_schedule.events
+            ],
         }
 
     def state_checksum(self) -> str:
@@ -251,6 +299,9 @@ class MountainSim:
         state_fields = (
             ("closed", self.state.closed),
             ("weather_closed", self.state.weather_closed),
+            ("failure_closed", self.state.failure_closed),
+            ("lift_stopped", self.state.lift_stopped),
+            ("telemetry_late", self.state.telemetry_late),
             ("occupancy", self.state.occupancy),
             ("queue_length", self.state.queue_length),
             ("speed_factor", self.state.speed_factor),
@@ -266,6 +317,10 @@ class MountainSim:
             ("harm_active", self.state.harm_active),
             ("indicator_count", self.state.indicator_count),
             ("harm_count", self.state.harm_count),
+            ("reported_occupancy", self.state.reported_occupancy),
+            ("reported_queue_length", self.state.reported_queue_length),
+            ("reported_speed_factor", self.state.reported_speed_factor),
+            ("reported_closed", self.state.reported_closed),
         )
         digest.update(np.float64(self.simulation_time).tobytes())
         if self.weather_schedule is not None:

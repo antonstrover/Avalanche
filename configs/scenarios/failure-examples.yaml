@@ -1,0 +1,21 @@
+scenario:
+  name: failure-examples
+  movement_tick_seconds: 5
+  control_interval_seconds: 60
+  failures:
+    schedule:
+      - kind: lift_stoppage
+        target: lift1_base->lift1_top
+        start_time_seconds: 300
+        duration_seconds: 120
+        controller_visible: true
+      - kind: late_telemetry
+        target: ridge_junction->mid_junction
+        start_time_seconds: 600
+        duration_seconds: 180
+        controller_visible: false
+      - kind: sudden_closure
+        target: lift2_top->ridge_junction
+        start_time_seconds: 900
+        duration_seconds: 240
+        controller_visible: true

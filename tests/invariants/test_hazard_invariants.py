@@ -70,9 +70,7 @@ def test_a_safe_tick_resets_the_continuous_condition():
 
 def test_hazard_updates_preserve_each_skier_state():
     sim, _ = crowded_simulator()
-    before = {
-        name: values.copy() for name, values in sim.population.checksum_fields()
-    }
+    before = {name: values.copy() for name, values in sim.population.checksum_fields()}
 
     update_hazards(
         sim.topology,
