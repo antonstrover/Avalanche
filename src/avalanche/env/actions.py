@@ -100,45 +100,35 @@ def build_action_masks(
     node_available = _availability(
         node_available, topology.node_count, "node availability"
     )
-    group_available = _availability(
-        group_available, group_count, "group availability"
-    )
+    group_available = _availability(group_available, group_count, "group availability")
     controllable_edges = topology.edge_controllable & edge_available
     piste_code = EDGE_TYPE_NAMES.index("piste")
     lift_code = EDGE_TYPE_NAMES.index("lift")
     return {
-        "pistes": (
-            controllable_edges & (topology.edge_type == piste_code)
-        ).astype(np.int8),
-        "lifts": (
-            controllable_edges & (topology.edge_type == lift_code)
-        ).astype(np.int8),
+        "pistes": (controllable_edges & (topology.edge_type == piste_code)).astype(
+            np.int8
+        ),
+        "lifts": (controllable_edges & (topology.edge_type == lift_code)).astype(
+            np.int8
+        ),
         "nodes": (topology.node_controllable & node_available).astype(np.int8),
         "groups": group_available.astype(np.int8),
     }
 
 
-def neutral_action(
-    topology: Topology, group_count: int = len(ABILITY_NAMES)
-) -> Action:
+def neutral_action(topology: Topology, group_count: int = len(ABILITY_NAMES)) -> Action:
     """Return the canonical action that requests no state change."""
     _check_group_count(group_count)
     return {
-        "route_weights": np.zeros(
-            (group_count, topology.edge_count), dtype=np.float32
-        ),
-        "piste_requests": np.full(
-            topology.edge_count, PISTE_NO_CHANGE, dtype=np.int64
-        ),
+        "route_weights": np.zeros((group_count, topology.edge_count), dtype=np.float32),
+        "piste_requests": np.full(topology.edge_count, PISTE_NO_CHANGE, dtype=np.int64),
         "lift_capacity": np.ones(topology.edge_count, dtype=np.float32),
         "lift_capacity_enabled": np.zeros(topology.edge_count, dtype=np.int8),
         "crowd_messages": np.zeros(
             (topology.node_count, group_count), dtype=np.float32
         ),
         "telemetry_overrides": np.zeros(topology.edge_count, dtype=np.float32),
-        "telemetry_override_enabled": np.zeros(
-            topology.edge_count, dtype=np.int8
-        ),
+        "telemetry_override_enabled": np.zeros(topology.edge_count, dtype=np.int8),
     }
 
 
@@ -158,9 +148,7 @@ def validate_action(
     _require_neutral(
         action["piste_requests"], masks["pistes"], PISTE_NO_CHANGE, "piste request"
     )
-    _require_neutral(
-        action["lift_capacity_enabled"], masks["lifts"], 0, "lift command"
-    )
+    _require_neutral(action["lift_capacity_enabled"], masks["lifts"], 0, "lift command")
     message_mask = np.asarray(masks["nodes"], dtype=bool)[:, None] & group_mask
     _require_neutral(action["crowd_messages"], message_mask, 0.0, "crowd message")
     _require_neutral(
@@ -168,9 +156,7 @@ def validate_action(
     )
 
 
-def sample_valid_action(
-    action_space: spaces.Dict, masks: ActionMasks
-) -> Action:
+def sample_valid_action(action_space: spaces.Dict, masks: ActionMasks) -> Action:
     """Sample an action and clear each command on a masked target."""
     action = action_space.sample()
     edge_mask = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
@@ -178,9 +164,7 @@ def sample_valid_action(
     )
     group_mask = np.asarray(masks["groups"], dtype=bool)
     action["route_weights"][~(group_mask[:, None] & edge_mask[None, :])] = 0.0
-    action["piste_requests"][~np.asarray(masks["pistes"], dtype=bool)] = (
-        PISTE_NO_CHANGE
-    )
+    action["piste_requests"][~np.asarray(masks["pistes"], dtype=bool)] = PISTE_NO_CHANGE
     action["lift_capacity_enabled"][~np.asarray(masks["lifts"], dtype=bool)] = 0
     message_mask = np.asarray(masks["nodes"], dtype=bool)[:, None] & group_mask
     action["crowd_messages"][~message_mask] = 0.0
@@ -193,9 +177,7 @@ def _check_group_count(group_count: int) -> None:
         raise ValueError("the group count must be positive")
 
 
-def _availability(
-    value: np.ndarray | None, count: int, name: str
-) -> np.ndarray:
+def _availability(value: np.ndarray | None, count: int, name: str) -> np.ndarray:
     if value is None:
         return np.ones(count, dtype=bool)
     array = np.asarray(value)
