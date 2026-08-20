@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { BufferAttribute, BufferGeometry, type Points } from "three";
-import { weather } from "./conditions";
+import { reducedMotion, weather } from "./conditions";
 import { centre } from "./resort";
 
 const FLAKE_COUNT = 1400;
@@ -13,11 +13,6 @@ const FOG_COLOUR = "#c7d8ea";
 function pseudoRandom(index: number): number {
     const value = Math.sin(index * 12.9898) * 43758.5453;
     return value - Math.floor(value);
-}
-
-// A person can ask the system to reduce the motion. The snow then holds still.
-function reducedMotion(): boolean {
-    return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
 export function Weather() {

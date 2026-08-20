@@ -1,43 +1,7 @@
 import { useMemo } from "react";
-import { CatmullRomCurve3, Vector3 } from "three";
-import { edgeNodes, lifts, nodePosition, type Edge } from "./resort";
+import { CABLE_HEIGHT, liftShape } from "./curves";
+import { lifts } from "./resort";
 import type { Selection } from "./selection";
-
-const CABLE_HEIGHT = 5;
-const GROUND_SAG = 2;
-const PYLON_COUNT = 3;
-
-type LiftShape = {
-    cable: CatmullRomCurve3;
-    pylons: { ground: Vector3; height: number }[];
-    stations: Vector3[];
-};
-
-function liftShape(edge: Edge): LiftShape {
-    const [source, destination] = edgeNodes(edge);
-    const start = nodePosition(source);
-    const end = nodePosition(destination);
-
-    // The ground under the lift sags like the terrain. The cable stays above it.
-    const ground = (fraction: number) => {
-        const point = new Vector3().lerpVectors(start, end, fraction);
-        point.y -= GROUND_SAG * Math.sin(Math.PI * fraction);
-        return point;
-    };
-    const cablePoint = (fraction: number) => {
-        const point = ground(fraction);
-        point.y += CABLE_HEIGHT;
-        return point;
-    };
-
-    const cable = new CatmullRomCurve3([cablePoint(0), cablePoint(0.5), cablePoint(1)]);
-    const pylons = [];
-    for (let index = 1; index <= PYLON_COUNT; index += 1) {
-        const fraction = index / (PYLON_COUNT + 1);
-        pylons.push({ ground: ground(fraction), height: CABLE_HEIGHT });
-    }
-    return { cable, pylons, stations: [start, end] };
-}
 
 type Props = {
     selection: Selection;

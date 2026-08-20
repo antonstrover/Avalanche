@@ -26,11 +26,17 @@ export type Resort = { name: string; nodes: Node[]; edges: Edge[] };
 export const resort: Resort = data;
 
 // The elevation of the base of the mountain, and the vertical scale.
+// The plan scale brings the resort metres into the size of the scene.
 const BASE_ELEVATION = 940;
 const HEIGHT_SCALE = 0.045;
+const PLAN_SCALE = 0.09;
 
 export function nodePosition(node: Node): Vector3 {
-    return new Vector3(node.x, (node.elevation - BASE_ELEVATION) * HEIGHT_SCALE, node.y);
+    return new Vector3(
+        node.x * PLAN_SCALE,
+        (node.elevation - BASE_ELEVATION) * HEIGHT_SCALE,
+        node.y * PLAN_SCALE,
+    );
 }
 
 const byId = new Map(resort.nodes.map((node) => [node.node_id, node]));
@@ -58,15 +64,16 @@ export const buildingNodes = resort.nodes
     .filter((item) => ["entrance", "exit", "lift_station"].includes(item.node.node_type));
 
 export const difficultyColour: Record<string, string> = {
-    easy: "#3fae55",
-    intermediate: "#2f7de1",
-    advanced: "#22242c",
+    green: "#3fae55",
+    blue: "#2f7de1",
+    red: "#c9452f",
+    black: "#22242c",
     none: "#8a8f9a",
 };
 
 // The centre of the resort in the plan, used by the camera and the terrain.
 export const centre = new Vector3(
-    resort.nodes.reduce((sum, node) => sum + node.x, 0) / resort.nodes.length,
+    resort.nodes.reduce((sum, node) => sum + nodePosition(node).x, 0) / resort.nodes.length,
     0,
-    resort.nodes.reduce((sum, node) => sum + node.y, 0) / resort.nodes.length,
+    resort.nodes.reduce((sum, node) => sum + nodePosition(node).z, 0) / resort.nodes.length,
 );

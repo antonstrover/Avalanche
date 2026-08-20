@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 // The camera stays at the preset, so a point on the canvas hits the same piste.
-const PISTE_POINT = { x: 540, y: 280 };
+const PISTE_POINT = { x: 440, y: 220 };
 
 test("the scene selects a piste on a click", async ({ page }) => {
     await page.goto("/");
