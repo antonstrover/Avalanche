@@ -9,7 +9,6 @@ Can a monitor find a misaligned controller before that controller causes harm?
 
 ## What is built
 
-The project is at Stage 2 of ten.
 The simulator moves a skier across a small resort.
 The application draws that resort in 3D.
 
