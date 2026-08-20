@@ -42,6 +42,9 @@ def choice_setup():
     The advice sends them to the base of the lift 2 instead.
     """
     topology = load_topology(FIXTURE)
+    # The test measures the share that follows the advice, not the capacity limit.
+    # A capacity above the population lets each skier start its chosen edge.
+    topology.edge_safe_capacity[:] = SKIER_COUNT
     routes = build_route_table(topology)
     node = topology.node_index["lift1_top"]
     destination = topology.node_index["base_exit"]

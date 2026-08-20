@@ -11,6 +11,7 @@ from avalanche.sim.movement import (
     select_next_edges,
     serve_lift_queues,
     start_arrivals,
+    update_congestion,
 )
 from avalanche.sim.population import (
     ABILITY_NAMES,
@@ -58,4 +59,5 @@ __all__ = [
     "arrive_at_nodes",
     "select_next_edges",
     "accumulate_times",
+    "update_congestion",
 ]
