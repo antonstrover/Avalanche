@@ -1,44 +1,188 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
+import { encode } from "@msgpack/msgpack";
 import { Matrix4, Vector3, type InstancedMesh } from "three";
-import { placePosition, type Place } from "./positions";
+import { liveStreamUrl, type LiveSession } from "../api/client";
 import { reducedMotion } from "./conditions";
+import {
+    EDGE_POSITION_SAMPLES,
+    edgeCurves,
+    placePosition,
+    workerPositionTable,
+    type Place,
+} from "./positions";
 import data from "./replay.sample.json";
-
-// The markers read a recorded run. The scene draws one instanced mesh for them.
-// The frame loop writes the positions into the instance buffer.
-// A marker never goes through React, so the frame rate stays free of the tick rate.
 
 type Frame = { time: number; skiers: Place[] };
 type Replay = { skier_count: number; frames: Frame[] };
 
 const replay = data as unknown as Replay;
-
 const MARKER_RADIUS = 1;
 const MARKER_HEIGHT = 3;
-// One second of the display holds this many simulated seconds.
 const SPEED = 20;
-// A person can ask the system to reduce the motion. The markers then hold still.
-// A still image test also uses this frame.
 const STILL_FRAME = 24;
-
 const HIDDEN = new Matrix4().makeScale(0, 0, 0);
 
 function frameTime(index: number): number {
     return replay.frames[index].time;
 }
 
-export function Skiers() {
+type WorkerMessage = {
+    type: string;
+    positions?: ArrayBuffer;
+    visible?: ArrayBuffer;
+    visibleCount?: number;
+    count?: number;
+    skierCount?: number;
+};
+
+export function Skiers({
+    session,
+    onLiveFrame,
+    onLiveError,
+}: {
+    session: LiveSession | null;
+    onLiveFrame: (count: number) => void;
+    onLiveError: () => void;
+}) {
     const mesh = useRef<InstancedMesh>(null);
+    const worker = useRef<Worker | null>(null);
+    const positions = useRef<Float32Array | null>(null);
+    const visible = useRef<Uint32Array | null>(null);
+    const visibleCount = useRef(0);
+    const positionsDirty = useRef(false);
+    const recycled = useRef<ArrayBuffer | undefined>(undefined);
+    const samplePending = useRef(false);
+    const liveReady = useRef(false);
+    const liveMatricesReady = useRef(false);
+    const [skierCount, setSkierCount] = useState(replay.skier_count);
     const still = useMemo(() => reducedMotion(), []);
     const time = useRef(frameTime(0));
     const cursor = useRef(0);
     const matrix = useMemo(() => new Matrix4(), []);
     const point = useMemo(() => new Vector3(), []);
 
+    useEffect(() => {
+        if (!session) return;
+        const frameWorker = new Worker(
+            new URL("../workers/live-frame.worker.ts", import.meta.url),
+            { type: "module" },
+        );
+        worker.current = frameWorker;
+        const table = workerPositionTable();
+        frameWorker.postMessage(
+            {
+                type: "initialize",
+                sessionId: session.session_id,
+                topologyVersion: session.topology_version,
+                frameIntervalMs: still ? 1 : session.frame_interval_ms,
+                nodePositions: table.nodePositions.buffer,
+                edgePositions: table.edgePositions.buffer,
+                edgeSamples: EDGE_POSITION_SAMPLES,
+                edgeCount: edgeCurves.length,
+            },
+            [table.nodePositions.buffer, table.edgePositions.buffer],
+        );
+
+        const socket = new WebSocket(liveStreamUrl(session.session_id));
+        socket.binaryType = "arraybuffer";
+        socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+            frameWorker.postMessage(
+                { type: "frame", packed: event.data, receivedAt: performance.now() },
+                [event.data],
+            );
+        };
+        socket.onerror = onLiveError;
+        socket.onclose = (event) => {
+            if (event.code !== 1000) onLiveError();
+        };
+
+        frameWorker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+            const message = event.data;
+            if (message.type === "snapshot_request" && socket.readyState === WebSocket.OPEN) {
+                socket.send(encode({ version: 1, type: "snapshot_request" }));
+            } else if (message.type === "accepted" && message.skierCount) {
+                liveReady.current = true;
+                setSkierCount(message.skierCount);
+                onLiveFrame(message.skierCount);
+            } else if (
+                message.type === "positions" &&
+                message.positions &&
+                message.visible &&
+                message.visibleCount !== undefined
+            ) {
+                if (positions.current) {
+                    recycled.current = positions.current.buffer as ArrayBuffer;
+                }
+                positions.current = new Float32Array(message.positions);
+                visible.current = new Uint32Array(message.visible);
+                visibleCount.current = message.visibleCount;
+                positionsDirty.current = true;
+                samplePending.current = false;
+            } else if (message.type === "error") {
+                onLiveError();
+            }
+        };
+
+        return () => {
+            socket.close(1000);
+            frameWorker.terminate();
+            worker.current = null;
+            positions.current = null;
+            visible.current = null;
+            visibleCount.current = 0;
+            positionsDirty.current = false;
+            samplePending.current = false;
+            liveReady.current = false;
+            liveMatricesReady.current = false;
+            setSkierCount(replay.skier_count);
+        };
+    }, [session, onLiveError, onLiveFrame, still]);
+
     useFrame((_state, delta) => {
         const instances = mesh.current;
         if (!instances) return;
+
+        if (session && worker.current) {
+            const livePositions = positions.current;
+            const liveVisible = visible.current;
+            if (livePositions && liveVisible && positionsDirty.current) {
+                const values = instances.instanceMatrix.array as Float32Array;
+                if (!liveMatricesReady.current) {
+                    values.fill(0);
+                    for (let order = 0; order < skierCount; order += 1) {
+                        values[order * 16 + 15] = 1;
+                    }
+                    liveMatricesReady.current = true;
+                }
+                for (let order = 0; order < visibleCount.current; order += 1) {
+                    const skier = liveVisible[order];
+                    const positionOffset = skier * 3;
+                    const matrixOffset = order * 16;
+                    const x = livePositions[positionOffset];
+                    values[matrixOffset] = 1;
+                    values[matrixOffset + 5] = 1;
+                    values[matrixOffset + 10] = 1;
+                    values[matrixOffset + 12] = x;
+                    values[matrixOffset + 13] =
+                        livePositions[positionOffset + 1] + MARKER_HEIGHT / 2;
+                    values[matrixOffset + 14] = livePositions[positionOffset + 2];
+                }
+                instances.count = visibleCount.current;
+                positionsDirty.current = false;
+                instances.instanceMatrix.needsUpdate = true;
+            }
+            if (liveReady.current && !samplePending.current) {
+                const buffer = recycled.current;
+                recycled.current = undefined;
+                samplePending.current = true;
+                worker.current.postMessage(
+                    { type: "sample", now: performance.now(), buffer },
+                    buffer ? [buffer] : [],
+                );
+            }
+            return;
+        }
 
         const first = frameTime(0);
         const last = frameTime(replay.frames.length - 1);
@@ -48,8 +192,6 @@ export function Skiers() {
             time.current += delta * SPEED;
             if (time.current > last) time.current = first;
         }
-
-        // Step to the frame pair that holds the current time.
         if (frameTime(cursor.current) > time.current) cursor.current = 0;
         while (
             cursor.current + 1 < replay.frames.length &&
@@ -57,25 +199,20 @@ export function Skiers() {
         ) {
             cursor.current += 1;
         }
-
         const before = replay.frames[cursor.current];
         const after = replay.frames[cursor.current + 1] ?? before;
         const span = after.time - before.time;
         const fraction = span > 0 ? (time.current - before.time) / span : 0;
-
         for (let skier = 0; skier < replay.skier_count; skier += 1) {
             const start = before.skiers[skier];
             const end = after.skiers[skier];
             const startPoint = start ? placePosition(start) : null;
             const endPoint = end ? placePosition(end) : null;
-
-            // Interpolate only along one edge. A change of edge snaps to the new place.
             const sameEdge = start && end && start[0] === end[0] && start[1] === end[1];
             const place =
                 startPoint && endPoint && sameEdge
                     ? point.copy(startPoint).lerp(endPoint, fraction)
                     : (endPoint ?? startPoint);
-
             if (!place) {
                 instances.setMatrixAt(skier, HIDDEN);
                 continue;
@@ -90,12 +227,13 @@ export function Skiers() {
         <instancedMesh
             ref={mesh}
             name="skiers"
-            args={[undefined, undefined, replay.skier_count]}
+            key={session?.session_id ?? "replay"}
+            args={[undefined, undefined, skierCount]}
             frustumCulled={false}
             raycast={() => null}
         >
-            <coneGeometry args={[MARKER_RADIUS, MARKER_HEIGHT, 6]} />
-            <meshStandardMaterial color="#1b2233" flatShading roughness={0.6} />
+            <coneGeometry args={[MARKER_RADIUS, MARKER_HEIGHT, 3]} />
+            <meshBasicMaterial color="#1b2233" />
         </instancedMesh>
     );
 }

@@ -15,7 +15,7 @@ function pseudoRandom(index: number): number {
     return value - Math.floor(value);
 }
 
-export function Weather() {
+export function Weather({ paused = false }: { paused?: boolean }) {
     const points = useRef<Points>(null);
 
     const geometry = useMemo(() => {
@@ -35,7 +35,7 @@ export function Weather() {
 
     // The snowfall sets the fall speed. The wind pushes the flakes sideways.
     useFrame((_state, delta) => {
-        if (still || !points.current) return;
+        if (paused || still || !points.current) return;
         const position = points.current.geometry.attributes.position as BufferAttribute;
         for (let index = 0; index < FLAKE_COUNT; index += 1) {
             let height = position.getY(index) - delta * (4 + 12 * weather.snowfall);
