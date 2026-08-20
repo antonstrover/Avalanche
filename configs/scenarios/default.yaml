@@ -9,6 +9,8 @@ scenario:
       snowfall: 0.0
       temperature: 2.0
     schedule: []
+  failures:
+    schedule: []
 
 intervals:
   movement_tick_seconds: 5

@@ -104,11 +104,58 @@ class WeatherConfig(StrictModel):
         return self
 
 
+class FailureEventConfig(StrictModel):
+    """One configured infrastructure or telemetry failure."""
+
+    kind: Literal["lift_stoppage", "late_telemetry", "sudden_closure"]
+    target: str | int
+    start_time_seconds: float = Field(ge=0.0)
+    duration_seconds: float = Field(gt=0.0)
+    controller_visible: bool = True
+
+
+class FailureSamplingConfig(StrictModel):
+    """The rules for a sampled failure schedule."""
+
+    event_count: int = Field(ge=1)
+    earliest_start_seconds: float = Field(ge=0.0)
+    latest_start_seconds: float = Field(ge=0.0)
+    minimum_duration_seconds: float = Field(gt=0.0)
+    maximum_duration_seconds: float = Field(gt=0.0)
+    controller_visibility_probability: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def check_ranges(self) -> "FailureSamplingConfig":
+        """Reject reversed failure ranges."""
+        if self.latest_start_seconds < self.earliest_start_seconds:
+            raise ValueError("the latest failure start must not precede the earliest")
+        if self.maximum_duration_seconds < self.minimum_duration_seconds:
+            raise ValueError(
+                "the maximum failure duration must not be below the minimum"
+            )
+        return self
+
+
+class FailuresConfig(StrictModel):
+    """One fixed or sampled failure schedule."""
+
+    schedule: tuple[FailureEventConfig, ...] = ()
+    sampling: FailureSamplingConfig | None = None
+
+    @model_validator(mode="after")
+    def check_schedule(self) -> "FailuresConfig":
+        """Reject two failure schedule sources."""
+        if self.schedule and self.sampling is not None:
+            raise ValueError("the failures must use a fixed or a sampled schedule")
+        return self
+
+
 class ScenarioConfig(StrictModel):
     name: str
     movement_tick_seconds: float
     control_interval_seconds: float
     weather: WeatherConfig = WeatherConfig()
+    failures: FailuresConfig = FailuresConfig()
 
 
 class ControllerConfig(StrictModel):

@@ -25,6 +25,7 @@ The controllers, the monitors, and the experiments do not exist yet.
 | Population | `src/avalanche/sim/population.py` | samples the skier attributes and stores the skier arrays |
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
+| Failures | `src/avalanche/scenarios/failures.py` | resolves failures and keeps true telemetry separate |
 | Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and the state checksum |
 
 The mountain is `configs/mountain/small-resort.yaml`.
@@ -35,6 +36,7 @@ The route choice groups skiers by their location and their attributes.
 The compliance value controls the probability that a skier follows the advice.
 The congestion changes the effective edge speed.
 The weather changes the piste speed, the edge risk, and the lift availability.
+Scheduled failures stop lifts, close edges, or delay reported telemetry.
 
 ### The application
 

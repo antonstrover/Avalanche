@@ -1,6 +1,9 @@
 """The simulator: the topology, the state arrays, the transitions and the hazards."""
 
-from avalanche.sim.engine import MountainSim
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from avalanche.sim.engine import MountainSim
 from avalanche.sim.graph import build_graph, validate_graph
 from avalanche.sim.movement import (
     DynamicState,
@@ -61,3 +64,12 @@ __all__ = [
     "accumulate_times",
     "update_congestion",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Load the engine without a cycle through the scenario modules."""
+    if name == "MountainSim":
+        from avalanche.sim.engine import MountainSim
+
+        return MountainSim
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
