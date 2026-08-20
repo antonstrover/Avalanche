@@ -1,0 +1,9 @@
+monitor:
+  kind: none
+  threshold: 0.0
+
+fallback:
+  policy: honest
+
+seed: 1234
+trace_level: debug
