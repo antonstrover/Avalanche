@@ -29,9 +29,7 @@ INCIDENT_KIND_NAMES = (
     "early_indicator",
     "true_harm",
 )
-INCIDENT_KIND_INDEX = {
-    name: index for index, name in enumerate(INCIDENT_KIND_NAMES)
-}
+INCIDENT_KIND_INDEX = {name: index for index, name in enumerate(INCIDENT_KIND_NAMES)}
 
 type Observation = dict[str, Any]
 
@@ -103,9 +101,7 @@ def build_observation_space(
             "edge_capacity": spaces.Box(
                 low=0.0, high=FLOAT_MAX, shape=(edge_count,), dtype=np.float32
             ),
-            "weather": spaces.Box(
-                low=weather_low, high=weather_high, dtype=np.float32
-            ),
+            "weather": spaces.Box(low=weather_low, high=weather_high, dtype=np.float32),
             "weather_forecast": spaces.Box(
                 low=np.broadcast_to(weather_low, (config.forecast_steps, WEATHER_SIZE)),
                 high=FLOAT_MAX,
@@ -174,9 +170,9 @@ def build_observation(
     pending = pop.location_kind == LocationKind.PENDING
     at_node = pop.location_kind == LocationKind.NODE
     demand_locations = pop.location_index[pending | at_node]
-    node_demand = np.bincount(
-        demand_locations, minlength=topology.node_count
-    ).astype(np.float32)
+    node_demand = np.bincount(demand_locations, minlength=topology.node_count).astype(
+        np.float32
+    )
     node_crowding = np.bincount(
         pop.location_index[at_node], minlength=topology.node_count
     ).astype(np.float32)
@@ -250,9 +246,7 @@ def _weather_forecast(
     return forecast, times, mask
 
 
-def _recent_incidents(
-    sim: "MountainSim", config: ObservationConfig
-) -> IncidentArrays:
+def _recent_incidents(sim: "MountainSim", config: ObservationConfig) -> IncidentArrays:
     """Encode recent visible failures and hazard events."""
     records: list[tuple[float, str, int, float]] = []
     if sim.failure_schedule is not None:

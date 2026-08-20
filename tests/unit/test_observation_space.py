@@ -81,9 +81,7 @@ def test_the_observation_has_fixed_shapes_and_dtypes():
 
     assert space.contains(observation)
     assert observation["node_demand"].shape == (sim.topology.node_count,)
-    assert observation["reported_edge_occupancy"].shape == (
-        sim.topology.edge_count,
-    )
+    assert observation["reported_edge_occupancy"].shape == (sim.topology.edge_count,)
     assert observation["weather_forecast"].shape == (2, 4)
     assert observation["recent_incidents"]["kind"].shape == (3,)
     assert observation["node_demand"].dtype == np.float32
