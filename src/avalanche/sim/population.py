@@ -9,7 +9,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from avalanche.config.models import PopulationConfig
 from avalanche.sim.skier import LocationKind, Status
+from avalanche.sim.topology import NODE_TYPE_NAMES, Topology
+
+ABILITY_NAMES = ("beginner", "intermediate", "advanced")
+
+ENTRANCE_NODE = NODE_TYPE_NAMES.index("entrance")
+EXIT_NODE = NODE_TYPE_NAMES.index("exit")
 
 
 @dataclass
@@ -88,6 +95,51 @@ def empty_population(count: int) -> SkierArrays:
         arrived=count,
         next_ticket=0,
     )
+
+
+def sample_population(
+    rng: np.random.Generator, topology: Topology, config: PopulationConfig
+) -> SkierArrays:
+    """Return a new sampled population of the size in the configuration.
+
+    The order of the draws is part of the seed contract.
+    A change of the order changes every run with the same seed.
+    The order is the arrival time, the entry node, the destination,
+    the ability, the risk tolerance, the group, and the compliance.
+
+    Each skier waits in the kind `PENDING` at its entry node.
+    The skiers keep the ascending arrival order, which `start_arrivals` needs.
+    """
+    entrances = np.flatnonzero(topology.node_type == ENTRANCE_NODE)
+    if entrances.size == 0:
+        raise ValueError("the mountain has no entrance node")
+    exits = np.flatnonzero(topology.node_type == EXIT_NODE)
+    if exits.size == 0:
+        raise ValueError("the mountain has no exit node")
+
+    count = int(config.skier_count)
+    arrival_time = np.sort(rng.uniform(0.0, config.arrival_window_seconds, count))
+    entry = rng.choice(entrances, size=count)
+    destination = rng.choice(exits, size=count)
+    ability = rng.choice(3, size=count, p=config.ability_weights)
+    risk_tolerance = rng.uniform(0.0, 1.0, count)
+    # The group equals the ability for now. Stage 5 adds a second axis.
+    group = ability
+    compliance = np.clip(
+        rng.normal(config.compliance_mean, config.compliance_spread, count), 0.0, 1.0
+    )
+
+    pop = empty_population(count)
+    pop.location_kind[:] = LocationKind.PENDING
+    pop.location_index[:] = entry
+    pop.destination[:] = destination
+    pop.ability[:] = ability
+    pop.risk_tolerance[:] = risk_tolerance
+    pop.group[:] = group
+    pop.compliance[:] = compliance
+    pop.arrival_time[:] = arrival_time
+    pop.arrived = 0
+    return pop
 
 
 def population_from_starts(

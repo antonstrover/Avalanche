@@ -13,10 +13,12 @@ from avalanche.sim.movement import (
     start_arrivals,
 )
 from avalanche.sim.population import (
+    ABILITY_NAMES,
     SkierArrays,
     empty_population,
     group_rank,
     population_from_starts,
+    sample_population,
 )
 from avalanche.sim.routes import RouteTable, build_route_table, walk_route
 from avalanche.sim.skier import LocationKind, Status
@@ -43,6 +45,8 @@ __all__ = [
     "SkierArrays",
     "empty_population",
     "population_from_starts",
+    "sample_population",
+    "ABILITY_NAMES",
     "group_rank",
     "LocationKind",
     "Status",

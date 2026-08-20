@@ -2,7 +2,7 @@
 
 The engine owns the reset and the movement tick loop.
 The tick keeps the recorded order of the steps, because the order changes a run.
-Stage 3 has no population sampling, no weather, and no hazards.
+Stage 3 has no weather and no hazards.
 """
 
 import hashlib
@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from avalanche.config.models import PopulationConfig
 from avalanche.sim.movement import (
     DynamicState,
     accumulate_times,
@@ -21,12 +22,19 @@ from avalanche.sim.movement import (
     serve_lift_queues,
     start_arrivals,
 )
-from avalanche.sim.population import SkierArrays, empty_population
+from avalanche.sim.population import SkierArrays, empty_population, sample_population
 from avalanche.sim.routes import RouteTable, build_route_table
 from avalanche.sim.skier import LocationKind
 from avalanche.sim.topology import Topology, load_topology
 
-STREAM_NAMES = ("population", "weather", "failures", "controller", "monitor")
+STREAM_NAMES = (
+    "population",
+    "choice",
+    "weather",
+    "failures",
+    "controller",
+    "monitor",
+)
 DEFAULT_TICK_SECONDS = 5.0
 
 
@@ -55,6 +63,8 @@ class MountainSim:
         """Start a new episode and return the first observation and the metadata.
 
         `options` can give the `tick_seconds` value of the run.
+        `options` can give a `population` configuration, as a model or as a dict.
+        The reset keeps an empty population when `options` gives no population.
         """
         options = options or {}
 
@@ -73,8 +83,16 @@ class MountainSim:
         self.routes = build_route_table(self.topology)
 
         # 3. Sample the skier attributes and the arrival times.
-        # A caller sets the population after the reset. A later stage samples it.
-        self.population = empty_population(0)
+        # The population uses only its own stream, so a controller cannot change it.
+        population = options.get("population")
+        if population is None:
+            self.population = empty_population(0)
+        else:
+            if not isinstance(population, PopulationConfig):
+                population = PopulationConfig.model_validate(population)
+            self.population = sample_population(
+                self.streams["population"], self.topology, population
+            )
 
         # 4. Start the weather and the scheduled failures. Stage 4 adds this.
 
