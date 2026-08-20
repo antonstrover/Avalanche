@@ -109,3 +109,19 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+.mountain-canvas {
+  height: 68svh;
+  min-height: 420px;
+  border-block: 1px solid var(--border);
+}
+
+.mountain-bar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 15px;
+}
