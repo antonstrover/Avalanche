@@ -33,6 +33,7 @@ class Topology:
     node_elevation: np.ndarray
     node_type: np.ndarray
     node_capacity: np.ndarray
+    node_controllable: np.ndarray
 
     edge_source: np.ndarray
     edge_destination: np.ndarray
@@ -46,6 +47,7 @@ class Topology:
     edge_wind_sensitivity: np.ndarray
     edge_visibility_sensitivity: np.ndarray
     edge_snow_sensitivity: np.ndarray
+    edge_controllable: np.ndarray
 
     edge_offsets: np.ndarray
     outgoing_edges: np.ndarray
@@ -116,6 +118,10 @@ def load_topology(path: Path) -> Topology:
             dtype=np.int8,
         ),
         node_capacity=np.array([n["capacity"] for n in nodes], dtype=np.int32),
+        node_controllable=np.array(
+            [n.get("controllable", n["node_type"] != "exit") for n in nodes],
+            dtype=bool,
+        ),
         edge_source=edge_source,
         edge_destination=edge_destination,
         edge_type=np.array(
@@ -134,6 +140,9 @@ def load_topology(path: Path) -> Topology:
         edge_wind_sensitivity=edge_float("wind_sensitivity"),
         edge_visibility_sensitivity=edge_float("visibility_sensitivity"),
         edge_snow_sensitivity=edge_float("snow_sensitivity"),
+        edge_controllable=np.array(
+            [e[2].get("controllable", True) for e in edges], dtype=bool
+        ),
         edge_offsets=edge_offsets,
         outgoing_edges=np.arange(len(edges), dtype=np.int32),
     )
