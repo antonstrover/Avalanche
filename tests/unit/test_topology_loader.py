@@ -39,9 +39,22 @@ def graph():
 def test_the_array_shapes_match_the_counts(topology):
     assert topology.node_count == 10
     assert topology.edge_count == 12
-    for name in ("node_x", "node_y", "node_elevation", "node_type", "node_capacity"):
+    for name in (
+        "node_x",
+        "node_y",
+        "node_elevation",
+        "node_type",
+        "node_capacity",
+        "node_controllable",
+    ):
         assert getattr(topology, name).shape == (topology.node_count,)
-    for name in ("edge_source", "edge_destination", "edge_type", *EDGE_FIELDS):
+    for name in (
+        "edge_source",
+        "edge_destination",
+        "edge_type",
+        "edge_controllable",
+        *EDGE_FIELDS,
+    ):
         assert getattr(topology, name).shape == (topology.edge_count,)
     assert topology.edge_offsets.shape == (topology.node_count + 1,)
     assert topology.outgoing_edges.shape == (topology.edge_count,)

@@ -2,7 +2,7 @@
 
 The engine owns the reset and the movement tick loop.
 The tick keeps the recorded order of the steps, because the order changes a run.
-Stage 3 has no weather and no hazards.
+Stage 4 adds deterministic weather and its simulator effects.
 """
 
 import hashlib
@@ -11,7 +11,13 @@ from typing import Any
 
 import numpy as np
 
-from avalanche.config.models import PopulationConfig
+from avalanche.config.models import PopulationConfig, WeatherConfig
+from avalanche.scenarios.weather import (
+    Weather,
+    WeatherSchedule,
+    apply_weather,
+    resolve_weather_schedule,
+)
 from avalanche.sim.movement import (
     DynamicState,
     accumulate_times,
@@ -56,6 +62,8 @@ class MountainSim:
         self.state = DynamicState()
         self.population: SkierArrays = empty_population(0)
         self.streams: dict[str, np.random.Generator] = {}
+        self.weather_config = WeatherConfig()
+        self.weather_schedule: WeatherSchedule | None = None
 
     def reset(
         self, seed: int, options: dict[str, Any] | None = None
@@ -94,13 +102,21 @@ class MountainSim:
                 self.streams["population"], self.topology, population
             )
 
-        # 4. Start the weather and the scheduled failures. Stage 4 adds this.
+        # 4. Resolve the weather with only its independent random stream.
+        weather = options.get("weather", WeatherConfig())
+        if not isinstance(weather, WeatherConfig):
+            weather = WeatherConfig.model_validate(weather)
+        self.weather_config = weather
+        self.weather_schedule = resolve_weather_schedule(
+            weather, self.streams["weather"]
+        )
 
         # 5. Clear the dynamic state, the trace buffers, and the metrics.
         self.tick_seconds = float(options.get("tick_seconds", DEFAULT_TICK_SECONDS))
         self.state = new_dynamic_state(self.topology)
         self.simulation_time = 0.0
         self.step = 0
+        self._update_weather()
 
         # 6. Build the first observation.
         # 7. Return the observation and the run metadata.
@@ -119,7 +135,8 @@ class MountainSim:
         pop = self.population
         # 1. Start the scheduled arrivals.
         start_arrivals(pop, self.simulation_time, self.tick_seconds)
-        # 2. Update the weather and the scheduled failures. Stage 4 adds this.
+        # 2. Update the weather. A later issue adds the scheduled failures.
+        self._update_weather()
         # 3. Give lift service to the skiers in a queue.
         serve_lift_queues(pop, self.topology, self.state, self.tick_seconds)
         # 4. Move the skiers on a piste and on a lift.
@@ -141,6 +158,19 @@ class MountainSim:
         self.simulation_time += self.tick_seconds
         self.step += 1
 
+    def _update_weather(self) -> None:
+        """Apply the current scheduled weather to the simulator state."""
+        assert self.topology is not None
+        assert self.weather_schedule is not None
+        self.weather_schedule.update(self.simulation_time)
+        apply_weather(self.weather, self.weather_config, self.topology, self.state)
+
+    @property
+    def weather(self) -> Weather:
+        """Return the current weather state."""
+        assert self.weather_schedule is not None, "call the reset before the weather"
+        return self.weather_schedule.current
+
     def observation(self) -> dict[str, Any]:
         """Return the observation of the current state.
 
@@ -155,12 +185,15 @@ class MountainSim:
             "edge_occupancy": self.state.occupancy.tolist(),
             "edge_queue_length": self.state.queue_length.tolist(),
             "edge_speed_factor": self.state.speed_factor.tolist(),
-            "edge_closed": self.state.closed.tolist(),
+            "edge_closed": (self.state.closed | self.state.weather_closed).tolist(),
+            "edge_weather_risk": self.state.weather_risk.tolist(),
+            "weather": self.weather.as_array().tolist(),
         }
 
     def metadata(self, seed: int) -> dict[str, Any]:
         """Return the metadata of the run."""
         assert self.topology is not None, "call the reset before the metadata"
+        assert self.weather_schedule is not None, "call the reset before the metadata"
         return {
             "mountain": self.topology.name,
             "mountain_path": str(self.mountain_path),
@@ -169,6 +202,13 @@ class MountainSim:
             "seed": seed,
             "streams": list(STREAM_NAMES),
             "tick_seconds": self.tick_seconds,
+            "weather_schedule": [
+                {
+                    "start_time_seconds": transition.start_time_seconds,
+                    "weather": transition.weather.as_array().tolist(),
+                }
+                for transition in self.weather_schedule.transitions
+            ],
         }
 
     def state_checksum(self) -> str:
@@ -182,11 +222,16 @@ class MountainSim:
         digest = hashlib.blake2b(digest_size=16)
         state_fields = (
             ("closed", self.state.closed),
+            ("weather_closed", self.state.weather_closed),
             ("occupancy", self.state.occupancy),
             ("queue_length", self.state.queue_length),
             ("speed_factor", self.state.speed_factor),
+            ("weather_risk", self.state.weather_risk),
         )
         digest.update(np.float64(self.simulation_time).tobytes())
+        if self.weather_schedule is not None:
+            digest.update(b"weather")
+            digest.update(self.weather.as_array().tobytes())
         for name, array in (*self.population.checksum_fields(), *state_fields):
             digest.update(name.encode())
             digest.update(np.ascontiguousarray(array).tobytes())
