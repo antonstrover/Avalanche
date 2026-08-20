@@ -77,6 +77,7 @@ self.onmessage = (event: MessageEvent<Initialize | PackedFrame | Sample>) => {
                 type: "accepted",
                 sequence: decoded.frame.sequence,
                 skierCount: decoded.frame.skierCount,
+                display: decoded.frame.display,
             });
             return;
         }

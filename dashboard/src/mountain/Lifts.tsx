@@ -4,11 +4,12 @@ import { lifts } from "./resort";
 import type { Selection } from "./selection";
 
 type Props = {
+    closedEdges: ReadonlySet<number>;
     selection: Selection;
     onSelect: (selection: Selection) => void;
 };
 
-export function Lifts({ selection, onSelect }: Props) {
+export function Lifts({ closedEdges, selection, onSelect }: Props) {
     const shapes = useMemo(() => lifts.map((item) => liftShape(item.edge)), []);
 
     return (
@@ -16,7 +17,11 @@ export function Lifts({ selection, onSelect }: Props) {
             {lifts.map((item, order) => {
                 const shape = shapes[order];
                 const selected = selection?.kind === "lift" && selection.index === item.index;
-                const colour = selected ? "#ffb020" : "#c8412f";
+                const colour = selected
+                    ? "#ffb020"
+                    : closedEdges.has(item.index)
+                      ? "#4b2330"
+                      : "#c8412f";
                 return (
                     <group
                         key={item.index}

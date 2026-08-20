@@ -45,10 +45,11 @@ It draws a low-poly mountain, the piste curves, the lifts, the buildings, the ha
 A click selects a piste, a lift, a building, or a hazard.
 The orbit controls give pan, rotate, and zoom.
 
-The hazards and the weather use static values.
+The live scene shows simulator weather, failures, closures, and hazards.
+An accessible timeline shows each material event.
 The default skier markers read a recorded replay file.
 The live control starts an isolated simulator process.
-The API streams complete skier frames with MessagePack.
+The API streams complete skier frames and live conditions with MessagePack.
 A Web Worker decodes the frames and interpolates the positions.
 The scene writes the positions directly into the instance buffer.
 

@@ -1,7 +1,9 @@
-import { useRef, useState, type ComponentRef } from "react";
+import { useMemo, useRef, useState, type ComponentRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { Buildings } from "./Buildings";
+import { Timeline } from "../components/Timeline";
+import { Failures } from "./Failures";
 import { Hazards } from "./Hazards";
 import { Lifts } from "./Lifts";
 import { Pistes } from "./Pistes";
@@ -10,6 +12,7 @@ import { Terrain } from "./Terrain";
 import { Weather } from "./Weather";
 import { selectionLabel, type Selection } from "./selection";
 import type { LiveSession } from "../api/client";
+import type { DisplayState } from "../workers/live-frame";
 
 // The camera preset gives the overview. The reset button returns to it.
 const CAMERA_POSITION: [number, number, number] = [152, 100, -106];
@@ -28,16 +31,22 @@ function FirstFrame({ onDrawn }: { onDrawn: () => void }) {
 
 export function MountainScene({
     session,
+    display,
     onLiveFrame,
     onLiveError,
 }: {
     session: LiveSession | null;
-    onLiveFrame: (count: number) => void;
+    display: DisplayState;
+    onLiveFrame: (count: number, display: DisplayState) => void;
     onLiveError: () => void;
 }) {
     const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
     const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
+    const closedEdges = useMemo(
+        () => new Set(display.closures.map((closure) => closure.edge_index)),
+        [display.closures],
+    );
 
     return (
         <section className="mountain">
@@ -50,16 +59,29 @@ export function MountainScene({
                     <hemisphereLight args={["#dfeaff", "#5b5347", 1.1]} />
                     <directionalLight position={[120, 160, 80]} intensity={1.6} />
                     <Terrain />
-                    <Pistes selection={selection} onSelect={setSelection} />
-                    <Lifts selection={selection} onSelect={setSelection} />
+                    <Pistes
+                        closedEdges={closedEdges}
+                        selection={selection}
+                        onSelect={setSelection}
+                    />
+                    <Lifts
+                        closedEdges={closedEdges}
+                        selection={selection}
+                        onSelect={setSelection}
+                    />
                     <Buildings selection={selection} onSelect={setSelection} />
-                    <Hazards selection={selection} onSelect={setSelection} />
+                    <Hazards
+                        hazards={display.hazards}
+                        selection={selection}
+                        onSelect={setSelection}
+                    />
+                    <Failures failures={display.failures} />
                     <Skiers
                         session={session}
                         onLiveFrame={onLiveFrame}
                         onLiveError={onLiveError}
                     />
-                    <Weather paused={Boolean(session)} />
+                    <Weather weather={display.weather} />
                     <OrbitControls
                         ref={controls}
                         target={CAMERA_TARGET}
@@ -77,6 +99,7 @@ export function MountainScene({
                     Reset the view
                 </button>
             </div>
+            <Timeline events={display.timeline} weather={display.weather} />
         </section>
     );
 }

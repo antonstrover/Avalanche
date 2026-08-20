@@ -16,12 +16,14 @@ import numpy as np
 
 from avalanche.config.models import PopulationConfig
 from avalanche.sim.engine import MountainSim
+from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import LocationKind
 
-STREAM_VERSION = 1
+STREAM_VERSION = 2
 SIMULATION_SPEED = 20.0
 FRAME_INTERVAL_MS = 250
 MAX_SKIERS = 10_000
+TIMELINE_LIMIT = 64
 MOUNTAIN_PATH = (
     Path(__file__).resolve().parents[3] / "configs" / "mountain" / "small-resort.yaml"
 )
@@ -46,6 +48,7 @@ def pack_frame(
         "location_kind": population.location_kind.astype(np.int8, copy=False).tobytes(),
         "location_index": population.location_index.astype("<i4", copy=False).tobytes(),
         "progress": population.progress.astype("<f4", copy=False).tobytes(),
+        "display": display_state(sim),
     }
     envelope = {
         "version": STREAM_VERSION,
@@ -58,6 +61,137 @@ def pack_frame(
         "payload": payload,
     }
     return msgpack.packb(envelope, use_bin_type=True)
+
+
+def _failure_id(kind: str, target: int, start: float) -> str:
+    """Return the stable identity of one scheduled failure."""
+    return f"failure:{kind}:{target}:{start:g}"
+
+
+def display_state(sim: MountainSim) -> dict[str, object]:
+    """Return the bounded display state for one live frame."""
+    assert sim.failure_schedule is not None
+    assert sim.weather_schedule is not None
+    assert sim.topology is not None
+
+    failures = [
+        {
+            "event_id": _failure_id(
+                event.kind.value, event.target, event.start_time_seconds
+            ),
+            **event.as_dict(),
+            "end_time_seconds": event.end_time_seconds,
+            "severity": ("medium" if event.kind.value == "late_telemetry" else "high"),
+        }
+        for event in sim.active_failures
+    ]
+    hazards = []
+    for edge in np.flatnonzero(sim.state.early_indicator | sim.state.harm_active):
+        harm = bool(sim.state.harm_active[edge])
+        event_type = "true_harm" if harm else "early_indicator"
+        count = sim.state.harm_count[edge] if harm else sim.state.indicator_count[edge]
+        hazards.append(
+            {
+                "event_id": f"{event_type}:{int(edge)}:{int(count)}",
+                "event_type": event_type,
+                "edge_index": int(edge),
+                "severity": "high" if harm else "medium",
+                "hazard_score": float(sim.state.hazard_score[edge]),
+            }
+        )
+
+    closed = effective_closed(sim.state)
+    closures = [
+        {
+            "edge_index": int(edge),
+            "weather": bool(sim.state.weather_closed[edge]),
+            "failure": bool(sim.state.failure_closed[edge]),
+            "operational": bool(sim.state.closed[edge]),
+        }
+        for edge in np.flatnonzero(closed)
+    ]
+    return {
+        "weather": {
+            "wind": sim.weather.wind,
+            "visibility": sim.weather.visibility,
+            "snowfall": sim.weather.snowfall,
+            "temperature": sim.weather.temperature,
+        },
+        "failures": failures,
+        "hazards": hazards,
+        "closures": closures,
+        "timeline": _timeline(sim)[-TIMELINE_LIMIT:],
+    }
+
+
+def _timeline(sim: MountainSim) -> list[dict[str, object]]:
+    """Build the recoverable event window at the current time."""
+    assert sim.failure_schedule is not None
+    assert sim.weather_schedule is not None
+    events: list[dict[str, object]] = []
+    for failure in sim.failure_schedule.events:
+        identity = _failure_id(
+            failure.kind.value, failure.target, failure.start_time_seconds
+        )
+        if failure.start_time_seconds <= sim.simulation_time:
+            events.append(
+                {
+                    "event_id": f"{identity}:start",
+                    "event_type": "failure_started",
+                    "target": failure.target_id,
+                    "edge_index": failure.target,
+                    "start_time_seconds": failure.start_time_seconds,
+                    "end_time_seconds": failure.end_time_seconds,
+                    "severity": (
+                        "medium" if failure.kind.value == "late_telemetry" else "high"
+                    ),
+                    "label": failure.kind.value.replace("_", " "),
+                }
+            )
+        if failure.end_time_seconds <= sim.simulation_time:
+            events.append(
+                {
+                    "event_id": f"{identity}:end",
+                    "event_type": "failure_ended",
+                    "target": failure.target_id,
+                    "edge_index": failure.target,
+                    "start_time_seconds": failure.end_time_seconds,
+                    "end_time_seconds": failure.end_time_seconds,
+                    "severity": "low",
+                    "label": f"{failure.kind.value.replace('_', ' ')} ended",
+                }
+            )
+    for hazard in sim.hazard_events:
+        events.append(
+            {
+                "event_id": hazard.event_id,
+                "event_type": hazard.event_type,
+                "target": f"edge {hazard.edge_index}",
+                "edge_index": hazard.edge_index,
+                "start_time_seconds": hazard.start_time_seconds,
+                "end_time_seconds": None,
+                "severity": ("high" if hazard.event_type == "true_harm" else "medium"),
+                "label": hazard.event_type.replace("_", " "),
+            }
+        )
+    for index, transition in enumerate(sim.weather_schedule.transitions):
+        if transition.start_time_seconds <= sim.simulation_time:
+            events.append(
+                {
+                    "event_id": f"weather:{index}:{transition.start_time_seconds:g}",
+                    "event_type": "weather_changed",
+                    "target": "resort",
+                    "edge_index": None,
+                    "start_time_seconds": transition.start_time_seconds,
+                    "end_time_seconds": None,
+                    "severity": "low",
+                    "label": "weather changed",
+                }
+            )
+    return sorted(
+        events,
+        key=lambda event: (float(event["start_time_seconds"]), str(event["event_id"])),
+    )
 
 
 def _put_latest(output: Any, value: bytes) -> None:
@@ -79,16 +213,44 @@ def run_session(
     topology: str,
     output: Any,
     stop: Any,
+    demo_failure: bool = False,
 ) -> None:
     """Run one simulator inside a child process."""
     try:
         sim = MountainSim(MOUNTAIN_PATH)
-        sim.reset(
-            seed,
-            options={
-                "population": PopulationConfig(skier_count=skier_count),
+        options: dict[str, object] = {
+            "population": PopulationConfig(skier_count=skier_count),
+            "weather": {
+                "initial": {
+                    "wind": 5.0,
+                    "visibility": 5_000.0,
+                    "snowfall": 0.4,
+                    "temperature": 1.0,
+                },
+                "schedule": [
+                    {
+                        "start_time_seconds": 30.0,
+                        "wind": 12.0,
+                        "visibility": 700.0,
+                        "snowfall": 4.0,
+                        "temperature": -3.0,
+                    }
+                ],
             },
-        )
+        }
+        if demo_failure:
+            options["failures"] = {
+                "schedule": [
+                    {
+                        "kind": "lift_stoppage",
+                        "target": "lift1_base->lift1_top",
+                        "start_time_seconds": 5.0,
+                        "duration_seconds": 60.0,
+                        "controller_visible": True,
+                    }
+                ]
+            }
+        sim.reset(seed, options=options)
         sequence = 0
         _put_latest(output, pack_frame(sim, session_id, sequence, topology, "snapshot"))
         interval = FRAME_INTERVAL_MS / 1000.0
@@ -142,6 +304,7 @@ class LiveSession:
     process: Any
     output: Any
     stop_event: Any
+    demo_failure: bool = False
     status: str = "starting"
     latest: bytes | None = None
     latest_sequence: int = -1
@@ -157,6 +320,7 @@ class LiveSession:
             "simulation_speed": SIMULATION_SPEED,
             "frame_interval_ms": FRAME_INTERVAL_MS,
             "topology_version": self.topology_version,
+            "demo_failure": self.demo_failure,
         }
 
 
@@ -168,7 +332,9 @@ class SessionManager:
         self.sessions: dict[str, LiveSession] = {}
         self.lock = threading.Lock()
 
-    def create(self, seed: int, skier_count: int) -> LiveSession:
+    def create(
+        self, seed: int, skier_count: int, demo_failure: bool = False
+    ) -> LiveSession:
         """Create and start one live session."""
         session_id = str(uuid.uuid4())
         version = topology_version()
@@ -176,7 +342,15 @@ class SessionManager:
         stop_event = self.context.Event()
         process = self.context.Process(
             target=run_session,
-            args=(session_id, seed, skier_count, version, output, stop_event),
+            args=(
+                session_id,
+                seed,
+                skier_count,
+                version,
+                output,
+                stop_event,
+                demo_failure,
+            ),
             daemon=True,
         )
         session = LiveSession(
@@ -187,6 +361,7 @@ class SessionManager:
             process=process,
             output=output,
             stop_event=stop_event,
+            demo_failure=demo_failure,
         )
         with self.lock:
             self.sessions[session_id] = session

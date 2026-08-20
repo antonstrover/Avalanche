@@ -12,6 +12,7 @@ import {
     type Place,
 } from "./positions";
 import data from "./replay.sample.json";
+import type { DisplayState } from "../workers/live-frame";
 
 type Frame = { time: number; skiers: Place[] };
 type Replay = { skier_count: number; frames: Frame[] };
@@ -34,6 +35,7 @@ type WorkerMessage = {
     visibleCount?: number;
     count?: number;
     skierCount?: number;
+    display?: DisplayState;
 };
 
 export function Skiers({
@@ -42,7 +44,7 @@ export function Skiers({
     onLiveError,
 }: {
     session: LiveSession | null;
-    onLiveFrame: (count: number) => void;
+    onLiveFrame: (count: number, display: DisplayState) => void;
     onLiveError: () => void;
 }) {
     const mesh = useRef<InstancedMesh>(null);
@@ -100,11 +102,15 @@ export function Skiers({
         frameWorker.onmessage = (event: MessageEvent<WorkerMessage>) => {
             const message = event.data;
             if (message.type === "snapshot_request" && socket.readyState === WebSocket.OPEN) {
-                socket.send(encode({ version: 1, type: "snapshot_request" }));
-            } else if (message.type === "accepted" && message.skierCount) {
+                socket.send(encode({ version: 2, type: "snapshot_request" }));
+            } else if (
+                message.type === "accepted" &&
+                message.skierCount &&
+                message.display
+            ) {
                 liveReady.current = true;
                 setSkierCount(message.skierCount);
-                onLiveFrame(message.skierCount);
+                onLiveFrame(message.skierCount, message.display);
             } else if (
                 message.type === "positions" &&
                 message.positions &&

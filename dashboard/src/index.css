@@ -125,3 +125,149 @@ code {
   font-family: var(--mono);
   font-size: 15px;
 }
+
+.live-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px 24px;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  color: var(--text-h);
+  background: var(--code-bg);
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.timeline {
+  margin: 0 22px 30px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--social-bg);
+  text-align: left;
+  overflow: hidden;
+}
+
+.timeline-heading {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.eyebrow {
+  color: var(--accent);
+  font: 12px/1.2 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.weather-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(72px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.weather-summary div {
+  display: grid;
+}
+
+.weather-summary dt,
+.timeline-time,
+.timeline-end {
+  color: var(--text);
+  font: 12px/1.35 var(--mono);
+}
+
+.weather-summary dd {
+  margin: 0;
+  color: var(--text-h);
+  font: 14px/1.35 var(--mono);
+}
+
+.timeline-empty {
+  padding: 22px 20px;
+}
+
+.timeline-list {
+  max-height: 260px;
+  padding: 0;
+  margin: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.timeline-event {
+  display: grid;
+  grid-template-columns: 10px 48px minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.timeline-event:last-child {
+  border-bottom: 0;
+}
+
+.timeline-marker {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #60a5fa;
+}
+
+.severity-medium .timeline-marker {
+  background: #f59e0b;
+}
+
+.severity-high .timeline-marker {
+  background: #dc2626;
+}
+
+.timeline-target {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.timeline-severity {
+  display: inline-block;
+  margin-top: 3px;
+  color: var(--text-h);
+  font: 11px/1.3 var(--mono);
+  text-transform: uppercase;
+}
+
+@media (max-width: 720px) {
+  .timeline-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .weather-summary {
+    width: 100%;
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .timeline-event {
+    grid-template-columns: 10px 42px 1fr;
+  }
+
+  .timeline-end {
+    display: none;
+  }
+}

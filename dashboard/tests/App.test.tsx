@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
+import { mergeTimeline } from "../src/features/timeline";
+import type { TimelineEvent } from "../src/workers/live-frame";
 
 // The scene needs WebGL. The browser test covers it, so this test replaces it.
 vi.mock("../src/mountain/MountainScene", () => ({
@@ -29,5 +31,20 @@ describe("App shell", () => {
                 "API status: ok",
             );
         });
+    });
+
+    it("deduplicates recovered timeline events by their stable identity", () => {
+        const event: TimelineEvent = {
+            event_id: "failure:one:start",
+            event_type: "failure_started",
+            target: "lift one",
+            edge_index: 1,
+            start_time_seconds: 5,
+            end_time_seconds: 65,
+            severity: "high",
+            label: "lift stoppage",
+        };
+
+        expect(mergeTimeline([event], [event])).toEqual([event]);
     });
 });

@@ -7,7 +7,12 @@ import msgpack
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from avalanche.api.sessions import MAX_SKIERS, manager, snapshot_message
+from avalanche.api.sessions import (
+    MAX_SKIERS,
+    STREAM_VERSION,
+    manager,
+    snapshot_message,
+)
 from avalanche.config import ResolvedConfig
 
 
@@ -22,10 +27,23 @@ app = FastAPI(title="avalanche", lifespan=lifespan)
 
 
 class SessionCreate(BaseModel):
-    """Validate the inputs of a Stage 3 live session."""
+    """Validate the inputs of a live session."""
 
     seed: int = 0
     skier_count: int = Field(default=5000, ge=1, le=MAX_SKIERS)
+    demo_failure: bool = False
+
+
+class SessionResponse(BaseModel):
+    """Describe one live session."""
+
+    session_id: str
+    status: str
+    skier_count: int
+    simulation_speed: float
+    frame_interval_ms: int
+    topology_version: str
+    demo_failure: bool
 
 
 @app.get("/health")
@@ -38,10 +56,12 @@ def config_options() -> dict[str, object]:
     return {"schema": ResolvedConfig.model_json_schema()}
 
 
-@app.post("/api/sessions", status_code=201)
+@app.post("/api/sessions", status_code=201, response_model=SessionResponse)
 def create_session(request: SessionCreate) -> dict[str, object]:
     """Start an isolated live simulator session."""
-    return manager.create(request.seed, request.skier_count).response()
+    return manager.create(
+        request.seed, request.skier_count, request.demo_failure
+    ).response()
 
 
 @app.get("/api/sessions/{session_id}")
@@ -91,7 +111,7 @@ async def stream_session(websocket: WebSocket, session_id: str) -> None:
                 continue
             envelope = msgpack.unpackb(request, raw=False)
             valid_request = (
-                envelope.get("version") == 1
+                envelope.get("version") == STREAM_VERSION
                 and envelope.get("type") == "snapshot_request"
             )
             if not valid_request:

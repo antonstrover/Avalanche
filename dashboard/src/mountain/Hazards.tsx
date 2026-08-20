@@ -1,7 +1,7 @@
 import { Vector3 } from "three";
-import { hazards, type Hazard } from "./conditions";
 import { edgeNodes, nodePosition, resort } from "./resort";
 import type { Selection } from "./selection";
+import type { HazardState } from "../workers/live-frame";
 
 const MARKER_HEIGHT = 7;
 const MARKER_SIZE = 2.2;
@@ -13,7 +13,7 @@ const colours: Record<string, string> = {
 };
 
 // The shape shows the severity, so the marker does not depend on colour alone.
-function Shape({ severity }: { severity: Hazard["severity"] }) {
+function Shape({ severity }: { severity: HazardState["severity"] }) {
     if (severity === "high") {
         return <coneGeometry args={[MARKER_SIZE, MARKER_SIZE * 2, 3]} />;
     }
@@ -23,31 +23,23 @@ function Shape({ severity }: { severity: Hazard["severity"] }) {
     return <boxGeometry args={[MARKER_SIZE * 1.4, MARKER_SIZE * 1.4, MARKER_SIZE * 1.4]} />;
 }
 
-const nodeById = new Map(resort.nodes.map((node) => [node.node_id, node]));
-
 // A hazard on an edge marks the middle of that edge.
-function hazardPosition(hazard: Hazard): Vector3 {
-    if (hazard.place.kind === "node") {
-        const node = nodeById.get(hazard.place.node_id);
-        if (!node) {
-            throw new Error(`The hazard ${hazard.hazard_id} names an unknown node.`);
-        }
-        return nodePosition(node);
-    }
-    const edge = resort.edges[hazard.place.index];
+function hazardPosition(hazard: HazardState): Vector3 {
+    const edge = resort.edges[hazard.edge_index];
     if (!edge) {
-        throw new Error(`The hazard ${hazard.hazard_id} names an unknown edge.`);
+        throw new Error(`The hazard ${hazard.event_id} names an unknown edge.`);
     }
     const [source, destination] = edgeNodes(edge);
     return new Vector3().lerpVectors(nodePosition(source), nodePosition(destination), 0.5);
 }
 
 type Props = {
+    hazards: HazardState[];
     selection: Selection;
     onSelect: (selection: Selection) => void;
 };
 
-export function Hazards({ selection, onSelect }: Props) {
+export function Hazards({ hazards, selection, onSelect }: Props) {
     return (
         <group name="hazards">
             {hazards.map((hazard, index) => {
@@ -55,7 +47,7 @@ export function Hazards({ selection, onSelect }: Props) {
                 const selected = selection?.kind === "hazard" && selection.index === index;
                 return (
                     <mesh
-                        key={hazard.hazard_id}
+                        key={hazard.event_id}
                         name={`hazard-${index}`}
                         position={[position.x, position.y + MARKER_HEIGHT, position.z]}
                         onClick={(event) => {

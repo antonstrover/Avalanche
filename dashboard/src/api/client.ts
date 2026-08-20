@@ -1,4 +1,4 @@
-import type { operations } from "./schema";
+import type { components, operations } from "./schema";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -18,23 +18,17 @@ export async function fetchConfigOptions(): Promise<ConfigOptionsResponse> {
     return response.json();
 }
 
-export type LiveSession = {
-    session_id: string;
-    status: string;
-    skier_count: number;
-    simulation_speed: number;
-    frame_interval_ms: number;
-    topology_version: string;
-};
+export type LiveSession = components["schemas"]["SessionResponse"];
 
 export async function createLiveSession(
     seed = 0,
     skierCount = 5000,
+    demoFailure = false,
 ): Promise<LiveSession> {
     const response = await fetch(`${API_BASE}/api/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ seed, skier_count: skierCount }),
+        body: JSON.stringify({ seed, skier_count: skierCount, demo_failure: demoFailure }),
     });
     if (!response.ok) throw new Error("the live session could not start");
     return response.json() as Promise<LiveSession>;
