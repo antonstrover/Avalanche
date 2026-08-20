@@ -123,7 +123,7 @@ class MountainSim:
         # 3. Give lift service to the skiers in a queue.
         serve_lift_queues(pop, self.topology, self.state, self.tick_seconds)
         # 4. Move the skiers on a piste and on a lift.
-        advance_on_edges(pop, self.topology, self.tick_seconds)
+        advance_on_edges(pop, self.topology, self.state, self.tick_seconds)
         # 5. Move the skiers that finish an edge to the destination node.
         arrive_at_nodes(pop, self.topology)
         # 6. Select the next edge for each skier at a node.
