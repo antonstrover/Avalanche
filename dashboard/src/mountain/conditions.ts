@@ -28,7 +28,7 @@ export const hazards: Hazard[] = [
     },
     {
         hazard_id: "hz-wind-summit",
-        place: { kind: "node", node_id: "summit_station" },
+        place: { kind: "node", node_id: "lift2_top" },
         hazard_kind: "wind",
         severity: "low",
     },
@@ -39,3 +39,9 @@ export const hazards: Hazard[] = [
 export type Weather = { wind: number; visibility: number; snowfall: number };
 
 export const weather: Weather = { wind: 9, visibility: 260, snowfall: 0.6 };
+
+// A person can ask the system to reduce the motion.
+// The snow and the skier markers then hold still.
+export function reducedMotion(): boolean {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}

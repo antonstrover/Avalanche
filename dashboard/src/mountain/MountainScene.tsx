@@ -5,6 +5,7 @@ import { Buildings } from "./Buildings";
 import { Hazards } from "./Hazards";
 import { Lifts } from "./Lifts";
 import { Pistes } from "./Pistes";
+import { Skiers } from "./Skiers";
 import { Terrain } from "./Terrain";
 import { Weather } from "./Weather";
 import { selectionLabel, type Selection } from "./selection";
@@ -44,6 +45,7 @@ export function MountainScene() {
                     <Lifts selection={selection} onSelect={setSelection} />
                     <Buildings selection={selection} onSelect={setSelection} />
                     <Hazards selection={selection} onSelect={setSelection} />
+                    <Skiers />
                     <Weather />
                     <OrbitControls
                         ref={controls}
