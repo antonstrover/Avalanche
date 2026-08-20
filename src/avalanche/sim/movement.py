@@ -35,7 +35,8 @@ class DynamicState:
     """The dynamic edge state of Stage 3.
 
     Each field is an array over the edges, so a step reads it without a copy.
-    `closed` holds the closed flag of each edge.
+    `closed` holds each operational closure.
+    Weather and failure closures stay in separate arrays.
     `occupancy` holds the count of skiers on each edge.
     `queue_length` holds the count of waiting skiers of each edge.
     `speed_factor` scales the advance of a skier on each edge.
@@ -43,7 +44,8 @@ class DynamicState:
     It is `NO_EDGE` when the advice offers no edge.
     Stage 3 has no controller, so a test sets the advice today.
     The adjudicator writes the advice in Stage 6.
-    A later stage adds the closure logic and the hazard fields.
+    Reported telemetry can lag while the true arrays continue to change.
+    A later stage adds the hazard fields.
     """
 
     closed: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.bool_))
@@ -66,6 +68,27 @@ class DynamicState:
     weather_closed: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.bool_)
     )
+    failure_closed: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
+    lift_stopped: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
+    telemetry_late: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
+    reported_occupancy: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    reported_queue_length: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    reported_speed_factor: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    reported_closed: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
     advice_edge: np.ndarray = field(
         default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.int32)
     )
@@ -86,6 +109,13 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         weather_speed_factor=np.ones(topology.edge_count, dtype=np.float64),
         weather_risk=np.zeros(topology.edge_count, dtype=np.float64),
         weather_closed=np.zeros(topology.edge_count, dtype=np.bool_),
+        failure_closed=np.zeros(topology.edge_count, dtype=np.bool_),
+        lift_stopped=np.zeros(topology.edge_count, dtype=np.bool_),
+        telemetry_late=np.zeros(topology.edge_count, dtype=np.bool_),
+        reported_occupancy=np.zeros(topology.edge_count, dtype=np.int32),
+        reported_queue_length=np.zeros(topology.edge_count, dtype=np.int32),
+        reported_speed_factor=np.ones(topology.edge_count, dtype=np.float64),
+        reported_closed=np.zeros(topology.edge_count, dtype=np.bool_),
         advice_edge=np.full(
             (topology.node_count, len(ABILITY_NAMES)), NO_EDGE, dtype=np.int32
         ),
@@ -95,10 +125,13 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
 def open_mask(edges: np.ndarray, state: DynamicState) -> np.ndarray:
     """Return the flag of each edge that exists and that is open."""
     usable = edges != NO_EDGE
-    usable[usable] = ~(
-        state.closed[edges[usable]] | state.weather_closed[edges[usable]]
-    )
+    usable[usable] = ~effective_closed(state)[edges[usable]]
     return usable
+
+
+def effective_closed(state: DynamicState) -> np.ndarray:
+    """Return every closure reason as one effective edge mask."""
+    return state.closed | state.weather_closed | state.failure_closed
 
 
 def update_congestion(
@@ -126,6 +159,7 @@ def update_congestion(
         MIN_SPEED_FACTOR,
         1.0,
     )
+    state.speed_factor[state.lift_stopped] = 0.0
 
 
 def start_arrivals(
@@ -165,6 +199,7 @@ def serve_lift_queues(
     capacity = (
         topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR
     ) * tick_seconds
+    capacity[effective_closed(state)] = 0.0
     served = queued[members][rank < capacity[edges[members]].astype(np.int64)]
 
     pop.location_kind[served] = LocationKind.LIFT

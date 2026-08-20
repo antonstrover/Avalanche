@@ -1,5 +1,8 @@
 from avalanche.config.loader import load_and_merge, load_yaml, merge_configs
 from avalanche.config.models import (
+    FailureEventConfig,
+    FailureSamplingConfig,
+    FailuresConfig,
     ResolvedConfig,
     WeatherConfig,
     WeatherEffectsConfig,
@@ -15,6 +18,9 @@ __all__ = [
     "load_yaml",
     "merge_configs",
     "ResolvedConfig",
+    "FailureEventConfig",
+    "FailureSamplingConfig",
+    "FailuresConfig",
     "WeatherConfig",
     "WeatherEffectsConfig",
     "WeatherRangeConfig",

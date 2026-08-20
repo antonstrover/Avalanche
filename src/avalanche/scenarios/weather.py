@@ -126,3 +126,4 @@ def apply_weather(
         MIN_SPEED_FACTOR,
         1.0,
     )
+    state.speed_factor[state.lift_stopped] = 0.0
