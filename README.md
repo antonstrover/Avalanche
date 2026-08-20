@@ -9,8 +9,9 @@ Can a monitor find a misaligned controller before that controller causes harm?
 
 ## What is built
 
-The simulator moves a skier across a small resort.
-The application draws that resort in 3D.
+The simulator moves up to 10,000 skiers across a small resort.
+The simulator keeps the skier state in NumPy arrays.
+The application draws the same population in 3D.
 
 The controllers, the monitors, the weather, and the experiments do not exist yet.
 
@@ -21,16 +22,17 @@ The controllers, the monitors, the weather, and the experiments do not exist yet
 | Graph | `src/avalanche/sim/graph.py` | reads the mountain file and validates the graph one time, at load |
 | Topology | `src/avalanche/sim/topology.py` | changes the graph into static index arrays |
 | Routes | `src/avalanche/sim/routes.py` | gives the shortest path from each node to each destination |
-| Skier | `src/avalanche/sim/skier.py` | holds the state of one skier |
-| Movement | `src/avalanche/sim/movement.py` | serves the lift queues and moves the skiers along an edge |
-| Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, and the state checksum |
+| Population | `src/avalanche/sim/population.py` | samples the skier attributes and stores the skier arrays |
+| Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
+| Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and the state checksum |
 
 The mountain is `configs/mountain/small-resort.yaml`.
 It has 10 nodes and 12 edges.
-A skier travels from the entrance, up a lift, down a piste, and to the exit.
-
-The skiers are plain Python objects at this stage.
-Stage 3 changes them into NumPy arrays.
+Each skier travels from an entrance to a sampled destination.
+The movement tick uses masked NumPy operations.
+The route choice groups skiers by their location and their attributes.
+The compliance value controls the probability that a skier follows the advice.
+The congestion changes the effective edge speed.
 
 ### The application
 
@@ -40,8 +42,11 @@ A click selects a piste, a lift, a building, or a hazard.
 The orbit controls give pan, rotate, and zoom.
 
 The hazards and the weather use static values.
-The skier markers read a recorded replay file.
-The scene does not connect to a live simulator yet.
+The default skier markers read a recorded replay file.
+The live control starts an isolated simulator process.
+The API streams complete skier frames with MessagePack.
+A Web Worker decodes the frames and interpolates the positions.
+The scene writes the positions directly into the instance buffer.
 
 ## Install
 
@@ -63,6 +68,7 @@ cd dashboard && npm test       # the application unit tests
 
 The browser tests need a browser.
 They run on your machine and not in the workflow.
+The test command starts the API and the application.
 
 ```bash
 cd dashboard
@@ -70,9 +76,8 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-### The application
+### The live application
 
-The application reads the health of the API.
 Start the API first.
 
 ```bash
@@ -86,6 +91,7 @@ cd dashboard && npm run dev
 ```
 
 Open the address that Vite prints.
+Select **Start live session** to stream the default population.
 
 ### The command-line interface
 
@@ -109,23 +115,22 @@ The command does not run the simulator yet.
 ### The simulator, from Python
 
 ```python
-from avalanche.sim import MountainSim, Skier
+from avalanche.config.models import PopulationConfig
+from avalanche.sim import MountainSim
 
 sim = MountainSim("configs/mountain/small-resort.yaml")
-observation, metadata = sim.reset(seed=1)
-
-entrance = sim.topology.node_index["base_village"]
-exit_node = sim.topology.node_index["base_exit"]
-sim.add_skier(Skier(destination=exit_node, location_index=entrance))
+population = PopulationConfig(skier_count=5_000)
+observation, metadata = sim.reset(seed=1, options={"population": population})
 
 for _ in range(10):
     sim.tick()
 
-print(sim.skiers[0])
+print(len(sim.population))
+print(sim.population.arrived)
 print(sim.state_checksum())
 ```
 
-`tests/invariants/test_single_skier_journey.py` shows a complete journey.
+`tests/invariants/test_population_invariants.py` shows the population checks.
 
 ### The scene data
 
