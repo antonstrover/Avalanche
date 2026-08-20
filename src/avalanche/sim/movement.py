@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from avalanche.sim.population import SkierArrays, group_rank
+from avalanche.sim.population import ABILITY_NAMES, SkierArrays, group_rank
 from avalanche.sim.routes import NO_EDGE, RouteTable
 from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
@@ -29,6 +29,10 @@ class DynamicState:
 
     `closed` holds the closed flag of each edge.
     `queue_length` holds the count of waiting skiers of each edge.
+    `advice_edge[node, ability]` is the edge that the advice offers at one node.
+    It is `NO_EDGE` when the advice offers no edge.
+    Stage 3 has no controller, so a test sets the advice today.
+    The adjudicator writes the advice in Stage 6.
     A later stage adds the closure logic and the other dynamic edge fields.
     """
 
@@ -36,14 +40,31 @@ class DynamicState:
     queue_length: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.int32)
     )
+    advice_edge: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.int32)
+    )
 
 
 def new_dynamic_state(topology: Topology) -> DynamicState:
-    """Return the open dynamic state of one topology, with empty lift queues."""
+    """Return the open dynamic state of one topology, with empty lift queues.
+
+    The advice table holds `NO_EDGE`, so each skier follows the route table.
+    """
     return DynamicState(
         closed=[False] * topology.edge_count,
         queue_length=np.zeros(topology.edge_count, dtype=np.int32),
+        advice_edge=np.full(
+            (topology.node_count, len(ABILITY_NAMES)), NO_EDGE, dtype=np.int32
+        ),
     )
+
+
+def open_mask(edges: np.ndarray, state: DynamicState) -> np.ndarray:
+    """Return the flag of each edge that exists and that is open."""
+    usable = edges != NO_EDGE
+    closed = np.asarray(state.closed, dtype=np.bool_)
+    usable[usable] = ~closed[edges[usable]]
+    return usable
 
 
 def count_queues(pop: SkierArrays, state: DynamicState) -> None:
@@ -137,12 +158,22 @@ def select_next_edges(
     topology: Topology,
     routes: RouteTable,
     state: DynamicState,
+    rng: np.random.Generator,
 ) -> None:
     """Start the next edge of each skier at a node.
 
     A skier at its destination becomes finished and complete.
+    The route choice groups the skiers by the node, the destination class,
+    the ability, and the advice.
+    The destination class is the destination node index for now.
+    A coarser class buys nothing on a mountain of this size.
+    The table lookup is the grouped choice, because each skier of one key
+    reads the same advised edge and the same route table edge.
+    The compliance value is the probability that a skier follows the advice.
+    A skier takes the advised edge, then the route table edge, then it waits.
+    A closed advised edge falls back to the route table edge.
+    A closed route table edge makes the skier wait at the node.
     A skier that takes a lift edge joins the queue of that lift.
-    A skier waits at the node when the next edge is closed or does not exist.
     """
     at_node = np.flatnonzero(pop.location_kind == LocationKind.NODE)
     arrived = pop.location_index[at_node] == pop.destination[at_node]
@@ -152,14 +183,17 @@ def select_next_edges(
     pop.status[complete] = Status.COMPLETE
 
     travelling = at_node[~arrived]
-    next_edge = routes.next_edge[
-        pop.location_index[travelling], pop.destination[travelling]
-    ]
+    nodes = pop.location_index[travelling]
+    dests = pop.destination[travelling]
 
-    # A skier waits when no edge exists and when the edge is closed.
-    open_edge = next_edge != NO_EDGE
-    closed = np.asarray(state.closed, dtype=np.bool_)
-    open_edge[open_edge] = ~closed[next_edge[open_edge]]
+    # The draw takes one number for each skier at a node, in the ascending
+    # skier order, so the run is deterministic.
+    advice = state.advice_edge[nodes, pop.ability[travelling]]
+    follow = rng.random(nodes.size) < pop.compliance[travelling]
+    advised = np.where(follow & open_mask(advice, state), advice, NO_EDGE)
+    next_edge = np.where(advised != NO_EDGE, advised, routes.next_edge[nodes, dests])
+
+    open_edge = open_mask(next_edge, state)
     starters = travelling[open_edge]
     taken = next_edge[open_edge]
 
