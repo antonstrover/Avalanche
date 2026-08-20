@@ -14,6 +14,14 @@ from avalanche.env.actions import (
     sample_valid_action,
     validate_action,
 )
+from avalanche.env.observations import (
+    INCIDENT_KIND_NAMES,
+    IncidentArrays,
+    Observation,
+    ObservationConfig,
+    build_observation,
+    build_observation_space,
+)
 from avalanche.env.reward import (
     RewardParts,
     RewardResult,
@@ -26,6 +34,10 @@ __all__ = [
     "Action",
     "ActionMasks",
     "InvalidActionError",
+    "IncidentArrays",
+    "Observation",
+    "ObservationConfig",
+    "INCIDENT_KIND_NAMES",
     "PISTE_CLOSE",
     "PISTE_NO_CHANGE",
     "PISTE_OPEN",
@@ -36,6 +48,8 @@ __all__ = [
     "build_action_mask_space",
     "build_action_masks",
     "build_action_space",
+    "build_observation",
+    "build_observation_space",
     "calculate_reward",
     "neutral_action",
     "sample_valid_action",
