@@ -1,10 +1,15 @@
-"""Two runs with one seed must give the same checksums."""
+"""Seeded simulator and environment runs must be exactly repeatable."""
 
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
+from avalanche.config import ResolvedConfig, load_and_merge
 from avalanche.config.models import PopulationConfig
+from avalanche.env import AvalancheEnv, AvalancheEnvConfig, neutral_action
 from avalanche.sim import MountainSim, population_from_starts
 
 FIXTURE = (
@@ -12,6 +17,36 @@ FIXTURE = (
 )
 SEED = 20260820
 TICK_COUNT = 10
+
+CONFIGS = Path(__file__).resolve().parents[2] / "configs"
+CONFIG_FILES = (
+    CONFIGS / "mountain" / "default.yaml",
+    CONFIGS / "scenarios" / "default.yaml",
+    CONFIGS / "controllers" / "honest.yaml",
+    CONFIGS / "monitors" / "none.yaml",
+)
+CONTROL_INTERVAL_SECONDS = 30.0
+EPISODE_DURATION_SECONDS = 300.0
+METRIC_NAMES = {
+    "completed_journeys",
+    "wait_time",
+    "dangerous_density",
+    "stranded_skiers",
+    "group_mean_wait_times",
+    "fairness",
+    "intervention_cost",
+}
+
+
+@dataclass(frozen=True)
+class EpisodeResult:
+    """The deterministic outputs of one complete environment episode."""
+
+    checksums: tuple[str, ...]
+    metrics: dict[str, float | int | tuple[float, ...]]
+    schedules: dict[str, list[dict[str, Any]]]
+    terminated: bool
+    truncated: bool
 
 
 def run(seed: int) -> list[str]:
@@ -95,3 +130,137 @@ def test_two_seeds_give_different_populations():
     assert not np.array_equal(
         first.population.arrival_time, second.population.arrival_time
     )
+
+
+def resolved_episode_config(seed: int = SEED) -> ResolvedConfig:
+    """Return the exact small configuration for the full episode test."""
+    values = load_and_merge(*CONFIG_FILES)
+    values["mountain"] = {
+        "name": "small-resort",
+        "node_count": 10,
+        "edge_count": 12,
+    }
+    values["population"] = {
+        "skier_count": 64,
+        "arrival_window_seconds": 120.0,
+        "ability_weights": [0.3, 0.5, 0.2],
+        "compliance_mean": 0.7,
+        "compliance_spread": 0.2,
+    }
+    values["intervals"] = {
+        "movement_tick_seconds": 5.0,
+        "control_interval_seconds": CONTROL_INTERVAL_SECONDS,
+    }
+    values["scenario"] = {
+        "name": "determinism-regression",
+        "movement_tick_seconds": 5.0,
+        "control_interval_seconds": CONTROL_INTERVAL_SECONDS,
+        "weather": {
+            "sampling": {
+                "interval_seconds": 120.0,
+                "transition_count": 2,
+                "wind": {"minimum": 1.0, "maximum": 20.0},
+                "visibility": {"minimum": 300.0, "maximum": 8_000.0},
+                "snowfall": {"minimum": 0.0, "maximum": 8.0},
+                "temperature": {"minimum": -12.0, "maximum": 5.0},
+            }
+        },
+        "hazards": {
+            "critical_density_multiplier": 1.0,
+            "warning_fraction": 0.8,
+            "minimum_duration_seconds": 60.0,
+            "weather_risk_weight": 1.0,
+        },
+        "failures": {
+            "sampling": {
+                "event_count": 4,
+                "earliest_start_seconds": 30.0,
+                "latest_start_seconds": 240.0,
+                "minimum_duration_seconds": 30.0,
+                "maximum_duration_seconds": 60.0,
+                "controller_visibility_probability": 0.5,
+            }
+        },
+    }
+    values["seed"] = seed
+    return ResolvedConfig.model_validate(values)
+
+
+def run_episode(
+    resolved: ResolvedConfig, *, controller_draws: bool = False
+) -> EpisodeResult:
+    """Run one complete environment episode from a resolved configuration."""
+    config = AvalancheEnvConfig(
+        movement_tick_seconds=resolved.intervals.movement_tick_seconds,
+        control_interval_seconds=resolved.intervals.control_interval_seconds,
+        episode_duration_seconds=EPISODE_DURATION_SECONDS,
+        forecast_steps=2,
+        incident_capacity=8,
+    )
+    env = AvalancheEnv(
+        FIXTURE,
+        config,
+        simulator_options={
+            "population": resolved.population,
+            "weather": resolved.scenario.weather,
+            "hazards": resolved.scenario.hazards,
+            "failures": resolved.scenario.failures,
+        },
+    )
+    _, reset_info = env.reset(seed=resolved.seed)
+    assert reset_info["seed"] == resolved.seed
+    schedules = deepcopy(reset_info["resolved_schedules"])
+    checksums: list[str] = []
+    terminated = False
+    truncated = False
+    info = reset_info
+
+    while not (terminated or truncated):
+        if controller_draws:
+            env.sim.streams["controller"].random(37)
+        _, _, terminated, truncated, info = env.step(neutral_action(env.topology))
+        checksums.append(info["checksums"]["after"])
+
+    return EpisodeResult(
+        checksums=tuple(checksums),
+        metrics=info["metrics"],
+        schedules=schedules,
+        terminated=terminated,
+        truncated=truncated,
+    )
+
+
+def test_full_episodes_repeat_each_checksum_and_final_metric():
+    resolved = resolved_episode_config()
+
+    first = run_episode(resolved)
+    second = run_episode(resolved)
+
+    assert first.checksums == second.checksums
+    assert first.metrics == second.metrics
+    assert first.schedules == second.schedules
+    assert set(first.metrics) == METRIC_NAMES
+    assert len(first.checksums) == int(
+        EPISODE_DURATION_SECONDS / CONTROL_INTERVAL_SECONDS
+    )
+    assert not first.terminated
+    assert first.truncated
+
+
+def test_another_seed_changes_an_external_schedule():
+    first = run_episode(resolved_episode_config(SEED))
+    second = run_episode(resolved_episode_config(SEED + 1))
+
+    assert first.schedules != second.schedules
+
+
+def test_controller_draws_cannot_change_external_schedules_or_results():
+    resolved = resolved_episode_config()
+
+    baseline = run_episode(resolved)
+    disturbed = run_episode(resolved, controller_draws=True)
+
+    assert baseline.schedules["weather"] == disturbed.schedules["weather"]
+    assert baseline.schedules["failures"] == disturbed.schedules["failures"]
+    assert baseline.checksums == disturbed.checksums
+    assert baseline.metrics == disturbed.metrics

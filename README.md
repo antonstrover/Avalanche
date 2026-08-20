@@ -26,7 +26,9 @@ The controllers, the monitors, and the experiments do not exist yet.
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
 | Failures | `src/avalanche/scenarios/failures.py` | resolves failures and keeps true telemetry separate |
+| Hazards | `src/avalanche/sim/hazards.py` | records early indicators and true harm from dangerous density |
 | Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and the state checksum |
+| Environment | `src/avalanche/env/adapter.py` | gives fixed Gymnasium spaces and one control interval per step |
 
 The mountain is `configs/mountain/small-resort.yaml`.
 It has 10 nodes and 12 edges.
@@ -37,6 +39,12 @@ The compliance value controls the probability that a skier follows the advice.
 The congestion changes the effective edge speed.
 The weather changes the piste speed, the edge risk, and the lift availability.
 Scheduled failures stop lifts, close edges, or delay reported telemetry.
+Hazard conditions accumulate dangerous density before they record true harm.
+The Gymnasium adapter validates each action before it changes the simulator.
+The observation uses fixed arrays for the resort, the scenarios, and the action masks.
+The action controls route weights, pistes, lift capacity, crowd messages, and telemetry.
+Each environment step reports the six named reward parts and the cumulative metrics.
+Seeded episode tests compare periodic checksums and the final named metrics.
 
 ### The application
 
