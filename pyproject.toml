@@ -25,6 +25,7 @@ avalanche = "avalanche.cli:main"
 dev = [
     "pytest",
     "matplotlib",
+    "ruff",
 ]
 
 [build-system]
