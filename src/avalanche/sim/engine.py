@@ -21,10 +21,10 @@ from avalanche.sim.movement import (
     select_next_edges,
     serve_lift_queues,
     start_arrivals,
+    update_congestion,
 )
 from avalanche.sim.population import SkierArrays, empty_population, sample_population
 from avalanche.sim.routes import RouteTable, build_route_table
-from avalanche.sim.skier import LocationKind
 from avalanche.sim.topology import Topology, load_topology
 
 STREAM_NAMES = (
@@ -127,12 +127,13 @@ class MountainSim:
         # 5. Move the skiers that finish an edge to the destination node.
         arrive_at_nodes(pop, self.topology)
         # 6. Select the next edge for each skier at a node.
-        #    This step also applies the closures of the step 7.
+        # 7. Apply the closures and the capacity limits.
+        #    The step 6 applies both limits, because it chooses the edge.
         select_next_edges(
             pop, self.topology, self.routes, self.state, self.streams["choice"]
         )
-        # 7. Apply the ability limits and the capacity limits. Stage 3 adds these.
-        # 8. Calculate the density, the speeds, and the hazards. Stage 4 adds this.
+        # 8. Calculate the occupancy and the speeds. Stage 4 adds the hazards.
+        update_congestion(pop, self.topology, self.state)
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
         accumulate_times(pop, self.tick_seconds)
         # 10. Write the material events to the trace buffer. Stage 5 adds this.
@@ -147,18 +148,14 @@ class MountainSim:
         """
         assert self.topology is not None, "call the reset before the observation"
         pop = self.population
-        edge_count = self.topology.edge_count
-        on_edge = np.isin(pop.location_kind, (LocationKind.PISTE, LocationKind.LIFT))
-        queued = pop.location_index[pop.location_kind == LocationKind.QUEUE]
         return {
             "simulation_time": self.simulation_time,
             "step": self.step,
             "skier_count": len(pop),
-            "edge_occupancy": np.bincount(
-                pop.location_index[on_edge], minlength=edge_count
-            ).tolist(),
-            "edge_queue_length": np.bincount(queued, minlength=edge_count).tolist(),
-            "edge_closed": list(self.state.closed),
+            "edge_occupancy": self.state.occupancy.tolist(),
+            "edge_queue_length": self.state.queue_length.tolist(),
+            "edge_speed_factor": self.state.speed_factor.tolist(),
+            "edge_closed": self.state.closed.tolist(),
         }
 
     def metadata(self, seed: int) -> dict[str, Any]:
@@ -184,8 +181,10 @@ class MountainSim:
         """
         digest = hashlib.blake2b(digest_size=16)
         state_fields = (
-            ("closed", np.asarray(self.state.closed, dtype=np.bool_)),
+            ("closed", self.state.closed),
+            ("occupancy", self.state.occupancy),
             ("queue_length", self.state.queue_length),
+            ("speed_factor", self.state.speed_factor),
         )
         digest.update(np.float64(self.simulation_time).tobytes())
         for name, array in (*self.population.checksum_fields(), *state_fields):

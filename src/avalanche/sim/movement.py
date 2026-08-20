@@ -1,8 +1,8 @@
 """Move the skiers through one movement tick.
 
-The functions are the step 1 and the steps 3 to 6 of the movement tick.
+The functions are the step 1 and the steps 3 to 8 of the movement tick.
 They release the arrivals, serve the lift queues, advance the skiers,
-end an edge, and start an edge.
+end an edge, start an edge, and update the congestion.
 Each function selects a group of skiers with a mask and writes that group at once.
 No loop goes over the skiers.
 """
@@ -22,23 +22,37 @@ SECONDS_IN_HOUR = 3600.0
 
 ON_EDGE = (LocationKind.PISTE, LocationKind.LIFT)
 
+# These two values calibrate the congestion of Stage 3.
+# `CONGESTION_SLOPE` sets how fast the speed falls with the load.
+# `MIN_SPEED_FACTOR` keeps a crowded edge in motion, because a skier must not stop dead.
+# They move into the scenario configuration when Stage 4 must vary them.
+CONGESTION_SLOPE = 0.8
+MIN_SPEED_FACTOR = 0.2
+
 
 @dataclass
 class DynamicState:
     """The dynamic edge state of Stage 3.
 
+    Each field is an array over the edges, so a step reads it without a copy.
     `closed` holds the closed flag of each edge.
+    `occupancy` holds the count of skiers on each edge.
     `queue_length` holds the count of waiting skiers of each edge.
+    `speed_factor` scales the advance of a skier on each edge.
     `advice_edge[node, ability]` is the edge that the advice offers at one node.
     It is `NO_EDGE` when the advice offers no edge.
     Stage 3 has no controller, so a test sets the advice today.
     The adjudicator writes the advice in Stage 6.
-    A later stage adds the closure logic and the other dynamic edge fields.
+    A later stage adds the closure logic and the hazard fields.
     """
 
-    closed: list[bool] = field(default_factory=list)
+    closed: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.bool_))
+    occupancy: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     queue_length: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    speed_factor: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
     )
     advice_edge: np.ndarray = field(
         default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.int32)
@@ -48,11 +62,14 @@ class DynamicState:
 def new_dynamic_state(topology: Topology) -> DynamicState:
     """Return the open dynamic state of one topology, with empty lift queues.
 
+    Each edge is empty, so each edge runs at the full speed.
     The advice table holds `NO_EDGE`, so each skier follows the route table.
     """
     return DynamicState(
-        closed=[False] * topology.edge_count,
+        closed=np.zeros(topology.edge_count, dtype=np.bool_),
+        occupancy=np.zeros(topology.edge_count, dtype=np.int32),
         queue_length=np.zeros(topology.edge_count, dtype=np.int32),
+        speed_factor=np.ones(topology.edge_count, dtype=np.float64),
         advice_edge=np.full(
             (topology.node_count, len(ABILITY_NAMES)), NO_EDGE, dtype=np.int32
         ),
@@ -62,17 +79,30 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
 def open_mask(edges: np.ndarray, state: DynamicState) -> np.ndarray:
     """Return the flag of each edge that exists and that is open."""
     usable = edges != NO_EDGE
-    closed = np.asarray(state.closed, dtype=np.bool_)
-    usable[usable] = ~closed[edges[usable]]
+    usable[usable] = ~state.closed[edges[usable]]
     return usable
 
 
-def count_queues(pop: SkierArrays, state: DynamicState) -> None:
-    """Count the waiting skiers of each edge again."""
+def update_congestion(
+    pop: SkierArrays, topology: Topology, state: DynamicState
+) -> None:
+    """Count the load of each edge again and set the effective speed.
+
+    This is the step 8 of the movement tick.
+    The count covers the skiers on an edge and the skiers in a lift queue.
+    The speed falls as the occupancy comes near to the safe capacity.
+    The floor stays above zero, so a crowded edge stays in motion.
+    """
+    edge_count = topology.edge_count
+    on_edge = pop.location_index[np.isin(pop.location_kind, ON_EDGE)]
     queued = pop.location_index[pop.location_kind == LocationKind.QUEUE]
-    state.queue_length = np.bincount(queued, minlength=state.queue_length.size).astype(
-        np.int32
-    )
+    state.occupancy = np.bincount(on_edge, minlength=edge_count).astype(np.int32)
+    state.queue_length = np.bincount(queued, minlength=edge_count).astype(np.int32)
+
+    load = state.occupancy / np.maximum(topology.edge_safe_capacity, 1.0)
+    state.speed_factor = np.clip(
+        1.0 - CONGESTION_SLOPE * load, MIN_SPEED_FACTOR, 1.0
+    ).astype(np.float64)
 
 
 def start_arrivals(
@@ -117,7 +147,6 @@ def serve_lift_queues(
     pop.location_kind[served] = LocationKind.LIFT
     pop.progress[served] = 0.0
     pop.queue_ticket[served] = -1
-    count_queues(pop, state)
 
 
 def advance_on_edges(
@@ -129,16 +158,17 @@ def advance_on_edges(
     """Advance each skier on a piste edge and on a lift edge.
 
     The advance is the tick length divided by the nominal travel time of the edge.
+    The speed factor of the edge scales that advance, so a crowded edge is slow.
     The progress stops at 1.0.
     An edge with a travel time of zero takes the skier to 1.0 in one tick.
-    Stage 4 reads the effective speed of `state` here.
     """
     moving = np.flatnonzero(np.isin(pop.location_kind, ON_EDGE))
-    travel_time = topology.edge_nominal_travel_time[pop.location_index[moving]].astype(
-        np.float64
-    )
+    edges = pop.location_index[moving]
+    travel_time = topology.edge_nominal_travel_time[edges].astype(np.float64)
     positive = travel_time > 0.0
-    step = tick_seconds / np.where(positive, travel_time, 1.0)
+    step = (
+        tick_seconds * state.speed_factor[edges] / np.where(positive, travel_time, 1.0)
+    )
     pop.progress[moving] = np.minimum(
         1.0, np.where(positive, pop.progress[moving] + step, 1.0)
     )
@@ -174,6 +204,12 @@ def select_next_edges(
     A closed advised edge falls back to the route table edge.
     A closed route table edge makes the skier wait at the node.
     A skier that takes a lift edge joins the queue of that lift.
+
+    The step 7 of the tick then applies the capacity limit of a piste edge.
+    A piste edge at its safe capacity accepts no new skier.
+    The refused skiers wait at the node and try again in the next tick.
+    The skier index gives the order of the admission, so the run is deterministic.
+    A lift edge takes no limit, because the queue and the throughput bound it.
     """
     at_node = np.flatnonzero(pop.location_kind == LocationKind.NODE)
     arrived = pop.location_index[at_node] == pop.destination[at_node]
@@ -196,10 +232,22 @@ def select_next_edges(
     open_edge = open_mask(next_edge, state)
     starters = travelling[open_edge]
     taken = next_edge[open_edge]
+    lift = topology.edge_type[taken] == LIFT_EDGE
+
+    # The occupancy is the count at the end of the last tick.
+    # No skier joined an edge since that count, so the limit stays safe.
+    room = topology.edge_safe_capacity.astype(np.int32) - state.occupancy
+    on_piste = np.flatnonzero(~lift)
+    members, rank = group_rank(taken[on_piste], starters[on_piste])
+    admitted = members[rank < room[taken[on_piste][members]]]
+    enters = lift.copy()
+    enters[on_piste[admitted]] = True
+    starters = starters[enters]
+    taken = taken[enters]
+    lift = lift[enters]
 
     pop.location_index[starters] = taken
     pop.progress[starters] = 0.0
-    lift = topology.edge_type[taken] == LIFT_EDGE
     pop.location_kind[starters] = np.where(lift, LocationKind.QUEUE, LocationKind.PISTE)
 
     # The joiners take the tickets in the ascending skier order, so the run is
@@ -207,7 +255,6 @@ def select_next_edges(
     joiners = starters[lift]
     pop.queue_ticket[joiners] = pop.next_ticket + np.arange(joiners.size)
     pop.next_ticket += int(joiners.size)
-    count_queues(pop, state)
 
 
 def accumulate_times(pop: SkierArrays, tick_seconds: float) -> None:
