@@ -73,6 +73,7 @@ The approval panel pauses an escalated action for a manual response.
 Automatic runs use a deterministic simulated response.
 The default skier markers read a recorded replay file.
 The live control starts an isolated simulator process.
+The live controls pause, resume, step, and change the simulation speed.
 The API streams complete skier frames and live conditions with MessagePack.
 A Web Worker decodes the frames and interpolates the positions.
 The scene writes the positions directly into the instance buffer.
