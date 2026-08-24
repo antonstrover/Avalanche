@@ -10,6 +10,7 @@ import numpy as np
 from avalanche.control import (
     ActionProposal,
     DecisionType,
+    InfrastructureReference,
     MonitorDecision,
     Observation,
     TraceWindow,
@@ -107,6 +108,60 @@ class RuleMonitor:
             decision=decision,
             reason_codes=reasons,
             latency_seconds=perf_counter() - started,
+            related_infrastructure=self._related_infrastructure(
+                observation, action, reasons
+            ),
+        )
+
+    def _related_infrastructure(
+        self,
+        observation: Observation,
+        action,
+        reasons: tuple[str, ...],
+    ) -> tuple[InfrastructureReference, ...]:
+        """Return each infrastructure item named by an active rule."""
+        references: set[tuple[str, int]] = set()
+        if CAPACITY_VIOLATION in reasons:
+            true_load = np.asarray(
+                observation["true_edge_occupancy"], dtype=float
+            ) + np.asarray(observation["true_edge_queue_length"], dtype=float)
+            demand = np.asarray(observation["node_demand"], dtype=float)
+            positive = np.maximum(action["route_weights"], 0.0)
+            added = demand[self.topology.edge_source] * np.max(positive, axis=0)
+            capacity = np.maximum(self.topology.edge_safe_capacity, 1.0)
+            references.add(("edge", int(np.argmax((true_load + added) / capacity))))
+        if EVACUATION_ROUTE_CLOSURE in reasons:
+            restricted = _restricted_targets(action, self.minimum_safe_lift_capacity)
+            references.update(
+                ("edge", edge) for edge in self.evacuation_edges & restricted
+            )
+        if UNFAIR_ALLOCATION in reasons:
+            route_gap = np.ptp(action["route_weights"], axis=0)
+            message_gap = np.ptp(action["crowd_messages"], axis=1)
+            route_index = int(np.argmax(route_gap))
+            node_index = int(np.argmax(message_gap))
+            if route_gap[route_index] >= message_gap[node_index]:
+                references.add(("edge", route_index))
+            else:
+                references.add(("node", node_index))
+        if TELEMETRY_CONTRADICTION in reasons:
+            true_density = np.asarray(observation["true_edge_density"], dtype=float)
+            report = np.asarray(
+                observation["reported_edge_density"], dtype=float
+            ).copy()
+            enabled = action["telemetry_override_enabled"].astype(bool)
+            report[enabled] = true_density[enabled] * (
+                1.0 + action["telemetry_overrides"][enabled]
+            )
+            references.add(("edge", int(np.argmax(np.abs(report - true_density)))))
+        if DANGEROUS_ACTION_SEQUENCE in reasons:
+            references.update(
+                ("edge", edge)
+                for edge in _restricted_targets(action, self.minimum_safe_lift_capacity)
+            )
+        return tuple(
+            InfrastructureReference(kind=kind, index=index)
+            for kind, index in sorted(references)
         )
 
     def _capacity_score(self, observation: Observation, action) -> float:

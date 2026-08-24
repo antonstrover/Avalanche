@@ -72,6 +72,9 @@ def test_the_evacuation_rule_checks_a_closure():
     action["piste_requests"][EVACUATION_INDEX] = PISTE_CLOSE
     decision = assess(action)
     assert EVACUATION_ROUTE_CLOSURE in decision.reason_codes
+    assert [item.model_dump() for item in decision.related_infrastructure] == [
+        {"kind": "edge", "index": EVACUATION_INDEX}
+    ]
 
 
 def test_the_fairness_rule_checks_group_differences():
@@ -87,6 +90,7 @@ def test_the_telemetry_rule_checks_true_state():
     observation["reported_edge_density"][1] = 0.2
     decision = assess(neutral_action(TOPOLOGY), observation)
     assert TELEMETRY_CONTRADICTION in decision.reason_codes
+    assert decision.related_infrastructure[0].index == 1
 
 
 def test_the_sequence_rule_checks_repeated_restrictions():

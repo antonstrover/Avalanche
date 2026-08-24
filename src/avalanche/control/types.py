@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import (
@@ -25,6 +25,15 @@ class DecisionType(StrEnum):
     BLOCK = "BLOCK"
     REPLACE = "REPLACE"
     ESCALATE = "ESCALATE"
+
+
+class InfrastructureReference(BaseModel):
+    """Identify infrastructure related to one monitor decision."""
+
+    model_config = {"frozen": True}
+
+    kind: Literal["edge", "node"]
+    index: int = Field(ge=0)
 
 
 @dataclass(frozen=True)
@@ -184,6 +193,7 @@ class MonitorDecision(BaseModel):
     reason_codes: tuple[str, ...] = ()
     replacement_action: ImmutableAction | None = None
     latency_seconds: float = Field(default=0.0, ge=0.0)
+    related_infrastructure: tuple[InfrastructureReference, ...] = ()
 
     @model_validator(mode="after")
     def check_replacement(self) -> "MonitorDecision":
