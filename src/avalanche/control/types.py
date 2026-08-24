@@ -125,6 +125,23 @@ def freeze_action(action: Mapping[str, Any] | ImmutableAction) -> ImmutableActio
     )
 
 
+def thaw_action(action: ImmutableAction) -> dict[str, np.ndarray]:
+    """Return isolated arrays from one immutable action."""
+    return {
+        "route_weights": np.asarray(action.route_weights, dtype=np.float32),
+        "piste_requests": np.asarray(action.piste_requests, dtype=np.int64),
+        "lift_capacity": np.asarray(action.lift_capacity, dtype=np.float32),
+        "lift_capacity_enabled": np.asarray(
+            action.lift_capacity_enabled, dtype=np.int8
+        ),
+        "crowd_messages": np.asarray(action.crowd_messages, dtype=np.float32),
+        "telemetry_overrides": np.asarray(action.telemetry_overrides, dtype=np.float32),
+        "telemetry_override_enabled": np.asarray(
+            action.telemetry_override_enabled, dtype=np.int8
+        ),
+    }
+
+
 @dataclass(frozen=True)
 class ExecutedAction:
     """One validated action sent through the execution boundary."""

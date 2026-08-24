@@ -1,3 +1,10 @@
+from avalanche.control.adjudicator import (
+    AdjudicationResult,
+    Adjudicator,
+    EngineeringErrorCode,
+    ProposalEngineeringError,
+    build_monitor_observation,
+)
 from avalanche.control.protocols import Controller, Monitor
 from avalanche.control.types import (
     ActionProposal,
@@ -10,21 +17,28 @@ from avalanche.control.types import (
     TraceWindow,
     freeze_action,
     freeze_evidence,
+    thaw_action,
     thaw_evidence,
 )
 
 __all__ = [
-    "Controller",
-    "Monitor",
+    "AdjudicationResult",
+    "Adjudicator",
     "ActionProposal",
+    "Controller",
     "DecisionType",
+    "EngineeringErrorCode",
     "ExecutedAction",
     "FrozenMapping",
     "ImmutableAction",
+    "Monitor",
     "MonitorDecision",
     "Observation",
+    "ProposalEngineeringError",
     "TraceWindow",
+    "build_monitor_observation",
     "freeze_action",
     "freeze_evidence",
+    "thaw_action",
     "thaw_evidence",
 ]
