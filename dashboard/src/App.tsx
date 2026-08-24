@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import {
     commandLiveSession,
     createLiveSession,
+    fetchConfigOptions,
     fetchHealth,
+    type ConfigOptionsResponse,
     type HealthResponse,
     type LiveSession,
 } from "./api/client";
@@ -12,10 +14,13 @@ import { resort, resortName } from "./mountain/resort";
 import { mergeTimeline } from "./features/timeline";
 import { DecisionInspector } from "./features/live/DecisionInspector";
 import { ApprovalPanel } from "./features/live/ApprovalPanel";
+import { SessionSetup } from "./features/live/SessionSetup";
 import type { DisplayState } from "./workers/live-frame";
 
 function App() {
     const [health, setHealth] = useState<HealthResponse | null>(null);
+    const [configOptions, setConfigOptions] = useState<ConfigOptionsResponse | null>(null);
+    const [configFailed, setConfigFailed] = useState(false);
     const [session, setSession] = useState<LiveSession | null>(null);
     const [liveStatus, setLiveStatus] = useState("idle");
     const [liveCount, setLiveCount] = useState(0);
@@ -25,6 +30,7 @@ function App() {
 
     useEffect(() => {
         fetchHealth().then(setHealth);
+        fetchConfigOptions().then(setConfigOptions).catch(() => setConfigFailed(true));
     }, []);
 
     const startSession = async (
@@ -83,6 +89,7 @@ function App() {
                 {resortName} · {resort.nodes.length} nodes · {resort.edges.length} edges
             </p>
             <p data-testid="health-status">API status: {health?.status ?? "loading"}</p>
+            <SessionSetup options={configOptions} failed={configFailed} />
             <div className="live-controls">
                 <button
                     type="button"

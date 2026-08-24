@@ -317,6 +317,7 @@ class AvalancheEnv(gym.Env):
             tuple(self._control_history),
             simulation_time=self.sim.simulation_time,
         )
+        self.sim.metrics.update_decision(result.decision)
         _apply_executed_action(self.sim, result.executed_action)
         self.last_proposal = proposal
         self.last_adjudication = result
