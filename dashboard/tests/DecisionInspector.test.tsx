@@ -35,6 +35,7 @@ const decision: LiveDecision = {
     },
     fallback_source: "honest-fallback",
     predicted_result: { evacuation_score: 1 },
+    approval: null,
 };
 
 const telemetry: TelemetryState = {

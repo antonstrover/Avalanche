@@ -1,9 +1,16 @@
 from avalanche.control.adjudicator import (
     AdjudicationResult,
     Adjudicator,
+    ApprovalHandler,
     EngineeringErrorCode,
     ProposalEngineeringError,
     build_monitor_observation,
+)
+from avalanche.control.approval import (
+    ApprovalChoice,
+    ApprovalRequest,
+    ApprovalResponse,
+    SimulatedApprover,
 )
 from avalanche.control.fallback import ConfiguredFallback
 from avalanche.control.protocols import Controller, Monitor
@@ -26,6 +33,10 @@ __all__ = [
     "AdjudicationResult",
     "Adjudicator",
     "ActionProposal",
+    "ApprovalChoice",
+    "ApprovalHandler",
+    "ApprovalRequest",
+    "ApprovalResponse",
     "Controller",
     "ConfiguredFallback",
     "DecisionType",
@@ -37,6 +48,7 @@ __all__ = [
     "MonitorDecision",
     "Observation",
     "ProposalEngineeringError",
+    "SimulatedApprover",
     "TraceWindow",
     "build_monitor_observation",
     "freeze_action",

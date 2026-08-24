@@ -1,5 +1,7 @@
 import base64
 import json
+import queue
+import threading
 from pathlib import Path
 
 import msgpack
@@ -11,6 +13,8 @@ from avalanche.api.sessions import (
     MOUNTAIN_PATH,
     TIMELINE_LIMIT,
     display_state,
+    run_session,
+    topology_version,
 )
 from avalanche.sim import MountainSim, load_topology
 
@@ -172,6 +176,91 @@ def test_monitor_demo_streams_one_blocked_rule():
         assert "EVACUATION_ROUTE_CLOSURE" in decision["reason_codes"]
 
     assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+
+
+def test_an_approval_demo_pauses_and_accepts_the_proposal():
+    response = client.post(
+        "/api/sessions",
+        json={"seed": 7, "skier_count": 20, "demo_approval": True},
+    )
+    session_id = response.json()["session_id"]
+
+    with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
+        pending = msgpack.unpackb(websocket.receive_bytes(), raw=False)
+        approval = pending["payload"]["display"]["decision"]["approval"]
+        assert approval["status"] == "pending"
+        decision_id = approval["decision_id"]
+
+        accepted = client.post(
+            f"/api/sessions/{session_id}/approvals/{decision_id}",
+            json={"choice": "APPROVE"},
+        )
+        assert accepted.status_code == 200
+
+        resolved = msgpack.unpackb(websocket.receive_bytes(), raw=False)
+        decision = resolved["payload"]["display"]["decision"]
+        assert decision["approval"]["status"] == "resolved"
+        assert decision["executed_action"]["controller_id"] == "rule-demo"
+
+        duplicate = client.post(
+            f"/api/sessions/{session_id}/approvals/{decision_id}",
+            json={"choice": "BLOCK"},
+        )
+        assert duplicate.status_code == 409
+
+    assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+
+
+def test_an_invalid_manual_replacement_is_rejected():
+    response = client.post(
+        "/api/sessions",
+        json={"seed": 7, "skier_count": 20, "demo_approval": True},
+    )
+    session_id = response.json()["session_id"]
+    with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
+        pending = msgpack.unpackb(websocket.receive_bytes(), raw=False)
+        decision_id = pending["payload"]["display"]["decision"]["approval"][
+            "decision_id"
+        ]
+        invalid = client.post(
+            f"/api/sessions/{session_id}/approvals/{decision_id}",
+            json={"choice": "REPLACE", "replacement_action": {}},
+        )
+        assert invalid.status_code == 422
+        client.post(
+            f"/api/sessions/{session_id}/approvals/{decision_id}",
+            json={"choice": "BLOCK"},
+        )
+    assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+
+
+def test_an_approval_timeout_uses_the_safe_fallback():
+    output = queue.Queue()
+    approval_input = queue.Queue()
+    stop = threading.Event()
+    stop.set()
+    run_session(
+        "timeout-test",
+        7,
+        20,
+        topology_version(),
+        output,
+        stop,
+        False,
+        False,
+        True,
+        approval_input,
+        0.01,
+    )
+    frames = []
+    while not output.empty():
+        frames.append(msgpack.unpackb(output.get(), raw=False))
+
+    pending = frames[0]["payload"]["display"]["decision"]["approval"]
+    resolved = frames[-1]["payload"]["display"]["decision"]
+    assert pending["status"] == "pending"
+    assert resolved["approval"]["choice"] == "BLOCK"
+    assert resolved["executed_action"]["controller_id"] == "honest-fallback"
 
 
 def test_the_timeline_window_is_bounded_and_has_unique_identities():

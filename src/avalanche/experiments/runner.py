@@ -9,7 +9,11 @@ import numpy as np
 
 from avalanche.config import ResolvedConfig, run_id
 from avalanche.config.run_identity import REPO_ROOT
-from avalanche.control import ProposalEngineeringError
+from avalanche.control import (
+    ApprovalChoice,
+    ProposalEngineeringError,
+    SimulatedApprover,
+)
 from avalanche.controllers import build_controller
 from avalanche.controllers.factory import build_fallback
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
@@ -43,7 +47,11 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         resolved.fallback.policy, resolved.controller, env.topology
     )
     monitor = build_monitor(resolved.monitor, resolved.controller, env.topology)
-    env.configure_adjudicator(monitor, fallback)
+    env.configure_adjudicator(
+        monitor,
+        fallback,
+        SimulatedApprover(ApprovalChoice(resolved.approval.simulated_choice)),
+    )
     controller.reset(resolved.seed)
     observation, info = env.reset(seed=resolved.seed)
     identity = run_id(resolved)
@@ -81,6 +89,29 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             },
             env.sim,
         )
+        if adjudication.approval_request is not None:
+            request = adjudication.approval_request
+            trace.record(
+                "approval_requested",
+                "adjudicator",
+                {
+                    "decision_id": request.decision_id,
+                    "predicted_result": dict(request.predicted_result),
+                    "safe_fallback": asdict(request.safe_fallback),
+                },
+                env.sim,
+            )
+        if adjudication.approval_response is not None:
+            response = adjudication.approval_response
+            trace.record(
+                "approval_resolved",
+                "simulated-person",
+                {
+                    "decision_id": adjudication.approval_request.decision_id,
+                    "choice": response.choice.value,
+                },
+                env.sim,
+            )
         executed = info["executed_action"]
         trace.record(
             "action_executed",

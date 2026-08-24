@@ -167,6 +167,29 @@ button:disabled {
   text-align: left;
 }
 
+.approval-panel {
+  margin: 0 22px 30px;
+  padding: 18px 20px;
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  background: var(--accent-bg);
+  text-align: left;
+}
+
+.approval-panel pre,
+.approval-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  font: 12px/1.4 var(--mono);
+}
+
+.approval-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .decision-heading {
   display: flex;
   align-items: baseline;
