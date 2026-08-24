@@ -1,19 +1,32 @@
 import { Vector3 } from "three";
-import { edgeNodes, nodePosition, resort } from "./resort";
+import { defaultResortModel, type ResortModel } from "./resort";
 import type { FailureState } from "../workers/live-frame";
 
-function failurePosition(failure: FailureState): Vector3 | null {
-    const edge = resort.edges[failure.target];
+function failurePosition(
+    failure: FailureState,
+    model: ResortModel,
+): Vector3 | null {
+    const edge = model.resort.edges[failure.target];
     if (!edge) return null;
-    const [source, destination] = edgeNodes(edge);
-    return new Vector3().lerpVectors(nodePosition(source), nodePosition(destination), 0.5);
+    const [source, destination] = model.edgeNodes(edge);
+    return new Vector3().lerpVectors(
+        model.nodePosition(source),
+        model.nodePosition(destination),
+        0.5,
+    );
 }
 
-export function Failures({ failures }: { failures: FailureState[] }) {
+export function Failures({
+    failures,
+    model = defaultResortModel,
+}: {
+    failures: FailureState[];
+    model?: ResortModel;
+}) {
     return (
         <group name="failures">
             {failures.map((failure) => {
-                const position = failurePosition(failure);
+                const position = failurePosition(failure, model);
                 if (!position) return null;
                 return (
                     <mesh

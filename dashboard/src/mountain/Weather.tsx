@@ -2,7 +2,7 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { BufferAttribute, BufferGeometry, type Points } from "three";
 import { reducedMotion } from "./conditions";
-import { centre, planExtent } from "./resort";
+import { defaultResortModel, type ResortModel } from "./resort";
 import type { WeatherState } from "../workers/live-frame";
 
 const FLAKE_COUNT = 1400;
@@ -15,21 +15,29 @@ function pseudoRandom(index: number): number {
     return value - Math.floor(value);
 }
 
-export function Weather({ weather }: { weather: WeatherState }) {
+export function Weather({
+    weather,
+    model = defaultResortModel,
+}: {
+    weather: WeatherState;
+    model?: ResortModel;
+}) {
     const points = useRef<Points>(null);
 
     const geometry = useMemo(() => {
         const positions = new Float32Array(FLAKE_COUNT * 3);
         for (let index = 0; index < FLAKE_COUNT; index += 1) {
-            positions[index * 3] = centre.x + (pseudoRandom(index) - 0.5) * planExtent;
+            positions[index * 3] =
+                model.centre.x + (pseudoRandom(index) - 0.5) * model.planExtent;
             positions[index * 3 + 1] = pseudoRandom(index + FLAKE_COUNT) * FIELD_HEIGHT;
             positions[index * 3 + 2] =
-                centre.z + (pseudoRandom(index + 2 * FLAKE_COUNT) - 0.5) * planExtent;
+                model.centre.z +
+                (pseudoRandom(index + 2 * FLAKE_COUNT) - 0.5) * model.planExtent;
         }
         const buffer = new BufferGeometry();
         buffer.setAttribute("position", new BufferAttribute(positions, 3));
         return buffer;
-    }, []);
+    }, [model]);
 
     const still = useMemo(() => reducedMotion(), []);
 
@@ -41,7 +49,9 @@ export function Weather({ weather }: { weather: WeatherState }) {
             let height = position.getY(index) - delta * (2 + 3 * weather.snowfall);
             let across = position.getX(index) + delta * weather.wind * 0.4;
             if (height < 0) height += FIELD_HEIGHT;
-            if (across > centre.x + planExtent / 2) across -= planExtent;
+            if (across > model.centre.x + model.planExtent / 2) {
+                across -= model.planExtent;
+            }
             position.setY(index, height);
             position.setX(index, across);
         }

@@ -41,6 +41,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config-options/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Config
+         * @description Return the exact configuration for one live selection.
+         */
+        post: operations["resolve_config_api_config_options_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions": {
         parameters: {
             query?: never;
@@ -135,6 +155,20 @@ export interface components {
          * @enum {string}
          */
         ApprovalChoice: "APPROVE" | "BLOCK" | "REPLACE";
+        /** ApprovalConfig */
+        ApprovalConfig: {
+            /**
+             * Timeout Seconds
+             * @default 30
+             */
+            timeout_seconds: number;
+            /**
+             * Simulated Choice
+             * @default BLOCK
+             * @enum {string}
+             */
+            simulated_choice: "APPROVE" | "BLOCK" | "REPLACE";
+        };
         /**
          * ApprovalResponseRequest
          * @description Validate one response to a pending escalation.
@@ -306,6 +340,42 @@ export interface components {
             /** Control Interval Seconds */
             control_interval_seconds: number;
         };
+        /**
+         * LiveConfigSelection
+         * @description Select each component of one resolved live configuration.
+         */
+        LiveConfigSelection: {
+            /**
+             * Mountain
+             * @default medium-resort
+             */
+            mountain: string;
+            /**
+             * Scenario
+             * @default default
+             */
+            scenario: string;
+            /**
+             * Controller
+             * @default honest
+             */
+            controller: string;
+            /**
+             * Monitor
+             * @default none
+             */
+            monitor: string;
+            /**
+             * Seed
+             * @default 0
+             */
+            seed: number;
+            /**
+             * Skier Count
+             * @default 5000
+             */
+            skier_count: number;
+        };
         /** MonitorConfig */
         MonitorConfig: {
             /**
@@ -446,6 +516,40 @@ export interface components {
              */
             compliance_spread: number;
         };
+        /** ResolvedConfig */
+        ResolvedConfig: {
+            mountain: components["schemas"]["MountainConfig"];
+            population: components["schemas"]["PopulationConfig"];
+            intervals: components["schemas"]["IntervalsConfig"];
+            scenario: components["schemas"]["ScenarioConfig"];
+            controller: components["schemas"]["ControllerConfig"];
+            monitor: components["schemas"]["MonitorConfig"];
+            fallback: components["schemas"]["FallbackConfig"];
+            /**
+             * @default {
+             *       "timeout_seconds": 30,
+             *       "simulated_choice": "BLOCK"
+             *     }
+             */
+            approval: components["schemas"]["ApprovalConfig"];
+            /** Seed */
+            seed: number;
+            /**
+             * Trace Level
+             * @enum {string}
+             */
+            trace_level: "debug" | "decision" | "summary";
+            /**
+             * Episode Duration Seconds
+             * @default 3600
+             */
+            episode_duration_seconds: number;
+            /**
+             * Snapshot Interval Seconds
+             * @default 60
+             */
+            snapshot_interval_seconds: number;
+        };
         /** ScenarioConfig */
         ScenarioConfig: {
             /** Name */
@@ -550,6 +654,7 @@ export interface components {
              * @default false
              */
             demo_approval: boolean;
+            config?: components["schemas"]["ResolvedConfig"] | null;
         };
         /**
          * SessionResponse
@@ -574,6 +679,7 @@ export interface components {
             demo_monitor: boolean;
             /** Demo Approval */
             demo_approval: boolean;
+            resolved_config: components["schemas"]["ResolvedConfig"];
         };
         /** ValidationError */
         ValidationError: {
@@ -781,6 +887,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigOptionsResponse"];
+                };
+            };
+        };
+    };
+    resolve_config_api_config_options_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiveConfigSelection"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedConfig"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

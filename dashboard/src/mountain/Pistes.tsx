@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { pisteCurve } from "./curves";
-import { difficultyColour, pistes } from "./resort";
+import { defaultResortModel, difficultyColour, type ResortModel } from "./resort";
 import type { Selection } from "./selection";
 import { densityColour } from "./telemetryView";
 
@@ -9,14 +9,24 @@ type Props = {
     density: readonly number[];
     selection: Selection;
     onSelect: (selection: Selection) => void;
+    model?: ResortModel;
 };
 
-export function Pistes({ closedEdges, density, selection, onSelect }: Props) {
-    const curves = useMemo(() => pistes.map((item) => pisteCurve(item.edge)), []);
+export function Pistes({
+    closedEdges,
+    density,
+    selection,
+    onSelect,
+    model = defaultResortModel,
+}: Props) {
+    const curves = useMemo(
+        () => model.pistes.map((item) => pisteCurve(item.edge, model)),
+        [model],
+    );
 
     return (
         <group name="pistes">
-            {pistes.map((item, order) => {
+            {model.pistes.map((item, order) => {
                 const selected = selection?.kind === "piste" && selection.index === item.index;
                 const closed = closedEdges.has(item.index);
                 return (

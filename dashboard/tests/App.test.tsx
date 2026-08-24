@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { mergeTimeline } from "../src/features/timeline";
 import type { TimelineEvent } from "../src/workers/live-frame";
+import resort from "../src/mountain/resort.json";
 
 // The scene needs WebGL. The browser test covers it, so this test replaces it.
 vi.mock("../src/mountain/MountainScene", () => ({
@@ -15,15 +16,27 @@ describe("App shell", () => {
             "fetch",
             vi.fn((input: string | URL | Request) => {
                 const url = String(input);
-                const body = url.endsWith("/api/config-options")
-                    ? {
-                          mountains: [{ id: "medium-resort" }],
-                          scenarios: [{ id: "default" }],
-                          controllers: [{ id: "honest" }],
-                          monitors: [{ id: "none" }],
-                      }
-                    : { status: "ok" };
-                return Promise.resolve({ json: () => Promise.resolve(body) });
+                let body: object = { status: "ok" };
+                if (url.endsWith("/api/config-options")) {
+                    body = {
+                        mountains: [
+                            {
+                                id: "medium-resort",
+                                label: "Val Tarin",
+                                topology: resort,
+                            },
+                        ],
+                        scenarios: [{ id: "default", label: "Default" }],
+                        controllers: [{ id: "honest", label: "Honest" }],
+                        monitors: [{ id: "none", label: "None" }],
+                    };
+                } else if (url.endsWith("/api/config-options/resolve")) {
+                    body = { mountain: { name: "val-tarin" }, seed: 0 };
+                }
+                return Promise.resolve({
+                    ok: true,
+                    json: () => Promise.resolve(body),
+                });
             }),
         );
     });
@@ -55,7 +68,9 @@ describe("App shell", () => {
         render(<App />);
 
         await waitFor(() => {
-            expect(screen.getByTestId("session-setup")).toHaveTextContent("Mountains1");
+            expect(screen.getByTestId("resolved-config")).toHaveTextContent(
+                '"name": "val-tarin"',
+            );
         });
         expect(fetch).toHaveBeenCalledWith("/api/config-options");
     });

@@ -1,5 +1,5 @@
 import { Vector3 } from "three";
-import { edgeNodes, nodePosition, resort } from "./resort";
+import { defaultResortModel, type ResortModel } from "./resort";
 import type { Selection } from "./selection";
 import type { HazardState } from "../workers/live-frame";
 
@@ -24,26 +24,36 @@ function Shape({ severity }: { severity: HazardState["severity"] }) {
 }
 
 // A hazard on an edge marks the middle of that edge.
-function hazardPosition(hazard: HazardState): Vector3 {
-    const edge = resort.edges[hazard.edge_index];
+function hazardPosition(hazard: HazardState, model: ResortModel): Vector3 {
+    const edge = model.resort.edges[hazard.edge_index];
     if (!edge) {
         throw new Error(`The hazard ${hazard.event_id} names an unknown edge.`);
     }
-    const [source, destination] = edgeNodes(edge);
-    return new Vector3().lerpVectors(nodePosition(source), nodePosition(destination), 0.5);
+    const [source, destination] = model.edgeNodes(edge);
+    return new Vector3().lerpVectors(
+        model.nodePosition(source),
+        model.nodePosition(destination),
+        0.5,
+    );
 }
 
 type Props = {
     hazards: HazardState[];
     selection: Selection;
     onSelect: (selection: Selection) => void;
+    model?: ResortModel;
 };
 
-export function Hazards({ hazards, selection, onSelect }: Props) {
+export function Hazards({
+    hazards,
+    selection,
+    onSelect,
+    model = defaultResortModel,
+}: Props) {
     return (
         <group name="hazards">
             {hazards.map((hazard, index) => {
-                const position = hazardPosition(hazard);
+                const position = hazardPosition(hazard, model);
                 const selected = selection?.kind === "hazard" && selection.index === index;
                 return (
                     <mesh

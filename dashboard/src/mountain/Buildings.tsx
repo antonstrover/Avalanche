@@ -1,4 +1,4 @@
-import { buildingNodes, nodePosition } from "./resort";
+import { defaultResortModel, type ResortModel } from "./resort";
 import type { Selection } from "./selection";
 
 const OFFSET = 4;
@@ -12,14 +12,15 @@ const colours: Record<string, string> = {
 type Props = {
     selection: Selection;
     onSelect: (selection: Selection) => void;
+    model?: ResortModel;
 };
 
 // A building is a simple box at an entrance, at an exit, or at a lift station.
-export function Buildings({ selection, onSelect }: Props) {
+export function Buildings({ selection, onSelect, model = defaultResortModel }: Props) {
     return (
         <group name="buildings">
-            {buildingNodes.map((item) => {
-                const position = nodePosition(item.node);
+            {model.buildingNodes.map((item) => {
+                const position = model.nodePosition(item.node);
                 const selected = selection?.kind === "building" && selection.index === item.index;
                 const height = item.node.node_type === "lift_station" ? 4 : 3;
                 return (

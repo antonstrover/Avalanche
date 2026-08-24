@@ -1,5 +1,5 @@
 import { CatmullRomCurve3, Vector3 } from "three";
-import { edgeNodes, nodePosition, type Edge } from "./resort";
+import { defaultResortModel, type Edge, type ResortModel } from "./resort";
 
 // The curve of one edge. The scene draws the edge on it.
 // A skier marker also reads its position from it.
@@ -9,10 +9,13 @@ const LIFT_OFF_GROUND = 0.7;
 const PYLON_SPACING = 250;
 
 // A piste is a curve between two nodes. The middle of the curve sags a little.
-export function pisteCurve(edge: Edge): CatmullRomCurve3 {
-    const [source, destination] = edgeNodes(edge);
-    const start = nodePosition(source).setY(nodePosition(source).y + LIFT_OFF_GROUND);
-    const end = nodePosition(destination).setY(nodePosition(destination).y + LIFT_OFF_GROUND);
+export function pisteCurve(
+    edge: Edge,
+    model: ResortModel = defaultResortModel,
+): CatmullRomCurve3 {
+    const [source, destination] = model.edgeNodes(edge);
+    const start = model.nodePosition(source).setY(model.nodePosition(source).y + LIFT_OFF_GROUND);
+    const end = model.nodePosition(destination).setY(model.nodePosition(destination).y + LIFT_OFF_GROUND);
     const middle = new Vector3().lerpVectors(start, end, 0.5);
     middle.y -= SAG;
     return new CatmullRomCurve3([start, middle, end], false, "catmullrom", 0.5);
@@ -27,10 +30,13 @@ export type LiftShape = {
     stations: Vector3[];
 };
 
-export function liftShape(edge: Edge): LiftShape {
-    const [source, destination] = edgeNodes(edge);
-    const start = nodePosition(source);
-    const end = nodePosition(destination);
+export function liftShape(
+    edge: Edge,
+    model: ResortModel = defaultResortModel,
+): LiftShape {
+    const [source, destination] = model.edgeNodes(edge);
+    const start = model.nodePosition(source);
+    const end = model.nodePosition(destination);
 
     // The ground under the lift sags like the terrain. The cable stays above it.
     const ground = (fraction: number) => {

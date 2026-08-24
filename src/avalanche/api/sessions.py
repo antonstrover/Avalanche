@@ -16,7 +16,13 @@ import msgpack
 import numpy as np
 
 from avalanche.config import load_yaml
-from avalanche.config.models import ControllerConfig, MonitorConfig, PopulationConfig
+from avalanche.config.models import (
+    ControllerConfig,
+    MonitorConfig,
+    PopulationConfig,
+    ResolvedConfig,
+)
+from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
     ActionProposal,
     AdjudicationResult,
@@ -373,6 +379,7 @@ def run_session(
     approval_input: Any | None = None,
     approval_timeout: float = 30.0,
     command_input: Any | None = None,
+    resolved_config: ResolvedConfig | None = None,
 ) -> None:
     """Run one simulator inside a child process."""
     try:
@@ -396,6 +403,25 @@ def run_session(
                 ],
             },
         }
+        mountain_path = MOUNTAIN_PATH
+        movement_tick_seconds = 5.0
+        control_interval_seconds = CONTROL_INTERVAL_SECONDS
+        episode_duration_seconds = EPISODE_DURATION_SECONDS
+        if resolved_config is not None:
+            mountain_path = Path(resolved_config.mountain.path)
+            if not mountain_path.is_absolute():
+                mountain_path = REPO_ROOT / mountain_path
+            movement_tick_seconds = resolved_config.intervals.movement_tick_seconds
+            control_interval_seconds = (
+                resolved_config.intervals.control_interval_seconds
+            )
+            episode_duration_seconds = resolved_config.episode_duration_seconds
+            options = {
+                "population": resolved_config.population,
+                "weather": resolved_config.scenario.weather,
+                "hazards": resolved_config.scenario.hazards,
+                "failures": resolved_config.scenario.failures,
+            }
         if demo_failure:
             options["failures"] = {
                 "schedule": [
@@ -409,19 +435,27 @@ def run_session(
                 ]
             }
         env = AvalancheEnv(
-            MOUNTAIN_PATH,
+            mountain_path,
             AvalancheEnvConfig(
-                movement_tick_seconds=5.0,
-                control_interval_seconds=CONTROL_INTERVAL_SECONDS,
-                episode_duration_seconds=EPISODE_DURATION_SECONDS,
+                movement_tick_seconds=movement_tick_seconds,
+                control_interval_seconds=control_interval_seconds,
+                episode_duration_seconds=episode_duration_seconds,
             ),
             simulator_options=options,
         )
         sim = env.sim
-        controller_values = load_yaml(CONTROLLER_PATH)["controller"]
-        controller_config = ControllerConfig.model_validate(controller_values)
+        controller_config = (
+            resolved_config.controller
+            if resolved_config is not None
+            else ControllerConfig.model_validate(
+                load_yaml(CONTROLLER_PATH)["controller"]
+            )
+        )
         controller = build_controller(controller_config, env.topology)
-        fallback = build_fallback("honest", controller_config, env.topology)
+        fallback_policy = (
+            resolved_config.fallback.policy if resolved_config is not None else "honest"
+        )
+        fallback = build_fallback(fallback_policy, controller_config, env.topology)
         monitor_config = (
             MonitorConfig(
                 kind="rules",
@@ -429,7 +463,11 @@ def run_session(
                 unsafe_decision="ESCALATE" if demo_approval else "BLOCK",
             )
             if demo_monitor or demo_approval
-            else MonitorConfig(kind="none")
+            else (
+                resolved_config.monitor
+                if resolved_config is not None
+                else MonitorConfig(kind="none")
+            )
         )
         monitor = build_monitor(monitor_config, controller_config, env.topology)
         sequence = 0
@@ -499,7 +537,7 @@ def run_session(
         def advance_tick() -> None:
             nonlocal proposal, adjudication
             sim.tick()
-            if sim.simulation_time % CONTROL_INTERVAL_SECONDS == 0.0:
+            if sim.simulation_time % control_interval_seconds == 0.0:
                 proposal, adjudication = _control_step(
                     env, controller, demo_monitor or demo_approval
                 )
@@ -634,6 +672,7 @@ class LiveSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
     pump: threading.Thread | None = None
     simulation_speed: float = SIMULATION_SPEED
+    resolved_config: ResolvedConfig | None = None
     command_results: set[str] = field(default_factory=set)
     command_condition: threading.Condition = field(default_factory=threading.Condition)
 
@@ -649,6 +688,7 @@ class LiveSession:
             "demo_failure": self.demo_failure,
             "demo_monitor": self.demo_monitor,
             "demo_approval": self.demo_approval,
+            "resolved_config": self.resolved_config,
         }
 
 
@@ -667,10 +707,16 @@ class SessionManager:
         demo_failure: bool = False,
         demo_monitor: bool = False,
         demo_approval: bool = False,
+        resolved_config: ResolvedConfig | None = None,
     ) -> LiveSession:
         """Create and start one live session."""
         session_id = str(uuid.uuid4())
-        version = topology_version()
+        mountain_path = MOUNTAIN_PATH
+        if resolved_config is not None:
+            mountain_path = Path(resolved_config.mountain.path)
+            if not mountain_path.is_absolute():
+                mountain_path = REPO_ROOT / mountain_path
+        version = topology_version(mountain_path)
         output = self.context.Queue(maxsize=4)
         approval_input = self.context.Queue(maxsize=4)
         command_input = self.context.Queue(maxsize=16)
@@ -690,6 +736,7 @@ class SessionManager:
                 approval_input,
                 30.0,
                 command_input,
+                resolved_config,
             ),
             daemon=True,
         )
@@ -706,6 +753,7 @@ class SessionManager:
             demo_approval=demo_approval,
             approval_input=approval_input,
             command_input=command_input,
+            resolved_config=resolved_config,
         )
         with self.lock:
             self.sessions[session_id] = session
