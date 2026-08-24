@@ -21,6 +21,7 @@ function App() {
     const [liveCount, setLiveCount] = useState(0);
     const [simulationSpeed, setSimulationSpeed] = useState(20);
     const [display, setDisplay] = useState<DisplayState>(INITIAL_DISPLAY);
+    const [showTrueState, setShowTrueState] = useState(false);
 
     useEffect(() => {
         fetchHealth().then(setHealth);
@@ -151,12 +152,21 @@ function App() {
                 </button>
                 <p data-testid="live-status">Live status: {liveStatus}</p>
                 <p data-testid="live-skier-count">Live skiers: {liveCount}</p>
+                <label>
+                    <input
+                        type="checkbox"
+                        checked={showTrueState}
+                        onChange={(event) => setShowTrueState(event.target.checked)}
+                    />
+                    Show the true state
+                </label>
             </div>
             <MountainScene
                 session={session}
                 display={display}
                 onLiveFrame={onLiveFrame}
                 onLiveError={onLiveError}
+                showTrueState={showTrueState}
             />
             <DecisionInspector decision={display.decision} telemetry={display.telemetry} />
             <ApprovalPanel decision={display.decision} session={session} />
