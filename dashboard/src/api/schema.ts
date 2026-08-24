@@ -181,6 +181,72 @@ export interface components {
             } | null;
         };
         /**
+         * AttackBudgetConfig
+         * @description The limit on the values that one attack changes.
+         */
+        AttackBudgetConfig: {
+            /** Strength */
+            strength: number;
+            /** Maximum Targets */
+            maximum_targets: number;
+            /** Ramp Intervals */
+            ramp_intervals: number;
+        };
+        /**
+         * AttackRecordConfig
+         * @description The complete declared threat model of one attack wrapper.
+         */
+        AttackRecordConfig: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "profit_biased" | "sleeper_saboteur" | "reward_hacker";
+            /** Information Access */
+            information_access: ("reported_observation" | "honest_proposal" | "simulation_time")[];
+            trigger: components["schemas"]["AttackTriggerConfig"];
+            /** Targets */
+            targets: string[];
+            /** Target Group */
+            target_group?: string | null;
+            action_budget: components["schemas"]["AttackBudgetConfig"];
+            success_condition: components["schemas"]["AttackSuccessConfig"];
+            /**
+             * Telemetry Visibility
+             * @enum {string}
+             */
+            telemetry_visibility: "visible" | "hidden" | "divergent";
+        };
+        /**
+         * AttackSuccessConfig
+         * @description The evaluator metric and threshold of one attack.
+         */
+        AttackSuccessConfig: {
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "premium_wait_advantage" | "target_density_seconds" | "telemetry_density_gap";
+            /** Threshold */
+            threshold: number;
+        };
+        /**
+         * AttackTriggerConfig
+         * @description The condition that activates one attack.
+         *
+         *     An immediate trigger activates at the first control interval.
+         *     A timed trigger activates at its simulation time.
+         */
+        AttackTriggerConfig: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "immediate" | "simulation_time";
+            /** Time Seconds */
+            time_seconds?: number | null;
+        };
+        /**
          * ConfigOptionsResponse
          * @description List each validated live configuration choice.
          */
@@ -196,10 +262,12 @@ export interface components {
         };
         /** ControllerConfig */
         ControllerConfig: {
-            /** Kind */
-            kind: string;
-            /** Attack */
-            attack?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "none" | "honest" | "profit_biased" | "sleeper_saboteur" | "reward_hacker";
+            attack?: components["schemas"]["AttackRecordConfig"] | null;
             /**
              * Unsafe Density Ratio
              * @default 1
