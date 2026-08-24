@@ -1,0 +1,1596 @@
+# The medium resort fixture.
+# Val-Tarin is a two-valley resort. Le Praz is the west village. Bonneval is the east base.
+# Plan Bois is the mid mountain. The Crête links the two valleys. The Combe Noire is the bowl.
+# The lifts go up the mountain. The pistes go down the mountain.
+# The lift throughput is a count of skiers in each hour.
+# The elevation and the length are in metres. The travel time is in seconds.
+
+name: val-tarin
+
+nodes:
+  # The entrances. Each entrance starts a mix of skier groups.
+
+  - node_id: praz_village
+    node_type: entrance
+    x: 140.0
+    y: 150.0
+    elevation: 1165.0
+    capacity: 900
+
+  - node_id: praz_carpark
+    node_type: entrance
+    x: 60.0
+    y: 330.0
+    elevation: 1170.0
+    capacity: 700
+
+  - node_id: bonneval_village
+    node_type: entrance
+    x: 2740.0
+    y: 210.0
+    elevation: 1220.0
+    capacity: 600
+
+  - node_id: plan_bois_arrival
+    node_type: entrance
+    x: 1180.0
+    y: 690.0
+    elevation: 1655.0
+    capacity: 300
+
+  # The exits. Each exit must stay reachable from the whole mountain.
+
+  - node_id: praz_exit
+    node_type: exit
+    x: 200.0
+    y: 60.0
+    elevation: 1150.0
+    capacity: 900
+
+  - node_id: bonneval_exit
+    node_type: exit
+    x: 2680.0
+    y: 100.0
+    elevation: 1200.0
+    capacity: 600
+
+  # The lift stations.
+
+  - node_id: praz_plaza
+    node_type: lift_station
+    x: 300.0
+    y: 210.0
+    elevation: 1160.0
+    capacity: 700
+
+  - node_id: plan_bois
+    node_type: lift_station
+    x: 1250.0
+    y: 760.0
+    elevation: 1650.0
+    capacity: 500
+
+  - node_id: melezes_base
+    node_type: lift_station
+    x: 620.0
+    y: 380.0
+    elevation: 1145.0
+    capacity: 450
+
+  - node_id: plan_ouest
+    node_type: lift_station
+    x: 1050.0
+    y: 880.0
+    elevation: 1620.0
+    capacity: 350
+
+  - node_id: marmottons_base
+    node_type: lift_station
+    x: 260.0
+    y: 300.0
+    elevation: 1155.0
+    capacity: 250
+
+  - node_id: marmottons_top
+    node_type: lift_station
+    x: 380.0
+    y: 380.0
+    elevation: 1215.0
+    capacity: 200
+
+  - node_id: bonneval_plaza
+    node_type: lift_station
+    x: 2600.0
+    y: 300.0
+    elevation: 1210.0
+    capacity: 550
+
+  - node_id: col_bonneval
+    node_type: lift_station
+    x: 2260.0
+    y: 820.0
+    elevation: 1680.0
+    capacity: 400
+
+  - node_id: crete_east
+    node_type: lift_station
+    x: 2020.0
+    y: 1300.0
+    elevation: 1900.0
+    capacity: 350
+
+  - node_id: crete_west
+    node_type: lift_station
+    x: 1500.0
+    y: 1320.0
+    elevation: 1900.0
+    capacity: 350
+
+  - node_id: roc_blanc
+    node_type: lift_station
+    x: 1620.0
+    y: 1620.0
+    elevation: 2050.0
+    capacity: 200
+
+  - node_id: combe_shoulder
+    node_type: lift_station
+    x: 2200.0
+    y: 1240.0
+    elevation: 1860.0
+    capacity: 220
+
+  - node_id: combe_top
+    node_type: lift_station
+    x: 2120.0
+    y: 1720.0
+    elevation: 2320.0
+    capacity: 180
+
+  # The safe zones.
+
+  - node_id: plan_bois_refuge
+    node_type: safe_zone
+    x: 1380.0
+    y: 800.0
+    elevation: 1640.0
+    capacity: 300
+
+  - node_id: crete_shelter
+    node_type: safe_zone
+    x: 1760.0
+    y: 1360.0
+    elevation: 1870.0
+    capacity: 180
+
+  - node_id: bonneval_hut
+    node_type: safe_zone
+    x: 2420.0
+    y: 700.0
+    elevation: 1560.0
+    capacity: 200
+
+  - node_id: combe_patrol
+    node_type: safe_zone
+    x: 2240.0
+    y: 1600.0
+    elevation: 2100.0
+    capacity: 120
+
+  # The junctions of the Le Praz valley.
+
+  - node_id: praz_home_end
+    node_type: junction
+    x: 240.0
+    y: 120.0
+    elevation: 1160.0
+    capacity: 400
+
+  - node_id: praz_meadow_end
+    node_type: junction
+    x: 400.0
+    y: 160.0
+    elevation: 1165.0
+    capacity: 400
+
+  - node_id: nursery_meadow
+    node_type: junction
+    x: 340.0
+    y: 260.0
+    elevation: 1180.0
+    capacity: 250
+
+  - node_id: praz_valley_link
+    node_type: junction
+    x: 460.0
+    y: 380.0
+    elevation: 1250.0
+    capacity: 340
+
+  - node_id: praz_lower
+    node_type: junction
+    x: 520.0
+    y: 300.0
+    elevation: 1230.0
+    capacity: 350
+
+  - node_id: praz_forest
+    node_type: junction
+    x: 560.0
+    y: 480.0
+    elevation: 1320.0
+    capacity: 280
+
+  - node_id: praz_ravine_lower
+    node_type: junction
+    x: 700.0
+    y: 440.0
+    elevation: 1300.0
+    capacity: 260
+
+  - node_id: praz_mid_split
+    node_type: junction
+    x: 760.0
+    y: 520.0
+    elevation: 1380.0
+    capacity: 300
+
+  - node_id: praz_ravine_upper
+    node_type: junction
+    x: 900.0
+    y: 620.0
+    elevation: 1480.0
+    capacity: 260
+
+  - node_id: melezes_lower
+    node_type: junction
+    x: 700.0
+    y: 560.0
+    elevation: 1280.0
+    capacity: 320
+
+  - node_id: melezes_meadow
+    node_type: junction
+    x: 800.0
+    y: 640.0
+    elevation: 1360.0
+    capacity: 300
+
+  - node_id: melezes_mid
+    node_type: junction
+    x: 860.0
+    y: 700.0
+    elevation: 1440.0
+    capacity: 320
+
+  - node_id: melezes_upper
+    node_type: junction
+    x: 980.0
+    y: 800.0
+    elevation: 1540.0
+    capacity: 300
+
+  # The junctions of Plan Bois.
+
+  - node_id: plan_ouest_split
+    node_type: junction
+    x: 1120.0
+    y: 840.0
+    elevation: 1560.0
+    capacity: 300
+
+  - node_id: plan_bois_split
+    node_type: junction
+    x: 1320.0
+    y: 700.0
+    elevation: 1600.0
+    capacity: 320
+
+  - node_id: plan_bois_east
+    node_type: junction
+    x: 1420.0
+    y: 740.0
+    elevation: 1660.0
+    capacity: 300
+
+  - node_id: plan_traverse
+    node_type: junction
+    x: 1520.0
+    y: 820.0
+    elevation: 1580.0
+    capacity: 280
+
+  - node_id: plan_bois_north
+    node_type: junction
+    x: 1300.0
+    y: 900.0
+    elevation: 1700.0
+    capacity: 300
+
+  # The junctions of the Crête and the Roc Blanc.
+
+  - node_id: crete_west_shoulder
+    node_type: junction
+    x: 1440.0
+    y: 1240.0
+    elevation: 1840.0
+    capacity: 260
+
+  - node_id: roc_blanc_bowl
+    node_type: junction
+    x: 1400.0
+    y: 1400.0
+    elevation: 1860.0
+    capacity: 200
+
+  - node_id: roc_blanc_face
+    node_type: junction
+    x: 1560.0
+    y: 1500.0
+    elevation: 1960.0
+    capacity: 180
+
+  - node_id: crete_mid
+    node_type: junction
+    x: 1660.0
+    y: 1330.0
+    elevation: 1880.0
+    capacity: 260
+
+  - node_id: crete_traverse
+    node_type: junction
+    x: 1840.0
+    y: 1240.0
+    elevation: 1800.0
+    capacity: 260
+
+  - node_id: crete_bowl_link
+    node_type: junction
+    x: 1980.0
+    y: 1180.0
+    elevation: 1780.0
+    capacity: 260
+
+  - node_id: crete_east_shoulder
+    node_type: junction
+    x: 2080.0
+    y: 1200.0
+    elevation: 1840.0
+    capacity: 260
+
+  - node_id: east_link
+    node_type: junction
+    x: 1900.0
+    y: 900.0
+    elevation: 1600.0
+    capacity: 280
+
+  # The junctions of the Combe Noire.
+  # The bowl drains through one traverse. This is the single point of failure.
+
+  - node_id: combe_upper
+    node_type: junction
+    x: 2200.0
+    y: 1660.0
+    elevation: 2180.0
+    capacity: 140
+
+  - node_id: combe_gully
+    node_type: junction
+    x: 2260.0
+    y: 1560.0
+    elevation: 2040.0
+    capacity: 140
+
+  - node_id: combe_lower
+    node_type: junction
+    x: 2140.0
+    y: 1420.0
+    elevation: 1980.0
+    capacity: 160
+
+  # The junctions of the Bonneval valley.
+
+  - node_id: bonneval_upper
+    node_type: junction
+    x: 2340.0
+    y: 1020.0
+    elevation: 1740.0
+    capacity: 280
+
+  - node_id: col_traverse
+    node_type: junction
+    x: 2160.0
+    y: 760.0
+    elevation: 1620.0
+    capacity: 280
+
+  - node_id: bonneval_mid_split
+    node_type: junction
+    x: 2440.0
+    y: 880.0
+    elevation: 1600.0
+    capacity: 300
+
+  - node_id: bonneval_traverse
+    node_type: junction
+    x: 2280.0
+    y: 700.0
+    elevation: 1500.0
+    capacity: 280
+
+  - node_id: bonneval_forest
+    node_type: junction
+    x: 2500.0
+    y: 620.0
+    elevation: 1420.0
+    capacity: 300
+
+  - node_id: bonneval_lower
+    node_type: junction
+    x: 2560.0
+    y: 440.0
+    elevation: 1300.0
+    capacity: 350
+
+  - node_id: bonneval_home_end
+    node_type: junction
+    x: 2640.0
+    y: 220.0
+    elevation: 1215.0
+    capacity: 400
+
+  - node_id: bonneval_meadow_end
+    node_type: junction
+    x: 2560.0
+    y: 180.0
+    elevation: 1220.0
+    capacity: 380
+
+edges:
+  # The lifts.
+
+  - source: praz_plaza
+    destination: plan_bois
+    name: Télécabine du Praz
+    edge_type: lift
+    difficulty: none
+    length: 1180.0
+    nominal_travel_time: 420.0
+    safe_capacity: 320
+    critical_density: 1.0
+    lift_throughput: 2800
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.35
+    snow_sensitivity: 0.25
+
+  - source: melezes_base
+    destination: plan_ouest
+    name: TSD des Mélèzes
+    edge_type: lift
+    difficulty: none
+    length: 960.0
+    nominal_travel_time: 330.0
+    safe_capacity: 260
+    critical_density: 1.0
+    lift_throughput: 2400
+    wind_sensitivity: 0.75
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.3
+
+  - source: marmottons_base
+    destination: marmottons_top
+    name: Tapis des Marmottons
+    edge_type: lift
+    difficulty: none
+    length: 150.0
+    nominal_travel_time: 110.0
+    safe_capacity: 60
+    critical_density: 1.0
+    lift_throughput: 700
+    wind_sensitivity: 0.2
+    visibility_sensitivity: 0.15
+    snow_sensitivity: 0.2
+
+  - source: bonneval_plaza
+    destination: col_bonneval
+    name: TSF de Bonneval
+    edge_type: lift
+    difficulty: none
+    length: 1080.0
+    nominal_travel_time: 540.0
+    safe_capacity: 240
+    critical_density: 1.0
+    lift_throughput: 1600
+    wind_sensitivity: 0.85
+    visibility_sensitivity: 0.45
+    snow_sensitivity: 0.35
+
+  - source: col_bonneval
+    destination: crete_east
+    name: TSD du Grand Col
+    edge_type: lift
+    difficulty: none
+    length: 620.0
+    nominal_travel_time: 260.0
+    safe_capacity: 200
+    critical_density: 1.0
+    lift_throughput: 2200
+    wind_sensitivity: 0.9
+    visibility_sensitivity: 0.55
+    snow_sensitivity: 0.4
+
+  - source: plan_bois
+    destination: crete_west
+    name: TSF de la Crête
+    edge_type: lift
+    difficulty: none
+    length: 640.0
+    nominal_travel_time: 380.0
+    safe_capacity: 190
+    critical_density: 1.0
+    lift_throughput: 1800
+    wind_sensitivity: 0.85
+    visibility_sensitivity: 0.5
+    snow_sensitivity: 0.4
+
+  - source: crete_west
+    destination: roc_blanc
+    name: TK du Roc Blanc
+    edge_type: lift
+    difficulty: none
+    length: 330.0
+    nominal_travel_time: 240.0
+    safe_capacity: 70
+    critical_density: 1.0
+    lift_throughput: 900
+    wind_sensitivity: 0.95
+    visibility_sensitivity: 0.6
+    snow_sensitivity: 0.5
+
+  - source: combe_shoulder
+    destination: combe_top
+    name: TSF de la Combe Noire
+    edge_type: lift
+    difficulty: none
+    length: 620.0
+    nominal_travel_time: 420.0
+    safe_capacity: 140
+    critical_density: 1.0
+    lift_throughput: 1200
+    wind_sensitivity: 0.95
+    visibility_sensitivity: 0.7
+    snow_sensitivity: 0.6
+
+  # The entrance accesses.
+
+  - source: praz_village
+    destination: praz_plaza
+    name: Accès Village
+    edge_type: piste
+    difficulty: green
+    length: 180.0
+    nominal_travel_time: 120.0
+    safe_capacity: 300
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: praz_carpark
+    destination: praz_plaza
+    name: Accès Parking
+    edge_type: piste
+    difficulty: green
+    length: 280.0
+    nominal_travel_time: 180.0
+    safe_capacity: 240
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: bonneval_village
+    destination: bonneval_plaza
+    name: Accès Bonneval
+    edge_type: piste
+    difficulty: green
+    length: 180.0
+    nominal_travel_time: 120.0
+    safe_capacity: 260
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: plan_bois_arrival
+    destination: plan_bois
+    name: Accès Plan Bois
+    edge_type: piste
+    difficulty: green
+    length: 90.0
+    nominal_travel_time: 60.0
+    safe_capacity: 200
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.2
+    visibility_sensitivity: 0.2
+    snow_sensitivity: 0.2
+
+  # The exit accesses.
+
+  - source: praz_home_end
+    destination: praz_exit
+    name: Sortie du Praz
+    edge_type: piste
+    difficulty: green
+    length: 80.0
+    nominal_travel_time: 60.0
+    safe_capacity: 320
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: praz_meadow_end
+    destination: praz_exit
+    name: Sortie de la Prairie
+    edge_type: piste
+    difficulty: green
+    length: 220.0
+    nominal_travel_time: 130.0
+    safe_capacity: 300
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: bonneval_home_end
+    destination: bonneval_exit
+    name: Sortie de Bonneval
+    edge_type: piste
+    difficulty: green
+    length: 130.0
+    nominal_travel_time: 90.0
+    safe_capacity: 280
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: bonneval_meadow_end
+    destination: bonneval_exit
+    name: Sortie du Pré
+    edge_type: piste
+    difficulty: green
+    length: 150.0
+    nominal_travel_time: 100.0
+    safe_capacity: 260
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  # The returns to the lift plazas.
+  # A skier that finishes a home run must reach the other exit. These edges permit that.
+
+  - source: praz_home_end
+    destination: praz_plaza
+    name: Retour Télécabine
+    edge_type: piste
+    difficulty: green
+    length: 110.0
+    nominal_travel_time: 90.0
+    safe_capacity: 280
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: praz_meadow_end
+    destination: praz_plaza
+    name: Retour Plaza
+    edge_type: piste
+    difficulty: green
+    length: 120.0
+    nominal_travel_time: 95.0
+    safe_capacity: 280
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: bonneval_home_end
+    destination: bonneval_plaza
+    name: Retour Bonneval
+    edge_type: piste
+    difficulty: green
+    length: 90.0
+    nominal_travel_time: 70.0
+    safe_capacity: 260
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: bonneval_meadow_end
+    destination: bonneval_plaza
+    name: Retour Pré
+    edge_type: piste
+    difficulty: green
+    length: 130.0
+    nominal_travel_time: 95.0
+    safe_capacity: 240
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  # The Le Praz base and the beginner area.
+
+  - source: praz_plaza
+    destination: marmottons_base
+    name: Liaison Marmottons
+    edge_type: piste
+    difficulty: green
+    length: 100.0
+    nominal_travel_time: 80.0
+    safe_capacity: 200
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.1
+
+  - source: marmottons_top
+    destination: nursery_meadow
+    name: Piste des Marmottons
+    edge_type: piste
+    difficulty: green
+    length: 140.0
+    nominal_travel_time: 110.0
+    safe_capacity: 180
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.15
+    visibility_sensitivity: 0.15
+    snow_sensitivity: 0.15
+
+  - source: nursery_meadow
+    destination: praz_plaza
+    name: Piste du Village
+    edge_type: piste
+    difficulty: green
+    length: 120.0
+    nominal_travel_time: 90.0
+    safe_capacity: 220
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.1
+    visibility_sensitivity: 0.1
+    snow_sensitivity: 0.15
+
+  - source: praz_plaza
+    destination: melezes_base
+    name: Liaison Mélèzes
+    edge_type: piste
+    difficulty: green
+    length: 380.0
+    nominal_travel_time: 90.0
+    safe_capacity: 240
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.15
+    visibility_sensitivity: 0.15
+    snow_sensitivity: 0.15
+
+  # The direct descent to Le Praz.
+  # The head of the Combe du Praz is the deliberate bottleneck of the mountain.
+
+  - source: plan_bois
+    destination: praz_ravine_upper
+    name: Combe du Praz
+    edge_type: piste
+    difficulty: red
+    length: 420.0
+    nominal_travel_time: 260.0
+    safe_capacity: 90
+    critical_density: 1.1
+    lift_throughput: null
+    wind_sensitivity: 0.45
+    visibility_sensitivity: 0.5
+    snow_sensitivity: 0.4
+
+  - source: praz_ravine_upper
+    destination: praz_ravine_lower
+    name: Combe du Praz Bas
+    edge_type: piste
+    difficulty: red
+    length: 320.0
+    nominal_travel_time: 160.0
+    safe_capacity: 110
+    critical_density: 1.2
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.35
+
+  - source: praz_ravine_lower
+    destination: praz_lower
+    name: Retour du Praz
+    edge_type: piste
+    difficulty: blue
+    length: 240.0
+    nominal_travel_time: 140.0
+    safe_capacity: 180
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.25
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.25
+
+  - source: praz_lower
+    destination: praz_home_end
+    name: Piste du Praz
+    edge_type: piste
+    difficulty: green
+    length: 330.0
+    nominal_travel_time: 190.0
+    safe_capacity: 300
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.15
+    visibility_sensitivity: 0.2
+    snow_sensitivity: 0.2
+
+  # The alternative descent to Le Praz. It is longer, easier, and wider.
+
+  - source: plan_ouest
+    destination: melezes_upper
+    name: Piste des Mélèzes
+    edge_type: piste
+    difficulty: blue
+    length: 180.0
+    nominal_travel_time: 110.0
+    safe_capacity: 230
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.3
+    visibility_sensitivity: 0.35
+    snow_sensitivity: 0.3
+
+  - source: melezes_upper
+    destination: melezes_mid
+    name: Mélèzes Milieu
+    edge_type: piste
+    difficulty: blue
+    length: 200.0
+    nominal_travel_time: 120.0
+    safe_capacity: 230
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.3
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.3
+
+  - source: melezes_mid
+    destination: melezes_lower
+    name: Mélèzes Bas
+    edge_type: piste
+    difficulty: blue
+    length: 260.0
+    nominal_travel_time: 150.0
+    safe_capacity: 240
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.25
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.25
+
+  - source: melezes_lower
+    destination: praz_valley_link
+    name: Liaison de la Vallée
+    edge_type: piste
+    difficulty: green
+    length: 300.0
+    nominal_travel_time: 180.0
+    safe_capacity: 260
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.2
+    visibility_sensitivity: 0.25
+    snow_sensitivity: 0.2
+
+  - source: praz_valley_link
+    destination: praz_meadow_end
+    name: Piste de la Prairie
+    edge_type: piste
+    difficulty: green
+    length: 250.0
+    nominal_travel_time: 150.0
+    safe_capacity: 300
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.15
+    visibility_sensitivity: 0.2
+    snow_sensitivity: 0.2
+
+  # The links across the Le Praz slopes.
+
+  - source: plan_bois_split
+    destination: plan_ouest_split
+    name: Traversée de Plan Bois
+    edge_type: piste
+    difficulty: blue
+    length: 250.0
+    nominal_travel_time: 150.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.3
+
+  - source: plan_ouest_split
+    destination: melezes_upper
+    name: Liaison Mélèzes Haut
+    edge_type: piste
+    difficulty: blue
+    length: 150.0
+    nominal_travel_time: 95.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.3
+    visibility_sensitivity: 0.35
+    snow_sensitivity: 0.3
+
+  - source: plan_ouest
+    destination: plan_ouest_split
+    name: Plan Ouest
+    edge_type: piste
+    difficulty: blue
+    length: 120.0
+    nominal_travel_time: 80.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.3
+    visibility_sensitivity: 0.35
+    snow_sensitivity: 0.3
+
+  - source: melezes_mid
+    destination: praz_mid_split
+    name: Liaison du Praz
+    edge_type: piste
+    difficulty: blue
+    length: 200.0
+    nominal_travel_time: 120.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.25
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.25
+
+  - source: praz_mid_split
+    destination: praz_forest
+    name: Bois du Praz
+    edge_type: piste
+    difficulty: blue
+    length: 220.0
+    nominal_travel_time: 140.0
+    safe_capacity: 190
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.2
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.3
+
+  - source: praz_forest
+    destination: praz_lower
+    name: La Forêt
+    edge_type: piste
+    difficulty: blue
+    length: 200.0
+    nominal_travel_time: 130.0
+    safe_capacity: 200
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.15
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.3
+
+  - source: melezes_mid
+    destination: melezes_meadow
+    name: Prairie des Mélèzes
+    edge_type: piste
+    difficulty: green
+    length: 120.0
+    nominal_travel_time: 90.0
+    safe_capacity: 240
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.2
+    visibility_sensitivity: 0.25
+    snow_sensitivity: 0.2
+
+  - source: melezes_meadow
+    destination: melezes_lower
+    name: Prairie Basse
+    edge_type: piste
+    difficulty: green
+    length: 140.0
+    nominal_travel_time: 100.0
+    safe_capacity: 240
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.2
+    visibility_sensitivity: 0.25
+    snow_sensitivity: 0.2
+
+  # The Plan Bois mid mountain.
+
+  - source: plan_bois
+    destination: plan_bois_refuge
+    name: Accès au Refuge
+    edge_type: piste
+    difficulty: green
+    length: 140.0
+    nominal_travel_time: 100.0
+    safe_capacity: 220
+    critical_density: 1.5
+    lift_throughput: null
+    wind_sensitivity: 0.25
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.25
+
+  - source: plan_bois_refuge
+    destination: plan_bois_split
+    name: Piste du Refuge
+    edge_type: piste
+    difficulty: blue
+    length: 130.0
+    nominal_travel_time: 90.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.3
+    visibility_sensitivity: 0.35
+    snow_sensitivity: 0.3
+
+  - source: plan_bois_north
+    destination: plan_bois
+    name: Retour Plan Bois
+    edge_type: piste
+    difficulty: blue
+    length: 160.0
+    nominal_travel_time: 100.0
+    safe_capacity: 220
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.3
+
+  - source: plan_bois_north
+    destination: plan_bois_east
+    name: Plan Bois Est
+    edge_type: piste
+    difficulty: blue
+    length: 200.0
+    nominal_travel_time: 130.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.3
+
+  - source: plan_bois_east
+    destination: plan_traverse
+    name: Traversée Est
+    edge_type: piste
+    difficulty: blue
+    length: 150.0
+    nominal_travel_time: 100.0
+    safe_capacity: 190
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.3
+
+  - source: plan_traverse
+    destination: plan_ouest_split
+    name: Traversée Ouest
+    edge_type: piste
+    difficulty: blue
+    length: 400.0
+    nominal_travel_time: 220.0
+    safe_capacity: 190
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.3
+
+  # The Crête and the Roc Blanc.
+
+  - source: crete_west
+    destination: crete_west_shoulder
+    name: Crête Ouest
+    edge_type: piste
+    difficulty: blue
+    length: 200.0
+    nominal_travel_time: 130.0
+    safe_capacity: 190
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.55
+    visibility_sensitivity: 0.6
+    snow_sensitivity: 0.45
+
+  - source: crete_west_shoulder
+    destination: plan_bois_north
+    name: Descente de la Crête
+    edge_type: piste
+    difficulty: blue
+    length: 380.0
+    nominal_travel_time: 210.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.45
+    visibility_sensitivity: 0.5
+    snow_sensitivity: 0.4
+
+  - source: roc_blanc
+    destination: roc_blanc_face
+    name: Face du Roc Blanc
+    edge_type: piste
+    difficulty: red
+    length: 220.0
+    nominal_travel_time: 120.0
+    safe_capacity: 110
+    critical_density: 1.1
+    lift_throughput: null
+    wind_sensitivity: 0.7
+    visibility_sensitivity: 0.75
+    snow_sensitivity: 0.6
+
+  - source: roc_blanc_face
+    destination: roc_blanc_bowl
+    name: Combe du Roc
+    edge_type: piste
+    difficulty: red
+    length: 240.0
+    nominal_travel_time: 130.0
+    safe_capacity: 120
+    critical_density: 1.2
+    lift_throughput: null
+    wind_sensitivity: 0.6
+    visibility_sensitivity: 0.7
+    snow_sensitivity: 0.55
+
+  - source: roc_blanc_bowl
+    destination: crete_west_shoulder
+    name: Liaison du Roc
+    edge_type: piste
+    difficulty: blue
+    length: 160.0
+    nominal_travel_time: 110.0
+    safe_capacity: 170
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.6
+    snow_sensitivity: 0.45
+
+  - source: roc_blanc
+    destination: crete_mid
+    name: Piste du Roc Blanc
+    edge_type: piste
+    difficulty: blue
+    length: 280.0
+    nominal_travel_time: 170.0
+    safe_capacity: 180
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.6
+    visibility_sensitivity: 0.65
+    snow_sensitivity: 0.5
+
+  - source: crete_west
+    destination: crete_mid
+    name: La Crête
+    edge_type: piste
+    difficulty: blue
+    length: 180.0
+    nominal_travel_time: 120.0
+    safe_capacity: 190
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.55
+    visibility_sensitivity: 0.6
+    snow_sensitivity: 0.45
+
+  - source: crete_mid
+    destination: crete_shelter
+    name: Accès à l'Abri
+    edge_type: piste
+    difficulty: green
+    length: 120.0
+    nominal_travel_time: 90.0
+    safe_capacity: 180
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.55
+    snow_sensitivity: 0.45
+
+  - source: crete_shelter
+    destination: crete_traverse
+    name: Piste de l'Abri
+    edge_type: piste
+    difficulty: blue
+    length: 130.0
+    nominal_travel_time: 90.0
+    safe_capacity: 180
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.55
+    snow_sensitivity: 0.45
+
+  - source: crete_traverse
+    destination: crete_bowl_link
+    name: Liaison de la Combe
+    edge_type: piste
+    difficulty: blue
+    length: 160.0
+    nominal_travel_time: 110.0
+    safe_capacity: 180
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.6
+    snow_sensitivity: 0.45
+
+  - source: crete_bowl_link
+    destination: east_link
+    name: Descente de l'Est
+    edge_type: piste
+    difficulty: red
+    length: 320.0
+    nominal_travel_time: 170.0
+    safe_capacity: 150
+    critical_density: 1.2
+    lift_throughput: null
+    wind_sensitivity: 0.45
+    visibility_sensitivity: 0.5
+    snow_sensitivity: 0.4
+
+  - source: east_link
+    destination: plan_traverse
+    name: Liaison de l'Ouest
+    edge_type: piste
+    difficulty: blue
+    length: 400.0
+    nominal_travel_time: 230.0
+    safe_capacity: 180
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.35
+
+  - source: east_link
+    destination: bonneval_mid_split
+    name: Liaison de Bonneval
+    edge_type: piste
+    difficulty: blue
+    length: 560.0
+    nominal_travel_time: 300.0
+    safe_capacity: 180
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.35
+
+  # The Grand Col and the Bonneval valley.
+
+  - source: crete_east
+    destination: crete_east_shoulder
+    name: Le Grand Col
+    edge_type: piste
+    difficulty: blue
+    length: 180.0
+    nominal_travel_time: 120.0
+    safe_capacity: 190
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.55
+    visibility_sensitivity: 0.6
+    snow_sensitivity: 0.45
+
+  - source: crete_east_shoulder
+    destination: crete_traverse
+    name: Traversée du Grand Col
+    edge_type: piste
+    difficulty: blue
+    length: 260.0
+    nominal_travel_time: 150.0
+    safe_capacity: 180
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.55
+    snow_sensitivity: 0.45
+
+  - source: crete_east_shoulder
+    destination: bonneval_upper
+    name: Descente du Col
+    edge_type: piste
+    difficulty: red
+    length: 320.0
+    nominal_travel_time: 170.0
+    safe_capacity: 140
+    critical_density: 1.2
+    lift_throughput: null
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.55
+    snow_sensitivity: 0.45
+
+  - source: crete_east
+    destination: combe_shoulder
+    name: Accès Combe Noire
+    edge_type: piste
+    difficulty: blue
+    length: 200.0
+    nominal_travel_time: 130.0
+    safe_capacity: 160
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.6
+    visibility_sensitivity: 0.65
+    snow_sensitivity: 0.5
+
+  - source: combe_shoulder
+    destination: bonneval_upper
+    name: L'Épaule
+    edge_type: piste
+    difficulty: blue
+    length: 280.0
+    nominal_travel_time: 160.0
+    safe_capacity: 170
+    critical_density: 1.3
+    lift_throughput: null
+    wind_sensitivity: 0.5
+    visibility_sensitivity: 0.55
+    snow_sensitivity: 0.45
+
+  - source: bonneval_upper
+    destination: bonneval_hut
+    name: Refuge de Bonneval
+    edge_type: piste
+    difficulty: blue
+    length: 340.0
+    nominal_travel_time: 190.0
+    safe_capacity: 190
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.4
+    visibility_sensitivity: 0.45
+    snow_sensitivity: 0.4
+
+  - source: bonneval_hut
+    destination: bonneval_forest
+    name: Forêt de Bonneval
+    edge_type: piste
+    difficulty: blue
+    length: 300.0
+    nominal_travel_time: 170.0
+    safe_capacity: 190
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.25
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.4
+
+  - source: bonneval_upper
+    destination: col_traverse
+    name: Traversée du Col
+    edge_type: piste
+    difficulty: red
+    length: 300.0
+    nominal_travel_time: 160.0
+    safe_capacity: 140
+    critical_density: 1.2
+    lift_throughput: null
+    wind_sensitivity: 0.45
+    visibility_sensitivity: 0.5
+    snow_sensitivity: 0.4
+
+  - source: col_bonneval
+    destination: col_traverse
+    name: Piste du Col
+    edge_type: piste
+    difficulty: blue
+    length: 140.0
+    nominal_travel_time: 100.0
+    safe_capacity: 190
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.45
+    visibility_sensitivity: 0.5
+    snow_sensitivity: 0.4
+
+  - source: col_traverse
+    destination: bonneval_mid_split
+    name: Le Col Bas
+    edge_type: piste
+    difficulty: blue
+    length: 300.0
+    nominal_travel_time: 170.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.35
+    visibility_sensitivity: 0.4
+    snow_sensitivity: 0.35
+
+  - source: bonneval_mid_split
+    destination: bonneval_traverse
+    name: Traversée de Bonneval
+    edge_type: piste
+    difficulty: blue
+    length: 240.0
+    nominal_travel_time: 140.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.3
+    visibility_sensitivity: 0.35
+    snow_sensitivity: 0.35
+
+  - source: bonneval_traverse
+    destination: bonneval_forest
+    name: Bois de Bonneval
+    edge_type: piste
+    difficulty: blue
+    length: 240.0
+    nominal_travel_time: 140.0
+    safe_capacity: 200
+    critical_density: 1.4
+    lift_throughput: null
+    wind_sensitivity: 0.25
+    visibility_sensitivity: 0.35
+    snow_sensitivity: 0.35
+
+  - source: bonneval_forest
+    destination: bonneval_lower
+    name: Piste de Bonneval
+    edge_type: piste
+    difficulty: green
+    length: 200.0
+    nominal_travel_time: 130.0
+    safe_capacity: 280
+    critical_density: 1.6
+    lift_throughput: null
+    wind_sensitivity: 0.2
+    visibility_sensitivity: 0.3
+    snow_sensitivity: 0.3
+
+  - source: bonneval_lower
+    destination: bonneval_home_end
+    name: Retour de Bonneval
+    edge_type: piste
+    difficulty: green
+    length: 240.0
+    nominal_travel_time: 150.0
+    safe_capacity: 300
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.15
+    visibility_sensitivity: 0.2
+    snow_sensitivity: 0.2
+
+  - source: bonneval_lower
+    destination: bonneval_meadow_end
+    name: Le Pré de Bonneval
+    edge_type: piste
+    difficulty: green
+    length: 260.0
+    nominal_travel_time: 160.0
+    safe_capacity: 280
+    critical_density: 1.7
+    lift_throughput: null
+    wind_sensitivity: 0.15
+    visibility_sensitivity: 0.2
+    snow_sensitivity: 0.2
+
+  # The Combe Noire.
+  # The bowl is a chain. The last edge is the only way out of the bowl.
+
+  - source: combe_top
+    destination: combe_upper
+    name: Combe Noire Haute
+    edge_type: piste
+    difficulty: black
+    length: 200.0
+    nominal_travel_time: 110.0
+    safe_capacity: 80
+    critical_density: 1.0
+    lift_throughput: null
+    wind_sensitivity: 0.8
+    visibility_sensitivity: 0.85
+    snow_sensitivity: 0.7
+
+  - source: combe_upper
+    destination: combe_patrol
+    name: Le Couloir
+    edge_type: piste
+    difficulty: black
+    length: 140.0
+    nominal_travel_time: 80.0
+    safe_capacity: 70
+    critical_density: 1.0
+    lift_throughput: null
+    wind_sensitivity: 0.75
+    visibility_sensitivity: 0.85
+    snow_sensitivity: 0.7
+
+  - source: combe_patrol
+    destination: combe_gully
+    name: La Goulotte
+    edge_type: piste
+    difficulty: black
+    length: 130.0
+    nominal_travel_time: 80.0
+    safe_capacity: 70
+    critical_density: 1.0
+    lift_throughput: null
+    wind_sensitivity: 0.7
+    visibility_sensitivity: 0.8
+    snow_sensitivity: 0.65
+
+  - source: combe_gully
+    destination: combe_lower
+    name: Combe Noire Basse
+    edge_type: piste
+    difficulty: red
+    length: 180.0
+    nominal_travel_time: 100.0
+    safe_capacity: 100
+    critical_density: 1.1
+    lift_throughput: null
+    wind_sensitivity: 0.65
+    visibility_sensitivity: 0.75
+    snow_sensitivity: 0.6
+
+  - source: combe_lower
+    destination: crete_east
+    name: Traversée de la Combe
+    edge_type: piste
+    difficulty: red
+    length: 260.0
+    nominal_travel_time: 150.0
+    safe_capacity: 110
+    critical_density: 1.1
+    lift_throughput: null
+    wind_sensitivity: 0.6
+    visibility_sensitivity: 0.7
+    snow_sensitivity: 0.6

@@ -1,7 +1,7 @@
 mountain:
-  name: default-resort
-  node_count: 40
-  edge_count: 60
+  name: val-tarin
+  node_count: 60
+  edge_count: 80
 
 population:
   skier_count: 5000

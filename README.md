@@ -30,8 +30,15 @@ The controllers, the monitors, and the experiments do not exist yet.
 | Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and the state checksum |
 | Environment | `src/avalanche/env/adapter.py` | gives fixed Gymnasium spaces and one control interval per step |
 
-The mountain is `configs/mountain/small-resort.yaml`.
-It has 10 nodes and 12 edges.
+There are two mountains.
+`configs/mountain/small-resort.yaml` has 10 nodes and 12 edges.
+It is the fixture of the unit tests, because it is small and quick.
+`configs/mountain/medium-resort.yaml` is Val-Tarin, a two-valley resort.
+It has 60 nodes and 80 edges, with four entrances, two exits, and eight lifts.
+It is the map of the experiments, because it gives a controller a real choice.
+It has a pair of lifts that serve the same terrain from different base stations.
+It has two routes down to each village, and one deliberate bottleneck.
+It has one upper bowl that drains through a single traverse.
 Each skier travels from an entrance to a sampled destination.
 The movement tick uses masked NumPy operations.
 The route choice groups skiers by their location and their attributes.
@@ -149,6 +156,7 @@ print(sim.state_checksum())
 
 Two scripts make the data that the scene reads.
 Run them again after a change to the mountain file.
+The scene reads the small resort. The scene constants suit its size.
 
 ```bash
 uv run python scripts/export_topology.py configs/mountain/small-resort.yaml

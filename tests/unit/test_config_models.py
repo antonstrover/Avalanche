@@ -18,7 +18,7 @@ SAMPLE_FILES = [
 def test_valid_config_parses():
     resolved = ResolvedConfig.model_validate(load_and_merge(*SAMPLE_FILES))
     assert resolved.seed == 1234
-    assert resolved.mountain.node_count == 40
+    assert resolved.mountain.node_count == 60
     assert resolved.trace_level == "debug"
 
 
