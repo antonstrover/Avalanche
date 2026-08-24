@@ -42,6 +42,22 @@ export async function createLiveSession(
     return response.json() as Promise<LiveSession>;
 }
 
+export type SessionCommand = "pause" | "resume" | "step" | "set_speed";
+
+export async function commandLiveSession(
+    sessionId: string,
+    command: SessionCommand,
+    speed?: number,
+): Promise<LiveSession> {
+    const response = await fetch(`${API_BASE}/api/sessions/${sessionId}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command, speed }),
+    });
+    if (!response.ok) throw new Error("the live session command failed");
+    return response.json() as Promise<LiveSession>;
+}
+
 export async function resolveApproval(
     sessionId: string,
     decisionId: string,

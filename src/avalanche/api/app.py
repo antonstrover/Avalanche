@@ -2,11 +2,12 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any
+from math import isfinite
+from typing import Any, Literal
 
 import msgpack
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from avalanche.api.sessions import (
     MAX_SKIERS,
@@ -58,6 +59,23 @@ class ApprovalResponseRequest(BaseModel):
 
     choice: ApprovalChoice
     replacement_action: dict[str, Any] | None = None
+
+
+class SessionCommandRequest(BaseModel):
+    """Validate one live session command."""
+
+    command: Literal["pause", "resume", "step", "set_speed"]
+    speed: float | None = None
+
+    @model_validator(mode="after")
+    def check_speed(self) -> "SessionCommandRequest":
+        """Require a valid speed only for a speed command."""
+        if self.command == "set_speed":
+            if self.speed is None or not isfinite(self.speed) or self.speed <= 0.0:
+                raise ValueError("the session speed must be finite and positive")
+        elif self.speed is not None:
+            raise ValueError("only a speed command can contain a speed")
+        return self
 
 
 @app.get("/health")
@@ -124,6 +142,25 @@ def get_session(session_id: str) -> dict[str, object]:
     session = manager.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="the session does not exist")
+    return session.response()
+
+
+@app.post(
+    "/api/sessions/{session_id}/commands",
+    response_model=SessionResponse,
+)
+def command_session(
+    session_id: str, request: SessionCommandRequest
+) -> dict[str, object]:
+    """Apply one command to an isolated live session."""
+    result, session = manager.command(session_id, request.command, request.speed)
+    if result == "missing_session":
+        raise HTTPException(status_code=404, detail="the session does not exist")
+    if result == "invalid_state":
+        raise HTTPException(status_code=409, detail="the command is invalid now")
+    if result == "timeout":
+        raise HTTPException(status_code=504, detail="the command did not finish")
+    assert session is not None
     return session.response()
 
 

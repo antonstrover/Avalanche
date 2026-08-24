@@ -2,6 +2,7 @@ import base64
 import json
 import queue
 import threading
+import time
 from pathlib import Path
 
 import msgpack
@@ -13,6 +14,7 @@ from avalanche.api.sessions import (
     MOUNTAIN_PATH,
     TIMELINE_LIMIT,
     display_state,
+    manager,
     run_session,
     topology_version,
 )
@@ -116,6 +118,84 @@ def test_unknown_live_session_is_not_found():
     assert client.get("/api/sessions/missing").status_code == 404
     with client.websocket_connect("/api/sessions/missing/stream") as websocket:
         assert websocket.receive()["type"] == "websocket.close"
+
+
+def test_live_commands_change_only_the_addressed_session():
+    first = client.post("/api/sessions", json={"seed": 7, "skier_count": 20}).json()
+    second = client.post("/api/sessions", json={"seed": 8, "skier_count": 20}).json()
+    first_id = first["session_id"]
+    second_id = second["session_id"]
+
+    try:
+        first_session = manager.get(first_id)
+        second_session = manager.get(second_id)
+        assert first_session is not None
+        assert second_session is not None
+        for _ in range(100):
+            if first_session.status == "running" and second_session.status == "running":
+                break
+            time.sleep(0.01)
+        paused = client.post(
+            f"/api/sessions/{first_id}/commands", json={"command": "pause"}
+        )
+        assert paused.status_code == 200
+        assert paused.json()["status"] == "paused"
+        with first_session.lock:
+            paused_sequence = first_session.latest_sequence
+        with second_session.lock:
+            second_sequence = second_session.latest_sequence
+        time.sleep(0.35)
+        with first_session.lock:
+            assert first_session.latest_sequence == paused_sequence
+        with second_session.lock:
+            assert second_session.latest_sequence > second_sequence
+
+        stepped = client.post(
+            f"/api/sessions/{first_id}/commands", json={"command": "step"}
+        )
+        assert stepped.status_code == 200
+        with first_session.lock:
+            packed = first_session.latest
+        assert packed is not None
+        frame = msgpack.unpackb(packed, raw=False)
+        assert frame["simulation_time"] == 60.0
+
+        speed = client.post(
+            f"/api/sessions/{first_id}/commands",
+            json={"command": "set_speed", "speed": 40.0},
+        )
+        assert speed.status_code == 200
+        assert speed.json()["simulation_speed"] == 40.0
+        resumed = client.post(
+            f"/api/sessions/{first_id}/commands", json={"command": "resume"}
+        )
+        assert resumed.status_code == 200
+        assert resumed.json()["status"] == "running"
+    finally:
+        client.delete(f"/api/sessions/{first_id}")
+        client.delete(f"/api/sessions/{second_id}")
+
+
+def test_live_commands_reject_invalid_values_and_states():
+    response = client.post("/api/sessions", json={"skier_count": 20})
+    session_id = response.json()["session_id"]
+    try:
+        assert (
+            client.post(
+                f"/api/sessions/{session_id}/commands",
+                json={"command": "set_speed", "speed": 0.0},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                f"/api/sessions/{session_id}/commands",
+                json={"command": "step"},
+            ).status_code
+            == 409
+        )
+    finally:
+        client.delete(f"/api/sessions/{session_id}")
 
 
 def test_python_decodes_the_stream_contract_fixture():

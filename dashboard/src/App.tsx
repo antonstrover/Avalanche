@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+    commandLiveSession,
     createLiveSession,
     fetchHealth,
     type HealthResponse,
@@ -18,6 +19,7 @@ function App() {
     const [session, setSession] = useState<LiveSession | null>(null);
     const [liveStatus, setLiveStatus] = useState("idle");
     const [liveCount, setLiveCount] = useState(0);
+    const [simulationSpeed, setSimulationSpeed] = useState(20);
     const [display, setDisplay] = useState<DisplayState>(INITIAL_DISPLAY);
 
     useEffect(() => {
@@ -56,6 +58,23 @@ function App() {
     }, []);
     const onLiveError = useCallback(() => setLiveStatus("failed"), []);
 
+    const sendCommand = async (
+        command: "pause" | "resume" | "step" | "set_speed",
+    ) => {
+        if (!session) return;
+        try {
+            const updated = await commandLiveSession(
+                session.session_id,
+                command,
+                command === "set_speed" ? simulationSpeed : undefined,
+            );
+            setSession(updated);
+            setLiveStatus(updated.status);
+        } catch {
+            setLiveStatus("failed");
+        }
+    };
+
     return (
         <main>
             <h1>Avalanche control centre</h1>
@@ -91,6 +110,44 @@ function App() {
                     disabled={liveStatus !== "idle"}
                 >
                     Start failure demo
+                </button>
+                <button
+                    type="button"
+                    onClick={() => sendCommand("pause")}
+                    disabled={!session || !["live", "running"].includes(liveStatus)}
+                >
+                    Pause
+                </button>
+                <button
+                    type="button"
+                    onClick={() => sendCommand("resume")}
+                    disabled={!session || liveStatus !== "paused"}
+                >
+                    Resume
+                </button>
+                <button
+                    type="button"
+                    onClick={() => sendCommand("step")}
+                    disabled={!session || liveStatus !== "paused"}
+                >
+                    Step
+                </button>
+                <label>
+                    Simulation speed
+                    <input
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        value={simulationSpeed}
+                        onChange={(event) => setSimulationSpeed(Number(event.target.value))}
+                    />
+                </label>
+                <button
+                    type="button"
+                    onClick={() => sendCommand("set_speed")}
+                    disabled={!session || !Number.isFinite(simulationSpeed) || simulationSpeed <= 0}
+                >
+                    Set speed
                 </button>
                 <p data-testid="live-status">Live status: {liveStatus}</p>
                 <p data-testid="live-skier-count">Live skiers: {liveCount}</p>
