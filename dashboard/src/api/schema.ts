@@ -550,6 +550,7 @@ export interface components {
          * @description The size and the attribute mix of the skier population.
          *
          *     `ability_weights` gives the share of a beginner, an intermediate, and an advanced.
+         *     `customer_group_weights` gives the share of a standard and a premium customer.
          *     `compliance_mean` and `compliance_spread` calibrate the advice compliance.
          */
         PopulationConfig: {
@@ -570,6 +571,17 @@ export interface components {
              */
             ability_weights: [
                 number,
+                number,
+                number
+            ];
+            /**
+             * Customer Group Weights
+             * @default [
+             *       0.8,
+             *       0.2
+             *     ]
+             */
+            customer_group_weights: [
                 number,
                 number
             ];

@@ -48,7 +48,7 @@ from avalanche.monitors.outcome import AllowMonitor
 from avalanche.scenarios.failures import refresh_reported_telemetry
 from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
-from avalanche.sim.population import ABILITY_NAMES
+from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 from avalanche.sim.routes import NO_EDGE
 from avalanche.sim.skier import Status
 from avalanche.sim.topology import Topology, load_topology
@@ -65,7 +65,8 @@ class AvalancheEnvConfig:
     episode_duration_seconds: float = 3_600.0
     forecast_steps: int = 4
     incident_capacity: int = 16
-    group_count: int = len(ABILITY_NAMES)
+    ability_count: int = len(ABILITY_NAMES)
+    group_count: int = len(CUSTOMER_GROUP_NAMES)
 
     def __post_init__(self) -> None:
         """Reject invalid environment settings."""
@@ -85,12 +86,15 @@ class AvalancheEnvConfig:
             abs_tol=1e-9,
         ):
             raise ValueError("the control interval must contain whole movement ticks")
-        if self.group_count != len(ABILITY_NAMES):
+        if self.ability_count != len(ABILITY_NAMES):
+            raise ValueError("the environment ability count must match the abilities")
+        if self.group_count != len(CUSTOMER_GROUP_NAMES):
             raise ValueError("the environment group count must match the skier groups")
         ObservationConfig(
             episode_duration_seconds=self.episode_duration_seconds,
             forecast_steps=self.forecast_steps,
             incident_capacity=self.incident_capacity,
+            ability_count=self.ability_count,
             group_count=self.group_count,
         )
 
@@ -106,6 +110,7 @@ class AvalancheEnvConfig:
             episode_duration_seconds=self.episode_duration_seconds,
             forecast_steps=self.forecast_steps,
             incident_capacity=self.incident_capacity,
+            ability_count=self.ability_count,
             group_count=self.group_count,
         )
 
@@ -127,10 +132,11 @@ class _EnvironmentActionSpace(spaces.Dict):
     def __init__(
         self,
         topology: Topology,
+        ability_count: int,
         group_count: int,
         masks: Callable[[], ActionMasks],
     ) -> None:
-        base = build_action_space(topology, group_count)
+        base = build_action_space(topology, ability_count, group_count)
         super().__init__(base.spaces)
         self._current_masks = masks
 
@@ -161,7 +167,10 @@ class AvalancheEnv(gym.Env):
         self.sim = MountainSim(mountain_path)
         self.topology = load_topology(Path(mountain_path))
         self.action_space = _EnvironmentActionSpace(
-            self.topology, self.config.group_count, self._action_masks
+            self.topology,
+            self.config.ability_count,
+            self.config.group_count,
+            self._action_masks,
         )
         self.observation_space = build_observation_space(
             self.topology, self.config.observation
@@ -333,7 +342,9 @@ class AvalancheEnv(gym.Env):
 
     def _action_masks(self) -> ActionMasks:
         """Return the current controllable infrastructure masks."""
-        return build_action_masks(self.topology, self.config.group_count)
+        return build_action_masks(
+            self.topology, self.config.ability_count, self.config.group_count
+        )
 
     def _observation(self) -> Observation:
         """Return one observation with the masks used by this environment."""

@@ -11,6 +11,7 @@ from avalanche.config.models import PopulationConfig
 from avalanche.control import ActionProposal, freeze_action
 from avalanche.env import neutral_action
 from avalanche.sim import MountainSim, load_topology
+from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -47,12 +48,14 @@ class MutatingController:
 def make_population_config(seed: int) -> PopulationConfig:
     """Return one deterministic random population configuration."""
     choose = random.Random(seed)
-    raw_weights = [choose.uniform(0.1, 1.0) for _ in range(3)]
+    raw_weights = [choose.uniform(0.1, 1.0) for _ in range(len(ABILITY_NAMES))]
     weight_total = sum(raw_weights)
+    premium = choose.uniform(0.05, 0.5)
     return PopulationConfig(
         skier_count=choose.randint(1_000, 5_000),
         arrival_window_seconds=choose.uniform(0.0, 60.0),
         ability_weights=tuple(weight / weight_total for weight in raw_weights),
+        customer_group_weights=(1.0 - premium, premium),
         compliance_mean=choose.uniform(0.0, 1.0),
         compliance_spread=choose.uniform(0.0, 0.5),
     )
@@ -66,6 +69,8 @@ def check_population_ranges(sim: MountainSim, count: int) -> None:
         assert values.size == count, name
     assert np.all((pop.progress >= 0.0) & (pop.progress <= 1.0))
     assert np.all((pop.compliance >= 0.0) & (pop.compliance <= 1.0))
+    assert np.all((pop.ability >= 0) & (pop.ability < len(ABILITY_NAMES)))
+    assert np.all((pop.group >= 0) & (pop.group < len(CUSTOMER_GROUP_NAMES)))
 
 
 @pytest.mark.parametrize("seed", SEEDS)

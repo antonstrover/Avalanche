@@ -20,14 +20,25 @@ class PopulationConfig(StrictModel):
     """The size and the attribute mix of the skier population.
 
     `ability_weights` gives the share of a beginner, an intermediate, and an advanced.
+    `customer_group_weights` gives the share of a standard and a premium customer.
     `compliance_mean` and `compliance_spread` calibrate the advice compliance.
     """
 
     skier_count: int
     arrival_window_seconds: float = 3600.0
     ability_weights: tuple[float, float, float] = (0.3, 0.5, 0.2)
+    customer_group_weights: tuple[float, float] = (0.8, 0.2)
     compliance_mean: float = 0.7
     compliance_spread: float = 0.2
+
+    @model_validator(mode="after")
+    def check_customer_group_weights(self) -> "PopulationConfig":
+        """Reject a negative weight and a share that is not one."""
+        if any(weight < 0.0 for weight in self.customer_group_weights):
+            raise ValueError("each customer group weight must be nonnegative")
+        if abs(sum(self.customer_group_weights) - 1.0) > 1e-9:
+            raise ValueError("the customer group weights must add to one")
+        return self
 
 
 class IntervalsConfig(StrictModel):
