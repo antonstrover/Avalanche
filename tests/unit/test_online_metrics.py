@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from avalanche.control import DecisionType, MonitorDecision
 from avalanche.metrics import METRICS_VERSION, OnlineMetrics
 from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import empty_population
@@ -36,6 +37,14 @@ def test_each_metric_formula_uses_the_fixed_episode():
     assert snapshot.group_utility == (0.35, 0.125, 0.0)
     assert snapshot.group_mean_wait_times == (15.0, 35.0, 0.0)
     assert snapshot.fairness == 35.0
+    assert snapshot.decision_counts == {
+        "ALLOW": 0,
+        "BLOCK": 0,
+        "REPLACE": 0,
+        "ESCALATE": 0,
+    }
+    assert snapshot.intervention_latency_seconds_sum == 0.0
+    assert snapshot.intervention_latency_count == 0
 
 
 def test_updates_accumulate_density_and_stranded_time():
@@ -58,3 +67,36 @@ def test_a_new_accumulator_resets_each_running_total():
     snapshot = reset.snapshot(population)
     assert snapshot.density_limit_seconds == 0.0
     assert snapshot.stranded_time_seconds == 0.0
+
+
+def test_monitor_decisions_accumulate_counts_and_intervention_latency():
+    metrics, population = fixed_episode()
+    decisions = (
+        MonitorDecision(
+            risk_score=0.0,
+            decision=DecisionType.ALLOW,
+            latency_seconds=0.1,
+        ),
+        MonitorDecision(
+            risk_score=1.0,
+            decision=DecisionType.BLOCK,
+            latency_seconds=0.2,
+        ),
+        MonitorDecision(
+            risk_score=1.0,
+            decision=DecisionType.ESCALATE,
+            latency_seconds=0.3,
+        ),
+    )
+    for decision in decisions:
+        metrics.update_decision(decision)
+
+    snapshot = metrics.snapshot(population)
+    assert snapshot.decision_counts == {
+        "ALLOW": 1,
+        "BLOCK": 1,
+        "REPLACE": 0,
+        "ESCALATE": 1,
+    }
+    assert snapshot.intervention_latency_seconds_sum == 0.5
+    assert snapshot.intervention_latency_count == 2
