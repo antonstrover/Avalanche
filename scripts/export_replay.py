@@ -1,6 +1,6 @@
 """Export a short simulator run to the replay file of the mountain scene.
 
-The script runs the Stage 2 simulator with a few skiers on a mountain file.
+The script runs the simulator with a few skiers on a mountain file.
 It writes `dashboard/src/mountain/replay.sample.json`.
 A frame holds the simulation time and the place of each skier.
 The scene reads the place and draws a marker on the piste curve.
@@ -10,7 +10,7 @@ The scene indexes them in the order of the mountain file.
 The script therefore maps each index through the node identity.
 
 Usage:
-    python scripts/export_replay.py configs/mountain/small-resort.yaml
+    python scripts/export_replay.py configs/mountain/medium-resort.yaml
 """
 
 from __future__ import annotations
@@ -22,7 +22,13 @@ from typing import Any
 
 import numpy as np
 
-from avalanche.sim import LocationKind, MountainSim, Status, population_from_starts
+from avalanche.sim import (
+    NODE_TYPE_NAMES,
+    LocationKind,
+    MountainSim,
+    Status,
+    population_from_starts,
+)
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 SCENE = REPOSITORY / "dashboard" / "src" / "mountain"
@@ -86,8 +92,10 @@ def export(source: Path, resort_path: Path, output: Path) -> dict[str, Any]:
     topology = simulation.topology
     assert topology is not None
 
-    start = topology.node_index["base_village"]
-    exit_node = topology.node_index["base_exit"]
+    entrance_type = NODE_TYPE_NAMES.index("entrance")
+    exit_type = NODE_TYPE_NAMES.index("exit")
+    start = int(np.flatnonzero(topology.node_type == entrance_type)[0])
+    exit_node = int(np.flatnonzero(topology.node_type == exit_type)[0])
     # The skiers arrive one after another, so the markers spread along the pistes.
     arrivals = [
         order * ARRIVAL_TICKS * simulation.tick_seconds for order in range(SKIER_COUNT)

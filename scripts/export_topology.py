@@ -5,7 +5,7 @@ It keeps only the static fields that the scene draws.
 It does not import the avalanche package, so it runs before the loader exists.
 
 Usage:
-    python scripts/export_topology.py configs/mountain/small-resort.yaml
+    python scripts/export_topology.py configs/mountain/medium-resort.yaml
 """
 
 from __future__ import annotations
@@ -64,10 +64,18 @@ def export(source: Path, output: Path) -> dict[str, Any]:
     """Read the mountain file and write the resort data."""
     document = yaml.safe_load(source.read_text())
     mountain = document.get("mountain", document)
+    nodes = sorted(
+        (convert(node, NODE_ALIASES) for node in mountain["nodes"]),
+        key=lambda node: node["node_id"],
+    )
+    edges = sorted(
+        (convert(edge, EDGE_ALIASES) for edge in mountain["edges"]),
+        key=lambda edge: (edge["source"], edge["destination"]),
+    )
     resort = {
         "name": mountain.get("name", source.stem),
-        "nodes": [convert(node, NODE_ALIASES) for node in mountain["nodes"]],
-        "edges": [convert(edge, EDGE_ALIASES) for edge in mountain["edges"]],
+        "nodes": nodes,
+        "edges": edges,
     }
     output.write_text(json.dumps(resort, indent=2) + "\n")
     return resort
