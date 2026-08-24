@@ -1,0 +1,113 @@
+"""Accumulate bounded metrics during one episode."""
+
+from dataclasses import asdict, dataclass
+from math import isfinite
+
+import numpy as np
+
+from avalanche.sim.movement import DynamicState
+from avalanche.sim.population import SkierArrays
+from avalanche.sim.skier import Status
+
+METRICS_VERSION = 1
+
+
+@dataclass(frozen=True)
+class MetricSnapshot:
+    """Hold one versioned view of the online metrics."""
+
+    metrics_version: int
+    completed_journeys: int
+    wait_time_sum: float
+    density_limit_seconds: float
+    stranded_skiers: int
+    stranded_time_seconds: float
+    group_utility: tuple[float, ...]
+    group_mean_wait_times: tuple[float, ...]
+    fairness: float
+
+    def as_dict(self) -> dict[str, int | float | tuple[float, ...]]:
+        """Return the metric fields with stable names."""
+        return asdict(self)
+
+
+class OnlineMetrics:
+    """Accumulate metrics that do not require a full saved episode."""
+
+    def __init__(self, group_count: int, episode_duration_seconds: float) -> None:
+        if group_count < 1:
+            raise ValueError("the metric group count must be positive")
+        if not isfinite(episode_duration_seconds) or episode_duration_seconds <= 0.0:
+            raise ValueError("the episode duration must be finite and positive")
+        self.group_count = group_count
+        self.episode_duration_seconds = float(episode_duration_seconds)
+        self.density_limit_seconds = 0.0
+        self.stranded_time_seconds = 0.0
+        self.group_stranded_seconds = np.zeros(group_count, dtype=np.float64)
+
+    def update(
+        self, population: SkierArrays, state: DynamicState, tick_seconds: float
+    ) -> None:
+        """Add one movement tick to each accumulating metric."""
+        if not isfinite(tick_seconds) or tick_seconds <= 0.0:
+            raise ValueError("the metric tick must be finite and positive")
+        above_limit = state.density_ratio > 1.0
+        self.density_limit_seconds += (
+            float(np.count_nonzero(above_limit)) * tick_seconds
+        )
+
+        stranded = population.status == Status.STRANDED
+        self.stranded_time_seconds += float(np.count_nonzero(stranded)) * tick_seconds
+        if np.any(stranded):
+            self.group_stranded_seconds += (
+                np.bincount(population.group[stranded], minlength=self.group_count)[
+                    : self.group_count
+                ]
+                * tick_seconds
+            )
+
+    def snapshot(self, population: SkierArrays) -> MetricSnapshot:
+        """Return current cumulative and grouped values."""
+        completed = population.status == Status.COMPLETE
+        stranded = population.status == Status.STRANDED
+        group_sizes = np.bincount(population.group, minlength=self.group_count)[
+            : self.group_count
+        ].astype(np.float64)
+        group_completed = np.bincount(
+            population.group[completed], minlength=self.group_count
+        )[: self.group_count].astype(np.float64)
+        group_wait = np.bincount(
+            population.group,
+            weights=population.wait_time,
+            minlength=self.group_count,
+        )[: self.group_count]
+
+        utility = np.zeros(self.group_count, dtype=np.float64)
+        mean_wait = np.zeros(self.group_count, dtype=np.float64)
+        present = group_sizes > 0.0
+        mean_wait[present] = group_wait[present] / group_sizes[present]
+        utility[present] = group_completed[present] / group_sizes[present] - (
+            group_wait[present] + self.group_stranded_seconds[present]
+        ) / (group_sizes[present] * self.episode_duration_seconds)
+        fairness = float(np.max(mean_wait) - np.min(mean_wait))
+
+        values = (
+            self.density_limit_seconds,
+            self.stranded_time_seconds,
+            *utility,
+            *mean_wait,
+            fairness,
+        )
+        if any(not isfinite(float(value)) for value in values):
+            raise ValueError("an online metric is not finite")
+        return MetricSnapshot(
+            metrics_version=METRICS_VERSION,
+            completed_journeys=int(np.count_nonzero(completed)),
+            wait_time_sum=float(np.sum(population.wait_time, dtype=np.float64)),
+            density_limit_seconds=self.density_limit_seconds,
+            stranded_skiers=int(np.count_nonzero(stranded)),
+            stranded_time_seconds=self.stranded_time_seconds,
+            group_utility=tuple(float(value) for value in utility),
+            group_mean_wait_times=tuple(float(value) for value in mean_wait),
+            fairness=fairness,
+        )
