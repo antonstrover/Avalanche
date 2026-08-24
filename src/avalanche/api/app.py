@@ -16,7 +16,17 @@ from avalanche.api.sessions import (
     snapshot_message,
     validate_replacement_action,
 )
-from avalanche.config import ResolvedConfig
+from avalanche.config import load_yaml, merge_configs
+from avalanche.config.models import (
+    ControllerConfig,
+    FallbackConfig,
+    IntervalsConfig,
+    MonitorConfig,
+    MountainConfig,
+    PopulationConfig,
+    ScenarioConfig,
+)
+from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import ApprovalChoice
 
 
@@ -28,6 +38,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="avalanche", lifespan=lifespan)
+CONFIG_ROOT = REPO_ROOT / "configs"
 
 
 class SessionCreate(BaseModel):
@@ -78,14 +89,158 @@ class SessionCommandRequest(BaseModel):
         return self
 
 
+class MountainOption(BaseModel):
+    """Describe one available mountain configuration."""
+
+    id: str
+    label: str
+    mountain: MountainConfig
+    population: PopulationConfig
+    topology: dict[str, Any]
+
+
+class ScenarioOption(BaseModel):
+    """Describe one available scenario configuration."""
+
+    id: str
+    label: str
+    scenario: ScenarioConfig
+    intervals: IntervalsConfig
+    episode_duration_seconds: float
+    snapshot_interval_seconds: float
+
+
+class ControllerOption(BaseModel):
+    """Describe one available controller configuration."""
+
+    id: str
+    label: str
+    controller: ControllerConfig
+
+
+class MonitorOption(BaseModel):
+    """Describe one available monitor configuration."""
+
+    id: str
+    label: str
+    monitor: MonitorConfig
+    fallback: FallbackConfig
+    trace_level: Literal["debug", "decision", "summary"]
+
+
+class ConfigOptionsResponse(BaseModel):
+    """List each validated live configuration choice."""
+
+    mountains: list[MountainOption]
+    scenarios: list[ScenarioOption]
+    controllers: list[ControllerOption]
+    monitors: list[MonitorOption]
+
+
+def _label(value: str) -> str:
+    """Change one stable identifier into a display label."""
+    return value.replace("-", " ").replace("_", " ").title()
+
+
+def _mountain_options() -> list[MountainOption]:
+    """Load each mountain and its static scene topology."""
+    defaults = load_yaml(CONFIG_ROOT / "mountain" / "default.yaml")
+    population = PopulationConfig.model_validate(defaults["population"])
+    choices = []
+    for path in sorted((CONFIG_ROOT / "mountain").glob("*-resort.yaml")):
+        topology = load_yaml(path)
+        nodes = sorted(topology["nodes"], key=lambda node: node["node_id"])
+        edges = sorted(
+            topology["edges"],
+            key=lambda edge: (edge["source"], edge["destination"]),
+        )
+        identifier = path.stem
+        name = str(topology.get("name", identifier))
+        choices.append(
+            MountainOption(
+                id=identifier,
+                label=_label(name),
+                mountain=MountainConfig(
+                    name=name,
+                    node_count=len(nodes),
+                    edge_count=len(edges),
+                    path=str(path.relative_to(REPO_ROOT)),
+                ),
+                population=population,
+                topology={"name": name, "nodes": nodes, "edges": edges},
+            )
+        )
+    return choices
+
+
+def _scenario_options() -> list[ScenarioOption]:
+    """Load each validated scenario configuration."""
+    choices = []
+    defaults = load_yaml(CONFIG_ROOT / "scenarios" / "default.yaml")
+    for path in sorted((CONFIG_ROOT / "scenarios").glob("*.yaml")):
+        values = merge_configs(defaults, load_yaml(path))
+        scenario = ScenarioConfig.model_validate(values["scenario"])
+        choices.append(
+            ScenarioOption(
+                id=path.stem,
+                label=_label(scenario.name),
+                scenario=scenario,
+                intervals=IntervalsConfig.model_validate(values["intervals"]),
+                episode_duration_seconds=values.get(
+                    "episode_duration_seconds", 28_800.0
+                ),
+                snapshot_interval_seconds=values.get("snapshot_interval_seconds", 60.0),
+            )
+        )
+    return choices
+
+
+def _controller_options() -> list[ControllerOption]:
+    """Load each validated controller configuration."""
+    choices = []
+    for path in sorted((CONFIG_ROOT / "controllers").glob("*.yaml")):
+        controller = ControllerConfig.model_validate(load_yaml(path)["controller"])
+        choices.append(
+            ControllerOption(
+                id=path.stem,
+                label=_label(path.stem),
+                controller=controller,
+            )
+        )
+    return choices
+
+
+def _monitor_options() -> list[MonitorOption]:
+    """Load each validated monitor configuration."""
+    choices = []
+    for path in sorted((CONFIG_ROOT / "monitors").glob("*.yaml")):
+        values = load_yaml(path)
+        choices.append(
+            MonitorOption(
+                id=path.stem,
+                label=_label(path.stem),
+                monitor=MonitorConfig.model_validate(values["monitor"]),
+                fallback=FallbackConfig.model_validate(values["fallback"]),
+                trace_level=values["trace_level"],
+            )
+        )
+    return choices
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/config-options")
-def config_options() -> dict[str, object]:
-    return {"schema": ResolvedConfig.model_json_schema()}
+@app.get("/api/config-options", response_model=ConfigOptionsResponse)
+def config_options() -> ConfigOptionsResponse:
+    """Return each validated live configuration choice."""
+    return ConfigOptionsResponse(
+        mountains=_mountain_options(),
+        scenarios=_scenario_options(),
+        controllers=_controller_options(),
+        monitors=_monitor_options(),
+    )
 
 
 @app.post("/api/sessions", status_code=201, response_model=SessionResponse)

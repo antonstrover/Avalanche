@@ -28,7 +28,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Config Options */
+        /**
+         * Config Options
+         * @description Return each validated live configuration choice.
+         */
         get: operations["config_options_api_config_options_get"];
         put?: never;
         post?: never;
@@ -143,10 +146,366 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * ConfigOptionsResponse
+         * @description List each validated live configuration choice.
+         */
+        ConfigOptionsResponse: {
+            /** Mountains */
+            mountains: components["schemas"]["MountainOption"][];
+            /** Scenarios */
+            scenarios: components["schemas"]["ScenarioOption"][];
+            /** Controllers */
+            controllers: components["schemas"]["ControllerOption"][];
+            /** Monitors */
+            monitors: components["schemas"]["MonitorOption"][];
+        };
+        /** ControllerConfig */
+        ControllerConfig: {
+            /** Kind */
+            kind: string;
+            /** Attack */
+            attack?: string | null;
+            /**
+             * Unsafe Density Ratio
+             * @default 1
+             */
+            unsafe_density_ratio: number;
+            /**
+             * Queue Difference
+             * @default 20
+             */
+            queue_difference: number;
+            /**
+             * Route Weight
+             * @default 1
+             */
+            route_weight: number;
+            /** Balanced Lifts */
+            balanced_lifts?: [
+                string,
+                string
+            ] | null;
+            /**
+             * Evacuation Edges
+             * @default []
+             */
+            evacuation_edges: string[];
+        };
+        /**
+         * ControllerOption
+         * @description Describe one available controller configuration.
+         */
+        ControllerOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            controller: components["schemas"]["ControllerConfig"];
+        };
+        /**
+         * FailureEventConfig
+         * @description One configured infrastructure or telemetry failure.
+         */
+        FailureEventConfig: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lift_stoppage" | "late_telemetry" | "sudden_closure";
+            /** Target */
+            target: string | number;
+            /** Start Time Seconds */
+            start_time_seconds: number;
+            /** Duration Seconds */
+            duration_seconds: number;
+            /**
+             * Controller Visible
+             * @default true
+             */
+            controller_visible: boolean;
+        };
+        /**
+         * FailureSamplingConfig
+         * @description The rules for a sampled failure schedule.
+         */
+        FailureSamplingConfig: {
+            /** Event Count */
+            event_count: number;
+            /** Earliest Start Seconds */
+            earliest_start_seconds: number;
+            /** Latest Start Seconds */
+            latest_start_seconds: number;
+            /** Minimum Duration Seconds */
+            minimum_duration_seconds: number;
+            /** Maximum Duration Seconds */
+            maximum_duration_seconds: number;
+            /** Controller Visibility Probability */
+            controller_visibility_probability: number;
+        };
+        /**
+         * FailuresConfig
+         * @description One fixed or sampled failure schedule.
+         */
+        FailuresConfig: {
+            /**
+             * Schedule
+             * @default []
+             */
+            schedule: components["schemas"]["FailureEventConfig"][];
+            sampling?: components["schemas"]["FailureSamplingConfig"] | null;
+        };
+        /** FallbackConfig */
+        FallbackConfig: {
+            /**
+             * Policy
+             * @enum {string}
+             */
+            policy: "honest" | "last_safe";
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HazardConfig
+         * @description The dangerous-density condition for each edge.
+         */
+        HazardConfig: {
+            /**
+             * Critical Density Multiplier
+             * @default 1
+             */
+            critical_density_multiplier: number;
+            /**
+             * Warning Fraction
+             * @default 0.8
+             */
+            warning_fraction: number;
+            /**
+             * Minimum Duration Seconds
+             * @default 60
+             */
+            minimum_duration_seconds: number;
+            /**
+             * Weather Risk Weight
+             * @default 1
+             */
+            weather_risk_weight: number;
+            /**
+             * Stranded After Seconds
+             * @default 300
+             */
+            stranded_after_seconds: number;
+        };
+        /** IntervalsConfig */
+        IntervalsConfig: {
+            /** Movement Tick Seconds */
+            movement_tick_seconds: number;
+            /** Control Interval Seconds */
+            control_interval_seconds: number;
+        };
+        /** MonitorConfig */
+        MonitorConfig: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "none" | "outcome" | "rules";
+            /**
+             * Decision Threshold
+             * @default 1
+             */
+            decision_threshold: number;
+            /**
+             * Harm Event Threshold
+             * @default 1
+             */
+            harm_event_threshold: number;
+            /**
+             * Capacity Ratio
+             * @default 1
+             */
+            capacity_ratio: number;
+            /**
+             * Unfair Allocation Gap
+             * @default 1
+             */
+            unfair_allocation_gap: number;
+            /**
+             * Telemetry Gap Ratio
+             * @default 0.1
+             */
+            telemetry_gap_ratio: number;
+            /**
+             * Dangerous Sequence Length
+             * @default 3
+             */
+            dangerous_sequence_length: number;
+            /**
+             * Minimum Safe Lift Capacity
+             * @default 0.5
+             */
+            minimum_safe_lift_capacity: number;
+            /**
+             * Evacuation Edges
+             * @default []
+             */
+            evacuation_edges: string[];
+            /**
+             * Unsafe Decision
+             * @default BLOCK
+             * @enum {string}
+             */
+            unsafe_decision: "BLOCK" | "ESCALATE";
+        };
+        /**
+         * MonitorOption
+         * @description Describe one available monitor configuration.
+         */
+        MonitorOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            monitor: components["schemas"]["MonitorConfig"];
+            fallback: components["schemas"]["FallbackConfig"];
+            /**
+             * Trace Level
+             * @enum {string}
+             */
+            trace_level: "debug" | "decision" | "summary";
+        };
+        /** MountainConfig */
+        MountainConfig: {
+            /** Name */
+            name: string;
+            /** Node Count */
+            node_count: number;
+            /** Edge Count */
+            edge_count: number;
+            /**
+             * Path
+             * @default configs/mountain/medium-resort.yaml
+             */
+            path: string;
+        };
+        /**
+         * MountainOption
+         * @description Describe one available mountain configuration.
+         */
+        MountainOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            mountain: components["schemas"]["MountainConfig"];
+            population: components["schemas"]["PopulationConfig"];
+            /** Topology */
+            topology: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PopulationConfig
+         * @description The size and the attribute mix of the skier population.
+         *
+         *     `ability_weights` gives the share of a beginner, an intermediate, and an advanced.
+         *     `compliance_mean` and `compliance_spread` calibrate the advice compliance.
+         */
+        PopulationConfig: {
+            /** Skier Count */
+            skier_count: number;
+            /**
+             * Arrival Window Seconds
+             * @default 3600
+             */
+            arrival_window_seconds: number;
+            /**
+             * Ability Weights
+             * @default [
+             *       0.3,
+             *       0.5,
+             *       0.2
+             *     ]
+             */
+            ability_weights: [
+                number,
+                number,
+                number
+            ];
+            /**
+             * Compliance Mean
+             * @default 0.7
+             */
+            compliance_mean: number;
+            /**
+             * Compliance Spread
+             * @default 0.2
+             */
+            compliance_spread: number;
+        };
+        /** ScenarioConfig */
+        ScenarioConfig: {
+            /** Name */
+            name: string;
+            /** Movement Tick Seconds */
+            movement_tick_seconds: number;
+            /** Control Interval Seconds */
+            control_interval_seconds: number;
+            /**
+             * @default {
+             *       "initial": {
+             *         "snowfall": 0,
+             *         "temperature": 5,
+             *         "visibility": 10000,
+             *         "wind": 0
+             *       },
+             *       "schedule": [],
+             *       "effects": {
+             *         "lift_wind_limit": 15,
+             *         "maximum_speed_loss": 0.5,
+             *         "reference_freezing": 20,
+             *         "reference_snowfall": 10,
+             *         "reference_visibility": 1000,
+             *         "reference_wind": 25
+             *       }
+             *     }
+             */
+            weather: components["schemas"]["WeatherConfig"];
+            /**
+             * @default {
+             *       "critical_density_multiplier": 1,
+             *       "warning_fraction": 0.8,
+             *       "minimum_duration_seconds": 60,
+             *       "weather_risk_weight": 1,
+             *       "stranded_after_seconds": 300
+             *     }
+             */
+            hazards: components["schemas"]["HazardConfig"];
+            /**
+             * @default {
+             *       "schedule": []
+             *     }
+             */
+            failures: components["schemas"]["FailuresConfig"];
+        };
+        /**
+         * ScenarioOption
+         * @description Describe one available scenario configuration.
+         */
+        ScenarioOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            scenario: components["schemas"]["ScenarioConfig"];
+            intervals: components["schemas"]["IntervalsConfig"];
+            /** Episode Duration Seconds */
+            episode_duration_seconds: number;
+            /** Snapshot Interval Seconds */
+            snapshot_interval_seconds: number;
         };
         /**
          * SessionCommandRequest
@@ -229,6 +588,152 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /**
+         * WeatherConfig
+         * @description The initial weather and one fixed or sampled schedule.
+         */
+        WeatherConfig: {
+            /**
+             * @default {
+             *       "wind": 0,
+             *       "visibility": 10000,
+             *       "snowfall": 0,
+             *       "temperature": 5
+             *     }
+             */
+            initial: components["schemas"]["WeatherStateConfig"];
+            /**
+             * Schedule
+             * @default []
+             */
+            schedule: components["schemas"]["WeatherScheduleEntryConfig"][];
+            sampling?: components["schemas"]["WeatherSamplingConfig"] | null;
+            /**
+             * @default {
+             *       "reference_wind": 25,
+             *       "reference_visibility": 1000,
+             *       "reference_snowfall": 10,
+             *       "reference_freezing": 20,
+             *       "maximum_speed_loss": 0.5,
+             *       "lift_wind_limit": 15
+             *     }
+             */
+            effects: components["schemas"]["WeatherEffectsConfig"];
+        };
+        /**
+         * WeatherEffectsConfig
+         * @description The reference values that scale weather effects.
+         */
+        WeatherEffectsConfig: {
+            /**
+             * Reference Wind
+             * @default 25
+             */
+            reference_wind: number;
+            /**
+             * Reference Visibility
+             * @default 1000
+             */
+            reference_visibility: number;
+            /**
+             * Reference Snowfall
+             * @default 10
+             */
+            reference_snowfall: number;
+            /**
+             * Reference Freezing
+             * @default 20
+             */
+            reference_freezing: number;
+            /**
+             * Maximum Speed Loss
+             * @default 0.5
+             */
+            maximum_speed_loss: number;
+            /**
+             * Lift Wind Limit
+             * @default 15
+             */
+            lift_wind_limit: number;
+        };
+        /**
+         * WeatherRangeConfig
+         * @description The inclusive range for one sampled weather value.
+         */
+        WeatherRangeConfig: {
+            /** Minimum */
+            minimum: number;
+            /** Maximum */
+            maximum: number;
+        };
+        /**
+         * WeatherSamplingConfig
+         * @description The rules for a sampled weather schedule.
+         */
+        WeatherSamplingConfig: {
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** Transition Count */
+            transition_count: number;
+            wind: components["schemas"]["WeatherRangeConfig"];
+            visibility: components["schemas"]["WeatherRangeConfig"];
+            snowfall: components["schemas"]["WeatherRangeConfig"];
+            temperature: components["schemas"]["WeatherRangeConfig"];
+        };
+        /**
+         * WeatherScheduleEntryConfig
+         * @description One scheduled weather change.
+         */
+        WeatherScheduleEntryConfig: {
+            /**
+             * Wind
+             * @default 0
+             */
+            wind: number;
+            /**
+             * Visibility
+             * @default 10000
+             */
+            visibility: number;
+            /**
+             * Snowfall
+             * @default 0
+             */
+            snowfall: number;
+            /**
+             * Temperature
+             * @default 5
+             */
+            temperature: number;
+            /** Start Time Seconds */
+            start_time_seconds: number;
+        };
+        /**
+         * WeatherStateConfig
+         * @description One weather vector in physical units.
+         */
+        WeatherStateConfig: {
+            /**
+             * Wind
+             * @default 0
+             */
+            wind: number;
+            /**
+             * Visibility
+             * @default 10000
+             */
+            visibility: number;
+            /**
+             * Snowfall
+             * @default 0
+             */
+            snowfall: number;
+            /**
+             * Temperature
+             * @default 5
+             */
+            temperature: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -275,9 +780,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ConfigOptionsResponse"];
                 };
             };
         };
