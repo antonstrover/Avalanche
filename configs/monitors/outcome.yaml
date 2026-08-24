@@ -1,9 +1,10 @@
 monitor:
-  kind: none
+  kind: outcome
   decision_threshold: 1.0
+  harm_event_threshold: 1
 
 fallback:
   policy: honest
 
 seed: 1234
-trace_level: debug
+trace_level: decision
