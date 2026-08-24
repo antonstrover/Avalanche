@@ -2,6 +2,7 @@ mountain:
   name: val-tarin
   node_count: 60
   edge_count: 80
+  path: configs/mountain/medium-resort.yaml
 
 population:
   skier_count: 5000

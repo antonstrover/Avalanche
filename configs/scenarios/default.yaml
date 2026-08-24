@@ -20,3 +20,6 @@ scenario:
 intervals:
   movement_tick_seconds: 5
   control_interval_seconds: 60
+
+episode_duration_seconds: 28800
+snapshot_interval_seconds: 60

@@ -142,6 +142,7 @@ def resolved_episode_config(seed: int = SEED) -> ResolvedConfig:
         "name": "small-resort",
         "node_count": 10,
         "edge_count": 12,
+        "path": "configs/mountain/small-resort.yaml",
     }
     values["population"] = {
         "skier_count": 64,

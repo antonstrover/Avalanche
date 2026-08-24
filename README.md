@@ -13,7 +13,8 @@ The simulator moves up to 10,000 skiers across Val-Tarin.
 The simulator keeps the skier state in NumPy arrays.
 The application draws the same population in 3D.
 
-The controllers, the monitors, and the experiments do not exist yet.
+The honest controller and the single-run workflow now exist.
+The monitors and the experiment sweeps do not exist yet.
 
 ### The simulator
 
@@ -50,7 +51,7 @@ Hazard conditions accumulate dangerous density before they record true harm.
 The Gymnasium adapter validates each action before it changes the simulator.
 The observation uses fixed arrays for the resort, the scenarios, and the action masks.
 The action controls route weights, pistes, lift capacity, crowd messages, and telemetry.
-Each environment step reports the six named reward parts and the cumulative metrics.
+Each environment step reports the reward parts and the versioned online metrics.
 Seeded episode tests compare periodic checksums and the final named metrics.
 
 ### The application
@@ -129,8 +130,8 @@ uv run avalanche simulate configs/mountain/default.yaml \
 ```
 
 `simulate` writes a run directory under `outputs/`.
-The episode is a placeholder.
-The command does not run the simulator yet.
+The command runs one resolved episode.
+It writes the events, the metrics, the snapshots, and the final summary.
 
 ### The simulator, from Python
 

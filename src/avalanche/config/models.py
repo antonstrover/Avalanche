@@ -13,6 +13,7 @@ class MountainConfig(StrictModel):
     name: str
     node_count: int
     edge_count: int
+    path: str = "configs/mountain/medium-resort.yaml"
 
 
 class PopulationConfig(StrictModel):
@@ -197,3 +198,5 @@ class ResolvedConfig(StrictModel):
     fallback: FallbackConfig
     seed: int
     trace_level: Literal["debug", "decision", "summary"]
+    episode_duration_seconds: float = Field(default=3_600.0, gt=0.0)
+    snapshot_interval_seconds: float = Field(default=60.0, gt=0.0)

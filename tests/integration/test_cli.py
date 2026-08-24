@@ -30,17 +30,20 @@ def test_validate_config_rejects_a_malformed_config(tmp_path):
     assert _run(["validate-config", *SAMPLE_ARGS, str(bad_file)]) == 1
 
 
-def test_simulate_makes_a_run_directory_with_a_placeholder_episode(
-    tmp_path, monkeypatch
-):
+def test_simulate_runs_an_episode_in_the_run_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "avalanche.cli.make_run_dir",
         lambda resolved: (tmp_path / "run").resolve(),
     )
     (tmp_path / "run").mkdir()
+    calls = []
+    monkeypatch.setattr(
+        "avalanche.cli.run_episode",
+        lambda resolved, run_dir: calls.append((resolved, run_dir)),
+    )
 
     assert _run(["simulate", *SAMPLE_ARGS]) == 0
-    assert (tmp_path / "run" / "episode.placeholder.txt").exists()
+    assert calls[0][1] == (tmp_path / "run").resolve()
 
 
 def test_sweep_and_analyse_report_not_yet_implemented():
