@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { mergeTimeline } from "../src/features/timeline";
@@ -6,9 +6,36 @@ import type { TimelineEvent } from "../src/workers/live-frame";
 import resort from "../src/mountain/resort.json";
 
 // The scene needs WebGL. The browser test covers it, so this test replaces it.
-vi.mock("../src/mountain/MountainScene", () => ({
-    MountainScene: () => null,
-}));
+vi.mock("../src/mountain/MountainScene", async () => {
+    const { INITIAL_DISPLAY } = await import("../src/mountain/conditions");
+    return {
+        MountainScene: ({
+            onLiveFrame,
+        }: {
+            onLiveFrame: (count: number, display: typeof INITIAL_DISPLAY) => void;
+        }) => (
+            <button
+                type="button"
+                onClick={() => onLiveFrame(5000, INITIAL_DISPLAY)}
+            >
+                Emit a live frame
+            </button>
+        ),
+    };
+});
+
+const liveSession = {
+    session_id: "session-one",
+    status: "running",
+    skier_count: 5000,
+    simulation_speed: 20,
+    frame_interval_ms: 250,
+    topology_version: "one",
+    demo_failure: false,
+    demo_monitor: false,
+    demo_approval: false,
+    resolved_config: {},
+};
 
 describe("App shell", () => {
     beforeEach(() => {
@@ -39,6 +66,10 @@ describe("App shell", () => {
                         monitor: { kind: "none" },
                         seed: 0,
                     };
+                } else if (url.endsWith("/api/sessions")) {
+                    body = liveSession;
+                } else if (url.endsWith("/commands")) {
+                    body = { ...liveSession, status: "paused" };
                 }
                 return Promise.resolve({
                     ok: true,
@@ -99,5 +130,23 @@ describe("App shell", () => {
         };
 
         expect(mergeTimeline([event], [event])).toEqual([event]);
+    });
+
+    it("keeps the session paused when a queued frame arrives", async () => {
+        render(<App />);
+
+        const start = screen.getByRole("button", { name: "Start live session" });
+        await waitFor(() => expect(start).toBeEnabled());
+        fireEvent.click(start);
+        fireEvent.click(await screen.findByRole("button", { name: "Emit a live frame" }));
+        await waitFor(() => expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled());
+
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        await waitFor(() => expect(screen.getByTestId("live-status")).toHaveTextContent("paused"));
+        fireEvent.click(screen.getByRole("button", { name: "Emit a live frame" }));
+
+        expect(screen.getByTestId("live-status")).toHaveTextContent("paused");
+        expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
     });
 });
