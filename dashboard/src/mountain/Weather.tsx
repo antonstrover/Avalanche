@@ -2,11 +2,10 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { BufferAttribute, BufferGeometry, type Points } from "three";
 import { reducedMotion } from "./conditions";
-import { centre } from "./resort";
+import { centre, planExtent } from "./resort";
 import type { WeatherState } from "../workers/live-frame";
 
 const FLAKE_COUNT = 1400;
-const FIELD_SIZE = 240;
 const FIELD_HEIGHT = 110;
 const FOG_COLOUR = "#c7d8ea";
 
@@ -22,10 +21,10 @@ export function Weather({ weather }: { weather: WeatherState }) {
     const geometry = useMemo(() => {
         const positions = new Float32Array(FLAKE_COUNT * 3);
         for (let index = 0; index < FLAKE_COUNT; index += 1) {
-            positions[index * 3] = centre.x + (pseudoRandom(index) - 0.5) * FIELD_SIZE;
+            positions[index * 3] = centre.x + (pseudoRandom(index) - 0.5) * planExtent;
             positions[index * 3 + 1] = pseudoRandom(index + FLAKE_COUNT) * FIELD_HEIGHT;
             positions[index * 3 + 2] =
-                centre.z + (pseudoRandom(index + 2 * FLAKE_COUNT) - 0.5) * FIELD_SIZE;
+                centre.z + (pseudoRandom(index + 2 * FLAKE_COUNT) - 0.5) * planExtent;
         }
         const buffer = new BufferGeometry();
         buffer.setAttribute("position", new BufferAttribute(positions, 3));
@@ -42,7 +41,7 @@ export function Weather({ weather }: { weather: WeatherState }) {
             let height = position.getY(index) - delta * (2 + 3 * weather.snowfall);
             let across = position.getX(index) + delta * weather.wind * 0.4;
             if (height < 0) height += FIELD_HEIGHT;
-            if (across > centre.x + FIELD_SIZE / 2) across -= FIELD_SIZE;
+            if (across > centre.x + planExtent / 2) across -= planExtent;
             position.setY(index, height);
             position.setX(index, across);
         }
