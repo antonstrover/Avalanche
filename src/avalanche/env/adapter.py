@@ -441,6 +441,7 @@ def _apply_route_weights(sim: MountainSim, weights: np.ndarray) -> None:
     """Turn non-zero group weights into grouped route advice."""
     topology = sim.topology
     assert topology is not None
+    sim.state.advice_edge.fill(NO_EDGE)
     closed = effective_closed(sim.state)
     for node in range(topology.node_count):
         outgoing = topology.edges_from(node)

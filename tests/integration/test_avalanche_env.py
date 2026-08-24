@@ -16,6 +16,7 @@ from avalanche.env import (
     neutral_action,
 )
 from avalanche.sim import EDGE_TYPE_NAMES, population_from_starts
+from avalanche.sim.routes import NO_EDGE
 from avalanche.sim.skier import LocationKind
 
 FIXTURE = (
@@ -146,6 +147,19 @@ def test_an_executed_action_changes_each_supported_control():
     reopen["piste_requests"][closed_piste] = PISTE_OPEN
     env.step(reopen)
     assert not env.sim.state.closed[closed_piste]
+
+
+def test_a_neutral_action_clears_old_route_advice():
+    env = make_env(control_interval_seconds=5.0, episode_duration_seconds=15.0)
+    env.reset(seed=5)
+    source = env.topology.node_index["base_village"]
+    route_edge = int(env.topology.edges_from(source)[0])
+    advised = neutral_action(env.topology)
+    advised["route_weights"][0, route_edge] = 1.0
+    env.step(advised)
+    assert env.sim.state.advice_edge[source, 0] == route_edge
+    env.step(neutral_action(env.topology))
+    assert env.sim.state.advice_edge[source, 0] == NO_EDGE
 
 
 def test_an_invalid_action_cannot_reach_the_simulator():

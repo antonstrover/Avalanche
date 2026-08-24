@@ -1,12 +1,16 @@
 """Build configured controllers and fallback controllers."""
 
 from avalanche.config.models import ControllerConfig
+from avalanche.control import Controller
 from avalanche.controllers.honest import HonestController, HonestControllerConfig
+from avalanche.controllers.no_control import NoControlController
 from avalanche.sim.topology import Topology
 
 
-def build_controller(config: ControllerConfig, topology: Topology) -> HonestController:
+def build_controller(config: ControllerConfig, topology: Topology) -> Controller:
     """Build one configured controller."""
+    if config.kind == "none":
+        return NoControlController(topology)
     if config.kind != "honest":
         raise ValueError(f"the controller kind {config.kind!r} is unknown")
     return HonestController(

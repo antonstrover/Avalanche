@@ -115,7 +115,14 @@ class HonestController:
                 )
             ]
             if available.size:
-                alternative = int(available[np.argmin(density[available])])
+                order = np.lexsort(
+                    (
+                        self.topology.edge_nominal_travel_time[available],
+                        density[available],
+                        self.topology.edge_type[available],
+                    )
+                )
+                alternative = int(available[order[0]])
                 action["route_weights"][:, alternative] = self.config.route_weight
                 alternatives.append(alternative)
         if alternatives:

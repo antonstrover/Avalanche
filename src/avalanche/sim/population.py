@@ -44,6 +44,7 @@ class SkierArrays:
     status: np.ndarray
     wait_time: np.ndarray
     journey_time: np.ndarray
+    blocked_time: np.ndarray
     arrival_time: np.ndarray
     queue_ticket: np.ndarray
     arrived: int = 0
@@ -71,6 +72,7 @@ class SkierArrays:
             ("status", self.status),
             ("wait_time", self.wait_time),
             ("journey_time", self.journey_time),
+            ("blocked_time", self.blocked_time),
             ("arrival_time", self.arrival_time),
             ("queue_ticket", self.queue_ticket),
         )
@@ -90,6 +92,7 @@ def empty_population(count: int) -> SkierArrays:
         status=np.full(count, Status.ACTIVE, dtype=np.int8),
         wait_time=np.zeros(count, dtype=np.float64),
         journey_time=np.zeros(count, dtype=np.float64),
+        blocked_time=np.zeros(count, dtype=np.float64),
         arrival_time=np.zeros(count, dtype=np.float64),
         queue_ticket=np.full(count, -1, dtype=np.int64),
         arrived=count,
