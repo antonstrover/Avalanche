@@ -21,6 +21,7 @@ import {
     type LayerVisibility,
 } from "./layers";
 import { edgeTelemetryView } from "./telemetryView";
+import { InterventionHighlights, RouteOverlay } from "./RouteOverlay";
 
 export function LayerToggles({
     layers,
@@ -64,6 +65,7 @@ export function MountainScene({
     onLiveError,
     model = defaultResortModel,
     showTrueState,
+    onDecisionFocus = () => undefined,
 }: {
     session: LiveSession | null;
     display: DisplayState;
@@ -71,6 +73,7 @@ export function MountainScene({
     onLiveError: () => void;
     model?: ResortModel;
     showTrueState: boolean;
+    onDecisionFocus?: () => void;
 }) {
     const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
@@ -142,8 +145,17 @@ export function MountainScene({
                     <group
                         name="recommendations-layer"
                         visible={visibleLayers.recommendations}
-                    />
-                    <group name="selection-layer" visible={visibleLayers.selection} />
+                    >
+                        <RouteOverlay decision={display.decision} model={model} />
+                    </group>
+                    <group name="selection-layer" visible={visibleLayers.selection}>
+                        <InterventionHighlights
+                            decision={display.decision}
+                            model={model}
+                            onSelect={setSelection}
+                            onFocus={onDecisionFocus}
+                        />
+                    </group>
                     <OrbitControls
                         ref={controls}
                         target={model.cameraTarget}
@@ -166,6 +178,12 @@ export function MountainScene({
                         setVisibleLayers((current) => ({ ...current, [name]: visible }))
                     }
                 />
+                {display.decision && (
+                    <div className="route-legend" aria-label="Route overlay legend">
+                        <span><i className="proposed-route" />Proposed route</span>
+                        <span><i className="executed-route" />Executed route</span>
+                    </div>
+                )}
             </div>
             <Timeline events={display.timeline} weather={display.weather} />
         </section>

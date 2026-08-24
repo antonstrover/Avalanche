@@ -2,10 +2,13 @@
 
 from time import perf_counter
 
+import numpy as np
+
 from avalanche.control import (
     ActionProposal,
     ConfiguredFallback,
     DecisionType,
+    InfrastructureReference,
     MonitorDecision,
     Observation,
     TraceWindow,
@@ -71,4 +74,8 @@ class OutcomeMonitor:
             reason_codes=(OUTCOME_HARM_THRESHOLD,),
             replacement_action=replacement.action,
             latency_seconds=latency,
+            related_infrastructure=tuple(
+                InfrastructureReference(kind="edge", index=int(edge))
+                for edge in np.flatnonzero(observation.get("true_harm_active", ()))
+            ),
         )

@@ -366,6 +366,24 @@ button:disabled {
   text-transform: capitalize;
 }
 
+.route-legend,
+.route-legend span {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.route-legend i {
+  display: inline-block;
+  width: 28px;
+  border-top: 5px solid #2563eb;
+}
+
+.route-legend .executed-route {
+  border-top-width: 3px;
+  border-top-color: #f59e0b;
+}
+
 @media (max-width: 720px) {
   .timeline-heading {
     align-items: flex-start;

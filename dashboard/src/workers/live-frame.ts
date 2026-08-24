@@ -96,6 +96,12 @@ export type LiveMonitorDecision = {
     reason_codes: string[];
     replacement_action: LiveAction | null;
     latency_seconds: number;
+    related_infrastructure: InfrastructureReference[];
+};
+
+export type InfrastructureReference = {
+    kind: "edge" | "node";
+    index: number;
 };
 
 export type TelemetryState = {
@@ -224,6 +230,10 @@ function liveDecision(value: unknown): LiveDecision | null {
         if (!Array.isArray(item.reason_codes) || !item.reason_codes.every((code) => typeof code === "string")) {
             throw new Error("the monitor reason codes are invalid");
         }
+        const references = item.related_infrastructure ?? [];
+        if (!Array.isArray(references)) {
+            throw new Error("the monitor infrastructure is invalid");
+        }
         monitor = {
             risk_score: number(item.risk_score, "monitor risk"),
             decision: kind,
@@ -233,6 +243,16 @@ function liveDecision(value: unknown): LiveDecision | null {
                     ? null
                     : liveAction(item.replacement_action),
             latency_seconds: number(item.latency_seconds, "monitor latency"),
+            related_infrastructure: references.map((value) => {
+                const reference = record(value, "monitor infrastructure");
+                if (reference.kind !== "edge" && reference.kind !== "node") {
+                    throw new Error("the infrastructure kind is invalid");
+                }
+                return {
+                    kind: reference.kind,
+                    index: number(reference.index, "infrastructure index"),
+                };
+            }),
         };
     }
     const fallback = decision.fallback_source;

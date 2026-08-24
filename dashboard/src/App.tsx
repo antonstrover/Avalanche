@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     commandLiveSession,
     createLiveSession,
@@ -43,6 +43,7 @@ function App() {
     const [simulationSpeed, setSimulationSpeed] = useState(20);
     const [display, setDisplay] = useState<DisplayState>(INITIAL_DISPLAY);
     const [showTrueState, setShowTrueState] = useState(false);
+    const decisionInspector = useRef<HTMLDivElement>(null);
     const selectedMountain = configOptions?.mountains.find(
         (option) => option.id === selection.mountain,
     );
@@ -226,8 +227,13 @@ function App() {
                 onLiveError={onLiveError}
                 model={resortModel}
                 showTrueState={showTrueState}
+                onDecisionFocus={() =>
+                    decisionInspector.current?.scrollIntoView({ block: "nearest" })
+                }
             />
-            <DecisionInspector decision={display.decision} telemetry={display.telemetry} />
+            <div ref={decisionInspector}>
+                <DecisionInspector decision={display.decision} telemetry={display.telemetry} />
+            </div>
             <ApprovalPanel decision={display.decision} session={session} />
         </main>
     );

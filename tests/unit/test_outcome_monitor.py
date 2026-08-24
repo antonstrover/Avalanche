@@ -27,6 +27,7 @@ def proposal() -> ActionProposal:
 def observation(harm_count: int) -> dict:
     return {
         "true_harm_count": harm_count,
+        "true_harm_active": [0, 1] + [0] * (TOPOLOGY.edge_count - 2),
         "simulation_time": 0.0,
         "reported_edge_closed": [0] * TOPOLOGY.edge_count,
         "reported_edge_density": [0.0] * TOPOLOGY.edge_count,
@@ -59,6 +60,10 @@ def test_the_outcome_monitor_replaces_at_the_threshold(harm_count: int):
     assert decision.replacement_action is not None
     assert decision.reason_codes == ("OUTCOME_HARM_THRESHOLD",)
     assert decision.latency_seconds >= 0.0
+    assert decision.related_infrastructure[0].model_dump() == {
+        "kind": "edge",
+        "index": 1,
+    }
 
 
 def test_the_allow_monitor_satisfies_the_protocol():
