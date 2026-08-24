@@ -20,9 +20,7 @@ from avalanche.env.adapter import (
     AvalancheEnv,
     AvalancheEnvConfig,
     action_intervention_cost,
-    apply_executed_action,
     create_action_proposal,
-    execute_action_proposal,
 )
 from avalanche.env.observations import (
     INCIDENT_KIND_NAMES,
@@ -59,7 +57,6 @@ __all__ = [
     "RewardTransition",
     "RewardWeights",
     "apply_action_masks",
-    "apply_executed_action",
     "action_intervention_cost",
     "build_action_mask_space",
     "build_action_masks",
@@ -68,7 +65,6 @@ __all__ = [
     "build_observation_space",
     "calculate_reward",
     "create_action_proposal",
-    "execute_action_proposal",
     "neutral_action",
     "sample_valid_action",
     "validate_action",

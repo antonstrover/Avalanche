@@ -13,9 +13,14 @@ from gymnasium import spaces
 
 from avalanche.control import (
     ActionProposal,
+    AdjudicationResult,
+    Adjudicator,
+    ConfiguredFallback,
     ExecutedAction,
-    ImmutableAction,
+    Monitor,
+    build_monitor_observation,
     freeze_action,
+    thaw_action,
 )
 from avalanche.env.actions import (
     PISTE_CLOSE,
@@ -38,6 +43,7 @@ from avalanche.env.reward import (
     RewardWeights,
     calculate_reward,
 )
+from avalanche.monitors.outcome import AllowMonitor
 from avalanche.scenarios.failures import refresh_reported_telemetry
 from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
@@ -160,10 +166,33 @@ class AvalancheEnv(gym.Env):
             self.topology, self.config.observation
         )
         self.last_proposal: ActionProposal | None = None
+        self.last_adjudication: AdjudicationResult | None = None
         self.last_executed_action: ExecutedAction | None = None
+        self._control_history: list[dict[str, Any]] = []
         self._cumulative_intervention_cost = 0.0
         self._seed = 0
         self._ended = True
+        self.adjudicator = self._make_adjudicator(AllowMonitor(), None)
+
+    def configure_adjudicator(
+        self, monitor: Monitor, fallback: ConfiguredFallback | None
+    ) -> None:
+        """Install the monitor boundary before an environment reset."""
+        if not self._ended:
+            raise RuntimeError("configure the adjudicator before the environment reset")
+        self.adjudicator = self._make_adjudicator(monitor, fallback)
+
+    def _make_adjudicator(
+        self, monitor: Monitor, fallback: ConfiguredFallback | None
+    ) -> Adjudicator:
+        """Build a validator against the current environment masks."""
+        return Adjudicator(
+            monitor,
+            lambda action: validate_action(
+                thaw_action(action), self.action_space, self._action_masks()
+            ),
+            fallback,
+        )
 
     def reset(
         self,
@@ -196,10 +225,13 @@ class AvalancheEnv(gym.Env):
         self._seed = run_seed
         self._ended = False
         self.last_proposal = None
+        self.last_adjudication = None
         self.last_executed_action = None
+        self._control_history.clear()
         self._cumulative_intervention_cost = 0.0
         self.action_space.seed(run_seed)
         self.observation_space.seed(run_seed)
+        self.adjudicator.reset(run_seed)
         observation = self._observation()
         return observation, self._base_info(observation)
 
@@ -225,14 +257,11 @@ class AvalancheEnv(gym.Env):
         if proposal.simulation_time != self.sim.simulation_time:
             raise ValueError("the proposal time must match the simulation time")
 
-        masks = self._action_masks()
         before = self._reward_snapshot()
         before_checksum = self.sim.state_checksum()
-        executed = execute_action_proposal(proposal, self.action_space, masks)
+        adjudication = self.execute_proposal(proposal)
+        executed = adjudication.executed_action
         intervention_cost = action_intervention_cost(executed)
-        apply_executed_action(self.sim, executed)
-        self.last_proposal = proposal
-        self.last_executed_action = executed
 
         for _ in range(self.config.movement_ticks_per_step):
             self.sim.tick()
@@ -256,11 +285,42 @@ class AvalancheEnv(gym.Env):
                     "after": self.sim.state_checksum(),
                 },
                 "action_proposal": proposal,
+                "monitor_decision": adjudication.decision,
+                "adjudication": adjudication,
                 "executed_action": executed,
                 "current_intervention_cost": intervention_cost,
             }
         )
         return observation, reward_result.scalar, terminated, truncated, info
+
+    def controller_observation(self) -> Observation:
+        """Return the isolated reported state for one controller."""
+        observation = self._observation()
+        observation["simulation_time"] = self.sim.simulation_time
+        return observation
+
+    def execute_proposal(self, proposal: ActionProposal) -> AdjudicationResult:
+        """Adjudicate and apply one proposal without movement ticks."""
+        observation = self._observation()
+        monitor_observation = build_monitor_observation(observation, self.sim)
+        result = self.adjudicator.adjudicate(
+            monitor_observation,
+            proposal,
+            tuple(self._control_history),
+            simulation_time=self.sim.simulation_time,
+        )
+        _apply_executed_action(self.sim, result.executed_action)
+        self.last_proposal = proposal
+        self.last_adjudication = result
+        self.last_executed_action = result.executed_action
+        self._control_history.append(
+            {
+                "proposal": proposal.model_dump(mode="json"),
+                "decision": result.decision.model_dump(mode="json"),
+            }
+        )
+        del self._control_history[:-32]
+        return result
 
     def _action_masks(self) -> ActionMasks:
         """Return the current controllable infrastructure masks."""
@@ -358,28 +418,12 @@ def create_action_proposal(
     )
 
 
-def execute_action_proposal(
-    proposal: ActionProposal,
-    action_space: spaces.Dict,
-    masks: ActionMasks,
-) -> ExecutedAction:
-    """Validate one immutable proposal and create its executed action."""
-    if not isinstance(proposal.action, ImmutableAction):
-        raise TypeError("the execution boundary requires an immutable action")
-    validate_action(_mutable_action(proposal.action), action_space, masks)
-    return ExecutedAction(
-        controller_id=proposal.controller_id,
-        simulation_time=proposal.simulation_time,
-        action=proposal.action,
-    )
-
-
-def apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
+def _apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
     """Apply one validated action to the simulator state."""
     topology = sim.topology
     if topology is None:
         raise RuntimeError("reset the simulator before an executed action")
-    action = _mutable_action(executed.action)
+    action = thaw_action(executed.action)
     requests = action["piste_requests"]
     sim.state.closed[requests == PISTE_CLOSE] = True
     sim.state.closed[requests == PISTE_OPEN] = False
@@ -401,7 +445,7 @@ def apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
 
 def action_intervention_cost(executed: ExecutedAction) -> float:
     """Return the non-negative magnitude of one executed command."""
-    action = _mutable_action(executed.action)
+    action = thaw_action(executed.action)
     route_cost = np.sum(np.abs(action["route_weights"]), dtype=np.float64)
     piste_cost = np.count_nonzero(action["piste_requests"])
     capacity_enabled = action["lift_capacity_enabled"].astype(bool)
@@ -418,23 +462,6 @@ def action_intervention_cost(executed: ExecutedAction) -> float:
     return float(
         route_cost + piste_cost + capacity_cost + message_cost + telemetry_cost
     )
-
-
-def _mutable_action(action: ImmutableAction) -> Action:
-    """Return isolated arrays from one immutable action."""
-    return {
-        "route_weights": np.asarray(action.route_weights, dtype=np.float32),
-        "piste_requests": np.asarray(action.piste_requests, dtype=np.int64),
-        "lift_capacity": np.asarray(action.lift_capacity, dtype=np.float32),
-        "lift_capacity_enabled": np.asarray(
-            action.lift_capacity_enabled, dtype=np.int8
-        ),
-        "crowd_messages": np.asarray(action.crowd_messages, dtype=np.float32),
-        "telemetry_overrides": np.asarray(action.telemetry_overrides, dtype=np.float32),
-        "telemetry_override_enabled": np.asarray(
-            action.telemetry_override_enabled, dtype=np.int8
-        ),
-    }
 
 
 def _apply_route_weights(sim: MountainSim, weights: np.ndarray) -> None:
