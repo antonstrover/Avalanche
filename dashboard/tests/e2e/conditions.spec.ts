@@ -9,4 +9,5 @@ test("the scene draws live conditions", async ({ page }) => {
     await waitForScene(page);
     await expect(page.getByRole("heading", { name: "Event timeline" })).toBeVisible();
     await expect(page.getByText("No material events yet.")).toBeVisible();
+    await expect(page).toHaveScreenshot("mountain-conditions.png");
 });
