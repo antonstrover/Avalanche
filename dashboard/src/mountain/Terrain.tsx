@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { BufferAttribute, Color, PlaneGeometry, Vector2, Vector3 } from "three";
-import { centre, nodePosition, resort, terrainSize } from "./resort";
+import { centre, meanNodeSpacing, nodePosition, resort, terrainSize } from "./resort";
 
 const SEGMENTS = 72;
 const CLEARANCE = 1.2;
@@ -45,7 +45,8 @@ function buildSurface(points: Vector3[]) {
         let weightSum = 0;
         let residualSum = 0;
         points.forEach((point, index) => {
-            const weight = 1 / ((x - point.x) ** 2 + (z - point.z) ** 2 + 400);
+            const weight =
+                1 / ((x - point.x) ** 2 + (z - point.z) ** 2 + meanNodeSpacing ** 2);
             weightSum += weight;
             residualSum += weight * residuals[index];
         });

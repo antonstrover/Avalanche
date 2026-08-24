@@ -104,6 +104,21 @@ export const centre = new Vector3(
     ((planBounds.minY + planBounds.maxY) / 2) * PLAN_SCALE,
 );
 
+export const meanNodeSpacing =
+    resort.nodes.reduce((sum, node, index) => {
+        const position = nodePosition(node);
+        const nearest = resort.nodes.reduce((distance, other, otherIndex) => {
+            if (index === otherIndex) return distance;
+            const otherPosition = nodePosition(other);
+            const planDistance = Math.hypot(
+                position.x - otherPosition.x,
+                position.z - otherPosition.z,
+            );
+            return Math.min(distance, planDistance);
+        }, Number.POSITIVE_INFINITY);
+        return sum + nearest;
+    }, 0) / resort.nodes.length;
+
 const sceneHeight = (Math.max(...resort.nodes.map((node) => node.elevation)) - BASE_ELEVATION)
     * HEIGHT_SCALE;
 

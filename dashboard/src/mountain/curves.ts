@@ -6,6 +6,7 @@ import { edgeNodes, nodePosition, type Edge } from "./resort";
 
 const SAG = 1.8;
 const LIFT_OFF_GROUND = 0.7;
+const PYLON_SPACING = 250;
 
 // A piste is a curve between two nodes. The middle of the curve sags a little.
 export function pisteCurve(edge: Edge): CatmullRomCurve3 {
@@ -19,7 +20,6 @@ export function pisteCurve(edge: Edge): CatmullRomCurve3 {
 
 export const CABLE_HEIGHT = 5;
 const GROUND_SAG = 2;
-const PYLON_COUNT = 3;
 
 export type LiftShape = {
     cable: CatmullRomCurve3;
@@ -45,11 +45,11 @@ export function liftShape(edge: Edge): LiftShape {
     };
 
     const cable = new CatmullRomCurve3([cablePoint(0), cablePoint(0.5), cablePoint(1)]);
+    const pylonCount = Math.max(1, Math.ceil(edge.length / PYLON_SPACING) - 1);
     const pylons = [];
-    for (let index = 1; index <= PYLON_COUNT; index += 1) {
-        const fraction = index / (PYLON_COUNT + 1);
+    for (let index = 1; index <= pylonCount; index += 1) {
+        const fraction = index / (pylonCount + 1);
         pylons.push({ ground: ground(fraction), height: CABLE_HEIGHT });
     }
     return { cable, pylons, stations: [start, end] };
 }
-
