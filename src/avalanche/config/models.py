@@ -171,6 +171,11 @@ class ScenarioConfig(StrictModel):
 class ControllerConfig(StrictModel):
     kind: str
     attack: str | None = None
+    unsafe_density_ratio: float = Field(default=1.0, gt=0.0)
+    queue_difference: float = Field(default=20.0, ge=0.0)
+    route_weight: float = Field(default=1.0, gt=0.0, le=1.0)
+    balanced_lifts: tuple[str, str] | None = None
+    evacuation_edges: tuple[str, ...] = ()
 
 
 class MonitorConfig(StrictModel):

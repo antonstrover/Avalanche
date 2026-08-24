@@ -1,4 +1,18 @@
-from avalanche.control import ActionProposal, Controller, Monitor, MonitorDecision
+from pathlib import Path
+
+from avalanche.control import (
+    ActionProposal,
+    Controller,
+    Monitor,
+    MonitorDecision,
+    freeze_action,
+)
+from avalanche.env import neutral_action
+from avalanche.sim import load_topology
+
+FIXTURE = (
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+)
 
 
 class StubController:
@@ -6,10 +20,11 @@ class StubController:
         self.seed = seed
 
     def propose(self, observation: dict) -> ActionProposal:
+        topology = load_topology(FIXTURE)
         return ActionProposal(
             controller_id="stub",
             simulation_time=0.0,
-            action={},
+            action=freeze_action(neutral_action(topology)),
             explanation="no-op",
         )
 

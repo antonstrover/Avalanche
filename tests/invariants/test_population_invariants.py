@@ -8,14 +8,16 @@ import numpy as np
 import pytest
 
 from avalanche.config.models import PopulationConfig
-from avalanche.control import ActionProposal
-from avalanche.sim import MountainSim
+from avalanche.control import ActionProposal, freeze_action
+from avalanche.env import neutral_action
+from avalanche.sim import MountainSim, load_topology
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
 )
 SEEDS = tuple(range(20))
 TICK_COUNT = 24
+TOPOLOGY = load_topology(FIXTURE)
 
 
 class MutatingController:
@@ -37,7 +39,7 @@ class MutatingController:
         return ActionProposal(
             controller_id="mutating",
             simulation_time=0.0,
-            action={},
+            action=freeze_action(neutral_action(TOPOLOGY)),
             explanation="Try to change the observation.",
         )
 
