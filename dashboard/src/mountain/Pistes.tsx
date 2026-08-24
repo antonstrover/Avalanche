@@ -2,9 +2,11 @@ import { useMemo } from "react";
 import { pisteCurve } from "./curves";
 import { defaultResortModel, difficultyColour, type ResortModel } from "./resort";
 import type { Selection } from "./selection";
+import { densityColour } from "./telemetryView";
 
 type Props = {
     closedEdges: ReadonlySet<number>;
+    density: readonly number[];
     selection: Selection;
     onSelect: (selection: Selection) => void;
     model?: ResortModel;
@@ -12,6 +14,7 @@ type Props = {
 
 export function Pistes({
     closedEdges,
+    density,
     selection,
     onSelect,
     model = defaultResortModel,
@@ -42,7 +45,10 @@ export function Pistes({
                                     ? "#ffb020"
                                     : closed
                                       ? "#6b2230"
-                                      : difficultyColour[item.edge.difficulty]
+                                      : densityColour(
+                                            difficultyColour[item.edge.difficulty],
+                                            density[item.index] ?? 0,
+                                        )
                             }
                             opacity={closed ? 0.55 : 1}
                             transparent={closed}
