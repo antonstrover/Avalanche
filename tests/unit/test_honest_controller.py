@@ -57,9 +57,8 @@ def test_the_controller_satisfies_the_protocol():
 def test_the_controller_discourages_difficult_pistes_for_beginners():
     proposal = controller().propose(observation())
     values = proposal.action["route_weights"][0]
-    difficult = (
-        (TOPOLOGY.edge_type == EDGE_TYPE_NAMES.index("piste"))
-        & (TOPOLOGY.edge_difficulty >= DIFFICULTY_NAMES.index("red"))
+    difficult = (TOPOLOGY.edge_type == EDGE_TYPE_NAMES.index("piste")) & (
+        TOPOLOGY.edge_difficulty >= DIFFICULTY_NAMES.index("red")
     )
     assert np.all(values[difficult] == -1.0)
 
