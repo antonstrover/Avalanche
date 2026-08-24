@@ -4,7 +4,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from avalanche.control import ActionProposal, Observation
+from avalanche.control import (
+    ActionProposal,
+    Observation,
+    freeze_action,
+    freeze_evidence,
+)
 from avalanche.env.actions import PISTE_CLOSE, neutral_action
 from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES, Topology
@@ -136,12 +141,14 @@ class HonestController:
         return ActionProposal(
             controller_id="honest",
             simulation_time=float(observation.get("simulation_time", 0.0)),
-            action=action,
+            action=freeze_action(action),
             explanation=explanation,
-            evidence={
-                "rules": tuple(active_rules),
-                "targets": targets,
-            },
+            evidence=freeze_evidence(
+                {
+                    "rules": tuple(active_rules),
+                    "targets": targets,
+                }
+            ),
         )
 
     def _edge_index(self, reference: str) -> int:

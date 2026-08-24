@@ -11,7 +11,12 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from avalanche.control import ActionProposal, ExecutedAction, ImmutableAction
+from avalanche.control import (
+    ActionProposal,
+    ExecutedAction,
+    ImmutableAction,
+    freeze_action,
+)
 from avalanche.env.actions import (
     PISTE_CLOSE,
     PISTE_OPEN,
@@ -201,18 +206,27 @@ class AvalancheEnv(gym.Env):
         self, action: Action
     ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
         """Validate one action and run one complete control interval."""
-        if self._ended:
-            raise RuntimeError("reset the environment before the next step")
-
         masks = self._action_masks()
-        before = self._reward_snapshot()
-        before_checksum = self.sim.state_checksum()
         proposal = create_action_proposal(
             action,
             self.action_space,
             masks,
             simulation_time=self.sim.simulation_time,
         )
+        return self.step_proposal(proposal)
+
+    def step_proposal(
+        self, proposal: ActionProposal
+    ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
+        """Validate one controller proposal and run one control interval."""
+        if self._ended:
+            raise RuntimeError("reset the environment before the next step")
+        if proposal.simulation_time != self.sim.simulation_time:
+            raise ValueError("the proposal time must match the simulation time")
+
+        masks = self._action_masks()
+        before = self._reward_snapshot()
+        before_checksum = self.sim.state_checksum()
         executed = execute_action_proposal(proposal, self.action_space, masks)
         intervention_cost = action_intervention_cost(executed)
         apply_executed_action(self.sim, executed)
@@ -350,29 +364,10 @@ def create_action_proposal(
 ) -> ActionProposal:
     """Validate and freeze one controller action into a proposal."""
     validate_action(action, action_space, masks)
-    immutable = ImmutableAction(
-        route_weights=tuple(
-            tuple(float(value) for value in row) for row in action["route_weights"]
-        ),
-        piste_requests=tuple(int(value) for value in action["piste_requests"]),
-        lift_capacity=tuple(float(value) for value in action["lift_capacity"]),
-        lift_capacity_enabled=tuple(
-            int(value) for value in action["lift_capacity_enabled"]
-        ),
-        crowd_messages=tuple(
-            tuple(float(value) for value in row) for row in action["crowd_messages"]
-        ),
-        telemetry_overrides=tuple(
-            float(value) for value in action["telemetry_overrides"]
-        ),
-        telemetry_override_enabled=tuple(
-            int(value) for value in action["telemetry_override_enabled"]
-        ),
-    )
     return ActionProposal(
         controller_id=controller_id,
         simulation_time=simulation_time,
-        action=immutable,
+        action=freeze_action(action),
         explanation="A Gymnasium environment action.",
     )
 

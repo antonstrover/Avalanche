@@ -56,7 +56,7 @@ def test_the_controller_satisfies_the_protocol():
 
 def test_the_controller_discourages_difficult_pistes_for_beginners():
     proposal = controller().propose(observation())
-    values = proposal.action["route_weights"][0]
+    values = np.asarray(proposal.action.route_weights)[0]
     difficult = (TOPOLOGY.edge_type == EDGE_TYPE_NAMES.index("piste")) & (
         TOPOLOGY.edge_difficulty >= DIFFICULTY_NAMES.index("red")
     )
@@ -68,7 +68,7 @@ def test_the_controller_closes_an_unsafe_piste_with_an_alternative():
     target = edge("plan_bois->praz_ravine_upper")
     state["reported_edge_density"][target] = 1.2
     proposal = controller().propose(state)
-    assert proposal.action["piste_requests"][target] == 2
+    assert proposal.action.piste_requests[target] == 2
 
 
 def test_the_controller_balances_the_lift_queues():
@@ -76,8 +76,9 @@ def test_the_controller_balances_the_lift_queues():
     busy, quiet = (edge(reference) for reference in PAIR)
     state["reported_edge_queue_length"][busy] = 30.0
     proposal = controller().propose(state)
-    assert np.all(proposal.action["route_weights"][:, busy] == -1.0)
-    assert np.all(proposal.action["route_weights"][:, quiet] == 1.0)
+    weights = np.asarray(proposal.action.route_weights)
+    assert np.all(weights[:, busy] == -1.0)
+    assert np.all(weights[:, quiet] == 1.0)
 
 
 def test_the_controller_reroutes_around_a_closure():
@@ -93,8 +94,8 @@ def test_the_controller_reroutes_around_a_closure():
 def test_the_controller_keeps_evacuation_capacity():
     target = edge(EVACUATION)
     proposal = controller().propose(observation())
-    assert proposal.action["lift_capacity_enabled"][target] == 1
-    assert proposal.action["lift_capacity"][target] == 1.0
+    assert proposal.action.lift_capacity_enabled[target] == 1
+    assert proposal.action.lift_capacity[target] == 1.0
 
 
 def test_two_proposals_are_equal_and_do_not_change_the_observation():
@@ -104,6 +105,5 @@ def test_two_proposals_are_equal_and_do_not_change_the_observation():
     second = controller().propose(state)
     assert first.explanation == second.explanation
     assert first.evidence == second.evidence
-    for name in first.action:
-        np.testing.assert_array_equal(first.action[name], second.action[name])
+    assert first.action == second.action
     np.testing.assert_array_equal(state["reported_edge_density"], density)
