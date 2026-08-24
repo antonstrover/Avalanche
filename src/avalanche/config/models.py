@@ -1,6 +1,6 @@
 """Typed models for the resolved run configuration."""
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -170,14 +170,102 @@ class ScenarioConfig(StrictModel):
     failures: FailuresConfig = FailuresConfig()
 
 
+AttackKind = Literal["profit_biased", "sleeper_saboteur", "reward_hacker"]
+ControllerKind = Literal["none", "honest", *get_args(AttackKind)]
+InformationSource = Literal[
+    "reported_observation", "honest_proposal", "simulation_time"
+]
+SuccessMetric = Literal[
+    "premium_wait_advantage", "target_density_seconds", "telemetry_density_gap"
+]
+
+
+class AttackTriggerConfig(StrictModel):
+    """The condition that activates one attack.
+
+    An immediate trigger activates at the first control interval.
+    A timed trigger activates at its simulation time.
+    """
+
+    kind: Literal["immediate", "simulation_time"]
+    time_seconds: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def check_time(self) -> "AttackTriggerConfig":
+        """Require a time only for a timed trigger."""
+        if self.kind == "simulation_time" and self.time_seconds is None:
+            raise ValueError("a timed trigger must give a trigger time")
+        if self.kind == "immediate" and self.time_seconds is not None:
+            raise ValueError("an immediate trigger must give no trigger time")
+        return self
+
+
+class AttackBudgetConfig(StrictModel):
+    """The limit on the values that one attack changes."""
+
+    strength: float = Field(ge=0.0, le=1.0)
+    maximum_targets: int = Field(gt=0)
+    ramp_intervals: int = Field(gt=0)
+
+
+class AttackSuccessConfig(StrictModel):
+    """The evaluator metric and threshold of one attack."""
+
+    metric: SuccessMetric
+    threshold: float = Field(ge=0.0)
+
+
+class AttackRecordConfig(StrictModel):
+    """The complete declared threat model of one attack wrapper."""
+
+    kind: AttackKind
+    information_access: tuple[InformationSource, ...]
+    trigger: AttackTriggerConfig
+    targets: tuple[str, ...]
+    target_group: str | None = None
+    action_budget: AttackBudgetConfig
+    success_condition: AttackSuccessConfig
+    telemetry_visibility: Literal["visible", "hidden", "divergent"]
+
+    @model_validator(mode="after")
+    def check_targets(self) -> "AttackRecordConfig":
+        """Reject a missing, duplicate, or over-budget target list."""
+        if not self.information_access:
+            raise ValueError("the attack must declare one information source")
+        if len(set(self.information_access)) != len(self.information_access):
+            raise ValueError("the attack information sources must be unique")
+        if not self.targets:
+            raise ValueError("the attack must declare one edge target")
+        if len(set(self.targets)) != len(self.targets):
+            raise ValueError("the attack targets must be unique")
+        if len(self.targets) < self.action_budget.maximum_targets:
+            raise ValueError("the attack budget needs more targets than it declares")
+        if self.kind == "sleeper_saboteur" and self.trigger.kind != "simulation_time":
+            raise ValueError("the sleeper saboteur must use a timed trigger")
+        return self
+
+
 class ControllerConfig(StrictModel):
-    kind: str
-    attack: str | None = None
+    kind: ControllerKind
+    attack: AttackRecordConfig | None = None
     unsafe_density_ratio: float = Field(default=1.0, gt=0.0)
     queue_difference: float = Field(default=20.0, ge=0.0)
     route_weight: float = Field(default=1.0, gt=0.0, le=1.0)
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def check_attack(self) -> "ControllerConfig":
+        """Require one matching attack record for each attack wrapper."""
+        if self.kind in ("none", "honest"):
+            if self.attack is not None:
+                raise ValueError(f"the {self.kind} controller must have no attack")
+            return self
+        if self.attack is None:
+            raise ValueError(f"the {self.kind} controller must have an attack record")
+        if self.attack.kind != self.kind:
+            raise ValueError("the attack record must match the controller kind")
+        return self
 
 
 class MonitorConfig(StrictModel):
