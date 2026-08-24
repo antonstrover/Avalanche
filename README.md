@@ -139,7 +139,7 @@ uv run avalanche simulate configs/mountain/default.yaml \
 
 `simulate` writes a run directory under `outputs/`.
 The command runs one resolved episode.
-It writes the events, the metrics, the snapshots, and the final summary.
+It writes the events, the metrics, the snapshots, the model reference, and the final summary.
 
 ### The simulator, from Python
 

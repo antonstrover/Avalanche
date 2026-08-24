@@ -133,6 +133,14 @@ class TraceWriter:
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
         )
+        model_reference = {
+            "model_kind": None,
+            "model_path": None,
+            "model_revision": None,
+        }
+        (self.output_dir / "model-reference.json").write_text(
+            json.dumps(model_reference, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
 
 def _bytes(values: np.ndarray, dtype: str) -> bytes:
