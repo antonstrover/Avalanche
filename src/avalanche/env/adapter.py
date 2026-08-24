@@ -15,6 +15,7 @@ from avalanche.control import (
     ActionProposal,
     AdjudicationResult,
     Adjudicator,
+    ApprovalHandler,
     ConfiguredFallback,
     ExecutedAction,
     Monitor,
@@ -175,15 +176,21 @@ class AvalancheEnv(gym.Env):
         self.adjudicator = self._make_adjudicator(AllowMonitor(), None)
 
     def configure_adjudicator(
-        self, monitor: Monitor, fallback: ConfiguredFallback | None
+        self,
+        monitor: Monitor,
+        fallback: ConfiguredFallback | None,
+        approval: ApprovalHandler | None = None,
     ) -> None:
         """Install the monitor boundary before an environment reset."""
         if not self._ended:
             raise RuntimeError("configure the adjudicator before the environment reset")
-        self.adjudicator = self._make_adjudicator(monitor, fallback)
+        self.adjudicator = self._make_adjudicator(monitor, fallback, approval)
 
     def _make_adjudicator(
-        self, monitor: Monitor, fallback: ConfiguredFallback | None
+        self,
+        monitor: Monitor,
+        fallback: ConfiguredFallback | None,
+        approval: ApprovalHandler | None = None,
     ) -> Adjudicator:
         """Build a validator against the current environment masks."""
         return Adjudicator(
@@ -192,6 +199,7 @@ class AvalancheEnv(gym.Env):
                 thaw_action(action), self.action_space, self._action_masks()
             ),
             fallback,
+            approval,
         )
 
     def reset(

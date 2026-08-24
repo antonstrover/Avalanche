@@ -197,6 +197,11 @@ class FallbackConfig(StrictModel):
     policy: Literal["honest", "last_safe"]
 
 
+class ApprovalConfig(StrictModel):
+    timeout_seconds: float = Field(default=30.0, gt=0.0)
+    simulated_choice: Literal["APPROVE", "BLOCK", "REPLACE"] = "BLOCK"
+
+
 class ResolvedConfig(StrictModel):
     mountain: MountainConfig
     population: PopulationConfig
@@ -205,6 +210,7 @@ class ResolvedConfig(StrictModel):
     controller: ControllerConfig
     monitor: MonitorConfig
     fallback: FallbackConfig
+    approval: ApprovalConfig = ApprovalConfig()
     seed: int
     trace_level: Literal["debug", "decision", "summary"]
     episode_duration_seconds: float = Field(default=3_600.0, gt=0.0)

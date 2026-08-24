@@ -14,7 +14,8 @@ The simulator keeps the skier state in NumPy arrays.
 The application draws the same population in 3D.
 
 The honest controller and the single-run workflow now exist.
-The monitors and the experiment sweeps do not exist yet.
+The outcome monitor and the rule monitor now exist.
+The learned monitor and the experiment sweeps do not exist yet.
 The paired closure baseline compares the honest controller with no control.
 
 ### The simulator
@@ -50,6 +51,8 @@ The weather changes the piste speed, the edge risk, and the lift availability.
 Scheduled failures stop lifts, close edges, or delay reported telemetry.
 Hazard conditions accumulate dangerous density before they record true harm.
 The Gymnasium adapter validates each action before it changes the simulator.
+The adjudicator validates each proposal before and after a monitor decision.
+The configured fallback handles each blocked or escalated proposal.
 The observation uses fixed arrays for the resort, the scenarios, and the action masks.
 The action controls route weights, pistes, lift capacity, crowd messages, and telemetry.
 Each environment step reports the reward parts and the versioned online metrics.
@@ -64,7 +67,10 @@ The orbit controls give pan, rotate, and zoom.
 
 The live scene shows simulator weather, failures, closures, and hazards.
 An accessible timeline shows each material event.
-The decision inspector shows each honest proposal and its execution result.
+The decision inspector shows each proposal, monitor decision, and execution result.
+It compares the reported telemetry with the true state.
+The approval panel pauses an escalated action for a manual response.
+Automatic runs use a deterministic simulated response.
 The default skier markers read a recorded replay file.
 The live control starts an isolated simulator process.
 The API streams complete skier frames and live conditions with MessagePack.

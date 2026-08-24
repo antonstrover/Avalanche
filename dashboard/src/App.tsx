@@ -10,6 +10,7 @@ import { INITIAL_DISPLAY } from "./mountain/conditions";
 import { resort, resortName } from "./mountain/resort";
 import { mergeTimeline } from "./features/timeline";
 import { DecisionInspector } from "./features/live/DecisionInspector";
+import { ApprovalPanel } from "./features/live/ApprovalPanel";
 import type { DisplayState } from "./workers/live-frame";
 
 function App() {
@@ -23,11 +24,21 @@ function App() {
         fetchHealth().then(setHealth);
     }, []);
 
-    const startSession = async (demoFailure = false, demoMonitor = false) => {
+    const startSession = async (
+        demoFailure = false,
+        demoMonitor = false,
+        demoApproval = false,
+    ) => {
         setLiveStatus("starting");
         setDisplay(INITIAL_DISPLAY);
         try {
-            const created = await createLiveSession(0, 5000, demoFailure, demoMonitor);
+            const created = await createLiveSession(
+                0,
+                5000,
+                demoFailure,
+                demoMonitor,
+                demoApproval,
+            );
             setSession(created);
             setLiveStatus("connecting");
         } catch {
@@ -69,6 +80,13 @@ function App() {
                 </button>
                 <button
                     type="button"
+                    onClick={() => startSession(false, false, true)}
+                    disabled={liveStatus !== "idle"}
+                >
+                    Start approval demo
+                </button>
+                <button
+                    type="button"
                     onClick={() => startSession(true)}
                     disabled={liveStatus !== "idle"}
                 >
@@ -84,6 +102,7 @@ function App() {
                 onLiveError={onLiveError}
             />
             <DecisionInspector decision={display.decision} telemetry={display.telemetry} />
+            <ApprovalPanel decision={display.decision} session={session} />
         </main>
     );
 }

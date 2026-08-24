@@ -8,6 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from avalanche.control.approval import (
+    ApprovalChoice,
+    ApprovalRequest,
+    ApprovalResponse,
+    SimulatedApprover,
+)
 from avalanche.control.protocols import Monitor
 from avalanche.control.types import (
     ActionProposal,
@@ -24,6 +30,7 @@ if TYPE_CHECKING:
 
 ActionValidator = Callable[[ImmutableAction], None]
 FallbackAction = Callable[[Observation], ActionProposal]
+ApprovalHandler = Callable[[ApprovalRequest], ApprovalResponse]
 
 
 class EngineeringErrorCode(StrEnum):
@@ -69,6 +76,8 @@ class AdjudicationResult:
     executed_action: ExecutedAction
     fallback_source: str | None = None
     predicted_result: tuple[tuple[str, Any], ...] = ()
+    approval_request: ApprovalRequest | None = None
+    approval_response: ApprovalResponse | None = None
 
 
 class Adjudicator:
@@ -79,10 +88,12 @@ class Adjudicator:
         monitor: Monitor,
         validate: ActionValidator,
         fallback: FallbackAction | None = None,
+        approval: ApprovalHandler | None = None,
     ) -> None:
         self.monitor = monitor
         self.validate = validate
         self.fallback = fallback
+        self.approval = approval or SimulatedApprover()
 
     def reset(self, seed: int) -> None:
         """Reset the monitor for one reproducible run."""
@@ -123,6 +134,8 @@ class Adjudicator:
         action = proposal.action
         controller_id = proposal.controller_id
         fallback_source = None
+        approval_request = None
+        approval_response = None
         if decision.decision is DecisionType.REPLACE:
             assert decision.replacement_action is not None
             action = decision.replacement_action
@@ -135,9 +148,37 @@ class Adjudicator:
                     proposal,
                 )
             fallback = self.fallback(observation)
-            action = fallback.action
-            controller_id = fallback.controller_id
-            fallback_source = fallback.controller_id
+            if decision.decision is DecisionType.BLOCK:
+                action = fallback.action
+                controller_id = fallback.controller_id
+                fallback_source = fallback.controller_id
+            else:
+                prediction = getattr(
+                    getattr(self.monitor, "last_prediction", None),
+                    "as_items",
+                    lambda: (),
+                )()
+                approval_request = ApprovalRequest(
+                    decision_id=(
+                        f"{proposal.simulation_time:g}:{proposal.controller_id}"
+                    ),
+                    proposal=proposal,
+                    decision=decision,
+                    safe_fallback=fallback.action,
+                    predicted_result=prediction,
+                )
+                approval_response = self.approval(approval_request)
+                if approval_response.choice is ApprovalChoice.APPROVE:
+                    action = proposal.action
+                    controller_id = proposal.controller_id
+                elif approval_response.choice is ApprovalChoice.REPLACE:
+                    assert approval_response.replacement_action is not None
+                    action = approval_response.replacement_action
+                    controller_id = "approval-replacement"
+                else:
+                    action = fallback.action
+                    controller_id = fallback.controller_id
+                    fallback_source = fallback.controller_id
 
         self._validate(
             action,
@@ -160,6 +201,8 @@ class Adjudicator:
             predicted_result=getattr(
                 getattr(self.monitor, "last_prediction", None), "as_items", lambda: ()
             )(),
+            approval_request=approval_request,
+            approval_response=approval_response,
         )
 
     def _validate(

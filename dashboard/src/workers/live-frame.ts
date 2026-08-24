@@ -77,6 +77,17 @@ export type LiveDecision = {
     monitor_decision: LiveMonitorDecision | null;
     fallback_source: string | null;
     predicted_result: Record<string, number>;
+    approval: ApprovalState | null;
+};
+
+export type ApprovalState = {
+    decision_id: string;
+    status: "pending" | "resolved";
+    choice: "APPROVE" | "BLOCK" | "REPLACE" | null;
+    deadline_epoch_seconds: number;
+    evidence: Record<string, unknown>;
+    predicted_result: Record<string, number>;
+    safe_fallback: LiveAction;
 };
 
 export type LiveMonitorDecision = {
@@ -230,6 +241,30 @@ function liveDecision(value: unknown): LiveDecision | null {
     }
     const prediction = record(decision.predicted_result, "predicted result");
     for (const value of Object.values(prediction)) number(value, "predicted value");
+    const approvalValue = decision.approval;
+    let approval: ApprovalState | null = null;
+    if (approvalValue !== null && approvalValue !== undefined) {
+        const item = record(approvalValue, "approval state");
+        const status = item.status;
+        const choice = item.choice;
+        if (status !== "pending" && status !== "resolved") {
+            throw new Error("the approval status is invalid");
+        }
+        if (choice !== null && choice !== "APPROVE" && choice !== "BLOCK" && choice !== "REPLACE") {
+            throw new Error("the approval choice is invalid");
+        }
+        const approvalPrediction = record(item.predicted_result, "approval prediction");
+        for (const value of Object.values(approvalPrediction)) number(value, "approval predicted value");
+        approval = {
+            decision_id: string(item.decision_id, "approval identity"),
+            status,
+            choice,
+            deadline_epoch_seconds: number(item.deadline_epoch_seconds, "approval deadline"),
+            evidence: record(item.evidence, "approval evidence"),
+            predicted_result: approvalPrediction as Record<string, number>,
+            safe_fallback: liveAction(item.safe_fallback),
+        };
+    }
     return {
         proposal: {
             controller_id: string(proposal.controller_id, "controller identity"),
@@ -246,6 +281,7 @@ function liveDecision(value: unknown): LiveDecision | null {
         monitor_decision: monitor,
         fallback_source: fallback,
         predicted_result: prediction as Record<string, number>,
+        approval,
     };
 }
 
@@ -380,6 +416,7 @@ export function decodeFrame(
             const legacyDecision = record(legacyDisplay.decision, "legacy decision");
             legacyDecision.fallback_source = null;
             legacyDecision.predicted_result = {};
+            legacyDecision.approval = null;
         }
     }
     if (envelope.session_id !== sessionId) throw new Error("the session identity is invalid");

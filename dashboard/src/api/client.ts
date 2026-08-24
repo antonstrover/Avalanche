@@ -25,6 +25,7 @@ export async function createLiveSession(
     skierCount = 5000,
     demoFailure = false,
     demoMonitor = false,
+    demoApproval = false,
 ): Promise<LiveSession> {
     const response = await fetch(`${API_BASE}/api/sessions`, {
         method: "POST",
@@ -34,10 +35,31 @@ export async function createLiveSession(
             skier_count: skierCount,
             demo_failure: demoFailure,
             demo_monitor: demoMonitor,
+            demo_approval: demoApproval,
         }),
     });
     if (!response.ok) throw new Error("the live session could not start");
     return response.json() as Promise<LiveSession>;
+}
+
+export async function resolveApproval(
+    sessionId: string,
+    decisionId: string,
+    choice: "APPROVE" | "BLOCK" | "REPLACE",
+    replacementAction?: unknown,
+): Promise<void> {
+    const response = await fetch(
+        `${API_BASE}/api/sessions/${sessionId}/approvals/${encodeURIComponent(decisionId)}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ choice, replacement_action: replacementAction }),
+        },
+    );
+    if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail ?? "the approval response failed");
+    }
 }
 
 export function liveStreamUrl(sessionId: string): string {

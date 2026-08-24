@@ -6,8 +6,9 @@ import hashlib
 import multiprocessing as mp
 import queue
 import threading
+import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,9 @@ from avalanche.config.models import ControllerConfig, MonitorConfig, PopulationC
 from avalanche.control import (
     ActionProposal,
     AdjudicationResult,
+    ApprovalChoice,
+    ApprovalRequest,
+    ApprovalResponse,
     freeze_action,
     freeze_evidence,
     thaw_action,
@@ -28,6 +32,9 @@ from avalanche.env import (
     PISTE_CLOSE,
     AvalancheEnv,
     AvalancheEnvConfig,
+    build_action_masks,
+    build_action_space,
+    validate_action,
 )
 from avalanche.monitors import build_monitor
 from avalanche.sim.engine import MountainSim
@@ -64,6 +71,7 @@ def pack_frame(
     message_type: str = "frame",
     proposal: ActionProposal | None = None,
     adjudication: AdjudicationResult | None = None,
+    approval: ApprovalRequest | None = None,
 ) -> bytes:
     """Pack one complete display state."""
     population = sim.population
@@ -72,7 +80,7 @@ def pack_frame(
         "location_kind": population.location_kind.astype(np.int8, copy=False).tobytes(),
         "location_index": population.location_index.astype("<i4", copy=False).tobytes(),
         "progress": population.progress.astype("<f4", copy=False).tobytes(),
-        "display": display_state(sim, proposal, adjudication),
+        "display": display_state(sim, proposal, adjudication, approval),
     }
     envelope = {
         "version": STREAM_VERSION,
@@ -96,6 +104,7 @@ def display_state(
     sim: MountainSim,
     proposal: ActionProposal | None = None,
     adjudication: AdjudicationResult | None = None,
+    approval: ApprovalRequest | None = None,
 ) -> dict[str, object]:
     """Return the bounded display state for one live frame."""
     assert sim.failure_schedule is not None
@@ -149,7 +158,7 @@ def display_state(
         "hazards": hazards,
         "closures": closures,
         "timeline": _timeline(sim)[-TIMELINE_LIMIT:],
-        "decision": _decision_state(proposal, adjudication),
+        "decision": _decision_state(proposal, adjudication, approval),
         "telemetry": _telemetry_state(sim),
     }
 
@@ -177,10 +186,27 @@ def _telemetry_state(sim: MountainSim) -> dict[str, object]:
 
 
 def _decision_state(
-    proposal: ActionProposal | None, adjudication: AdjudicationResult | None
+    proposal: ActionProposal | None,
+    adjudication: AdjudicationResult | None,
+    approval: ApprovalRequest | None = None,
 ) -> dict[str, object] | None:
     """Return the latest proposal and execution result."""
-    if proposal is None or adjudication is None:
+    if proposal is None:
+        return None
+    if approval is not None:
+        return {
+            "proposal": proposal.model_dump(mode="json"),
+            "executed_action": {
+                "controller_id": "pending-approval",
+                "simulation_time": proposal.simulation_time,
+                "action": asdict(approval.safe_fallback),
+            },
+            "monitor_decision": approval.decision.model_dump(mode="json"),
+            "fallback_source": "honest-fallback",
+            "predicted_result": dict(approval.predicted_result),
+            "approval": _approval_state(approval, None),
+        }
+    if adjudication is None:
         return None
     executed = adjudication.executed_action
     return {
@@ -193,6 +219,29 @@ def _decision_state(
         "monitor_decision": adjudication.decision.model_dump(mode="json"),
         "fallback_source": adjudication.fallback_source,
         "predicted_result": dict(adjudication.predicted_result),
+        "approval": (
+            _approval_state(
+                adjudication.approval_request, adjudication.approval_response
+            )
+            if adjudication.approval_request is not None
+            else None
+        ),
+    }
+
+
+def _approval_state(
+    request: ApprovalRequest,
+    response: ApprovalResponse | None,
+) -> dict[str, object]:
+    """Return one pending or resolved approval for the browser."""
+    return {
+        "decision_id": request.decision_id,
+        "status": "pending" if response is None else "resolved",
+        "choice": None if response is None else response.choice.value,
+        "deadline_epoch_seconds": request.deadline_epoch_seconds,
+        "evidence": request.proposal.model_dump(mode="json")["evidence"],
+        "predicted_result": dict(request.predicted_result),
+        "safe_fallback": asdict(request.safe_fallback),
     }
 
 
@@ -320,6 +369,9 @@ def run_session(
     stop: Any,
     demo_failure: bool = False,
     demo_monitor: bool = False,
+    demo_approval: bool = False,
+    approval_input: Any | None = None,
+    approval_timeout: float = 30.0,
 ) -> None:
     """Run one simulator inside a child process."""
     try:
@@ -373,16 +425,58 @@ def run_session(
             MonitorConfig(
                 kind="rules",
                 evacuation_edges=(DEMO_RULE_TARGET,),
+                unsafe_decision="ESCALATE" if demo_approval else "BLOCK",
             )
-            if demo_monitor
+            if demo_monitor or demo_approval
             else MonitorConfig(kind="none")
         )
         monitor = build_monitor(monitor_config, controller_config, env.topology)
-        env.configure_adjudicator(monitor, fallback)
+        sequence = 0
+
+        def approve(request: ApprovalRequest) -> ApprovalResponse:
+            deadline = time.time() + approval_timeout
+            pending = replace(request, deadline_epoch_seconds=deadline)
+            _put_latest(
+                output,
+                pack_frame(
+                    sim,
+                    session_id,
+                    sequence,
+                    topology,
+                    "frame",
+                    pending.proposal,
+                    approval=pending,
+                ),
+            )
+            if approval_input is None:
+                return ApprovalResponse(ApprovalChoice.BLOCK)
+            remaining = approval_timeout
+            while remaining > 0.0:
+                started = time.monotonic()
+                try:
+                    value = approval_input.get(timeout=remaining)
+                except queue.Empty:
+                    return ApprovalResponse(ApprovalChoice.BLOCK)
+                if value.get("decision_id") != request.decision_id:
+                    remaining -= time.monotonic() - started
+                    continue
+                choice = ApprovalChoice(value["choice"])
+                replacement_action = value.get("replacement_action")
+                return ApprovalResponse(
+                    choice,
+                    None
+                    if replacement_action is None
+                    else freeze_action(replacement_action),
+                )
+            return ApprovalResponse(ApprovalChoice.BLOCK)
+
+        env.configure_adjudicator(monitor, fallback, approve if demo_approval else None)
         env.reset(seed=seed)
         controller.reset(seed)
-        proposal, adjudication = _control_step(env, controller, demo_monitor)
-        sequence = 0
+        proposal, adjudication = _control_step(
+            env, controller, demo_monitor or demo_approval
+        )
+        sequence = 1 if demo_approval else 0
         _put_latest(
             output,
             pack_frame(
@@ -399,7 +493,9 @@ def run_session(
         while not stop.wait(interval):
             sim.tick()
             if sim.simulation_time % CONTROL_INTERVAL_SECONDS == 0.0:
-                proposal, adjudication = _control_step(env, controller, demo_monitor)
+                proposal, adjudication = _control_step(
+                    env, controller, demo_monitor or demo_approval
+                )
             sequence += 1
             _put_latest(
                 output,
@@ -460,6 +556,10 @@ class LiveSession:
     stop_event: Any
     demo_failure: bool = False
     demo_monitor: bool = False
+    demo_approval: bool = False
+    approval_input: Any | None = None
+    pending_decision_id: str | None = None
+    resolved_decisions: set[str] = field(default_factory=set)
     status: str = "starting"
     latest: bytes | None = None
     latest_sequence: int = -1
@@ -477,6 +577,7 @@ class LiveSession:
             "topology_version": self.topology_version,
             "demo_failure": self.demo_failure,
             "demo_monitor": self.demo_monitor,
+            "demo_approval": self.demo_approval,
         }
 
 
@@ -494,11 +595,13 @@ class SessionManager:
         skier_count: int,
         demo_failure: bool = False,
         demo_monitor: bool = False,
+        demo_approval: bool = False,
     ) -> LiveSession:
         """Create and start one live session."""
         session_id = str(uuid.uuid4())
         version = topology_version()
         output = self.context.Queue(maxsize=4)
+        approval_input = self.context.Queue(maxsize=4)
         stop_event = self.context.Event()
         process = self.context.Process(
             target=run_session,
@@ -511,6 +614,8 @@ class SessionManager:
                 stop_event,
                 demo_failure,
                 demo_monitor,
+                demo_approval,
+                approval_input,
             ),
             daemon=True,
         )
@@ -524,6 +629,8 @@ class SessionManager:
             stop_event=stop_event,
             demo_failure=demo_failure,
             demo_monitor=demo_monitor,
+            demo_approval=demo_approval,
+            approval_input=approval_input,
         )
         with self.lock:
             self.sessions[session_id] = session
@@ -546,6 +653,15 @@ class SessionManager:
                 kind = envelope["type"]
                 if kind in {"snapshot", "frame"}:
                     session.status = "running"
+                    decision = (
+                        envelope.get("payload", {}).get("display", {}).get("decision")
+                    )
+                    approval = decision.get("approval") if decision else None
+                    if approval and approval.get("status") == "pending":
+                        session.pending_decision_id = approval["decision_id"]
+                    elif approval and approval.get("status") == "resolved":
+                        session.pending_decision_id = None
+                        session.resolved_decisions.add(approval["decision_id"])
                 elif kind == "complete":
                     session.status = "complete"
                 elif kind == "error":
@@ -559,6 +675,33 @@ class SessionManager:
         with self.lock:
             return self.sessions.get(session_id)
 
+    def respond(
+        self,
+        session_id: str,
+        decision_id: str,
+        choice: ApprovalChoice,
+        replacement_action: dict[str, Any] | None,
+    ) -> str:
+        """Send one validated response to a pending live escalation."""
+        session = self.get(session_id)
+        if session is None:
+            return "missing_session"
+        with session.lock:
+            if decision_id in session.resolved_decisions:
+                return "resolved"
+            if session.pending_decision_id != decision_id:
+                return "missing_decision"
+            session.pending_decision_id = None
+            session.resolved_decisions.add(decision_id)
+        session.approval_input.put(
+            {
+                "decision_id": decision_id,
+                "choice": choice.value,
+                "replacement_action": replacement_action,
+            }
+        )
+        return "accepted"
+
     def delete(self, session_id: str) -> bool:
         """Stop and remove one session."""
         with self.lock:
@@ -571,6 +714,7 @@ class SessionManager:
             session.process.terminate()
             session.process.join(timeout=1.0)
         session.output.close()
+        session.approval_input.close()
         return True
 
     def close(self) -> None:
@@ -582,6 +726,19 @@ class SessionManager:
 
 
 manager = SessionManager()
+
+
+def validate_replacement_action(action: dict[str, Any]) -> None:
+    """Validate one manual replacement against the live topology."""
+    from avalanche.sim import load_topology
+
+    topology = load_topology(MOUNTAIN_PATH)
+    frozen = freeze_action(action)
+    validate_action(
+        thaw_action(frozen),
+        build_action_space(topology),
+        build_action_masks(topology),
+    )
 
 
 def snapshot_message(packed: bytes) -> bytes:

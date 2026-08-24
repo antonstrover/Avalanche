@@ -64,3 +64,14 @@ test("a monitor rule appears in the decision inspector", async ({ page }) => {
     });
     await expect(page.getByText("EVACUATION_ROUTE_CLOSURE", { exact: true })).toBeVisible();
 });
+
+test("an escalation is approved before the time limit", async ({ page }) => {
+    await page.goto("/");
+    await waitForScene(page);
+    await page.getByRole("button", { name: "Start approval demo" }).click();
+    await expect(page.getByTestId("approval-panel")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("approval-deadline")).toContainText("seconds remain");
+    await page.getByRole("button", { name: "Approve" }).click();
+    await expect(page.getByTestId("approval-panel")).toBeHidden({ timeout: 15000 });
+    await expect(page.getByTestId("proposal-controller")).toHaveText("rule-demo");
+});

@@ -58,6 +58,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/approvals/{decision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Approval
+         * @description Resolve one pending live escalation.
+         */
+        post: operations["resolve_approval_api_sessions__session_id__approvals__decision_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}": {
         parameters: {
             query?: never;
@@ -86,6 +106,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ApprovalChoice
+         * @description Name each response to an escalated proposal.
+         * @enum {string}
+         */
+        ApprovalChoice: "APPROVE" | "BLOCK" | "REPLACE";
+        /**
+         * ApprovalResponseRequest
+         * @description Validate one response to a pending escalation.
+         */
+        ApprovalResponseRequest: {
+            choice: components["schemas"]["ApprovalChoice"];
+            /** Replacement Action */
+            replacement_action?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -116,6 +153,11 @@ export interface components {
              * @default false
              */
             demo_monitor: boolean;
+            /**
+             * Demo Approval
+             * @default false
+             */
+            demo_approval: boolean;
         };
         /**
          * SessionResponse
@@ -138,6 +180,8 @@ export interface components {
             demo_failure: boolean;
             /** Demo Monitor */
             demo_monitor: boolean;
+            /** Demo Approval */
+            demo_approval: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -225,6 +269,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_approval_api_sessions__session_id__approvals__decision_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                decision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalResponseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */
