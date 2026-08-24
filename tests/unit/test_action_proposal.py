@@ -70,6 +70,7 @@ def test_the_environment_accepts_a_controller_proposal():
 def test_the_honest_fallback_reuses_the_honest_controller():
     topology = load_topology(FIXTURE)
     fallback = build_fallback("honest", ControllerConfig(kind="honest"), topology)
+    fallback.reset(1)
     assert (
         fallback.propose(
             {
@@ -83,5 +84,5 @@ def test_the_honest_fallback_reuses_the_honest_controller():
                 },
             }
         ).controller_id
-        == "honest"
+        == "honest-fallback"
     )

@@ -87,6 +87,9 @@ class Adjudicator:
     def reset(self, seed: int) -> None:
         """Reset the monitor for one reproducible run."""
         self.monitor.reset(seed)
+        reset_fallback = getattr(self.fallback, "reset", None)
+        if reset_fallback is not None:
+            reset_fallback(seed)
 
     def adjudicate(
         self,
@@ -141,14 +144,18 @@ class Adjudicator:
             proposal,
             EngineeringErrorCode.INVALID_FINAL_ACTION,
         )
+        executed_action = ExecutedAction(
+            controller_id=controller_id,
+            simulation_time=proposal.simulation_time,
+            action=action,
+        )
+        record_fallback = getattr(self.fallback, "record", None)
+        if record_fallback is not None:
+            record_fallback(executed_action)
         return AdjudicationResult(
             proposal=proposal,
             decision=decision,
-            executed_action=ExecutedAction(
-                controller_id=controller_id,
-                simulation_time=proposal.simulation_time,
-                action=action,
-            ),
+            executed_action=executed_action,
             fallback_source=fallback_source,
         )
 

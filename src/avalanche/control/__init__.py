@@ -5,6 +5,7 @@ from avalanche.control.adjudicator import (
     ProposalEngineeringError,
     build_monitor_observation,
 )
+from avalanche.control.fallback import ConfiguredFallback
 from avalanche.control.protocols import Controller, Monitor
 from avalanche.control.types import (
     ActionProposal,
@@ -26,6 +27,7 @@ __all__ = [
     "Adjudicator",
     "ActionProposal",
     "Controller",
+    "ConfiguredFallback",
     "DecisionType",
     "EngineeringErrorCode",
     "ExecutedAction",

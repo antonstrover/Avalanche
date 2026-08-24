@@ -1,7 +1,7 @@
 """Build configured controllers and fallback controllers."""
 
 from avalanche.config.models import ControllerConfig
-from avalanche.control import Controller
+from avalanche.control import ConfiguredFallback, Controller
 from avalanche.controllers.honest import HonestController, HonestControllerConfig
 from avalanche.controllers.no_control import NoControlController
 from avalanche.sim.topology import Topology
@@ -27,8 +27,16 @@ def build_controller(config: ControllerConfig, topology: Topology) -> Controller
 
 def build_fallback(
     policy: str, config: ControllerConfig, topology: Topology
-) -> HonestController:
+) -> ConfiguredFallback:
     """Build the configured safe fallback controller."""
-    if policy != "honest":
-        raise ValueError(f"the fallback policy {policy!r} is unknown")
-    return build_controller(config, topology)
+    honest = HonestController(
+        topology,
+        HonestControllerConfig(
+            unsafe_density_ratio=config.unsafe_density_ratio,
+            queue_difference=config.queue_difference,
+            route_weight=config.route_weight,
+            balanced_lifts=config.balanced_lifts,
+            evacuation_edges=config.evacuation_edges,
+        ),
+    )
+    return ConfiguredFallback(policy, honest)
