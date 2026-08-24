@@ -351,6 +351,21 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.layer-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+}
+
+.layer-toggles label {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  text-transform: capitalize;
+}
+
 @media (max-width: 720px) {
   .timeline-heading {
     align-items: flex-start;

@@ -14,6 +14,36 @@ import { cameraPosition, cameraTarget } from "./resort";
 import { selectionLabel, type Selection } from "./selection";
 import type { LiveSession } from "../api/client";
 import type { DisplayState } from "../workers/live-frame";
+import {
+    INITIAL_LAYERS,
+    LAYER_NAMES,
+    type LayerName,
+    type LayerVisibility,
+} from "./layers";
+
+export function LayerToggles({
+    layers,
+    onChange,
+}: {
+    layers: LayerVisibility;
+    onChange: (name: LayerName, visible: boolean) => void;
+}) {
+    return (
+        <fieldset className="layer-toggles">
+            <legend>Scene layers</legend>
+            {LAYER_NAMES.map((name) => (
+                <label key={name}>
+                    <input
+                        type="checkbox"
+                        checked={layers[name]}
+                        onChange={(event) => onChange(name, event.target.checked)}
+                    />
+                    {name}
+                </label>
+            ))}
+        </fieldset>
+    );
+}
 
 // The scene reports the first drawn frame. A browser test waits for it.
 function FirstFrame({ onDrawn }: { onDrawn: () => void }) {
@@ -39,6 +69,7 @@ export function MountainScene({
 }) {
     const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
+    const [visibleLayers, setVisibleLayers] = useState(INITIAL_LAYERS);
     const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
     const closedEdges = useMemo(
         () => new Set(display.closures.map((closure) => closure.edge_index)),
@@ -55,30 +86,50 @@ export function MountainScene({
                     <color attach="background" args={["#9fc4e8"]} />
                     <hemisphereLight args={["#dfeaff", "#5b5347", 1.1]} />
                     <directionalLight position={[120, 160, 80]} intensity={1.6} />
-                    <Terrain />
-                    <Pistes
-                        closedEdges={closedEdges}
-                        selection={selection}
-                        onSelect={setSelection}
+                    <group name="terrain-layer" visible={visibleLayers.terrain}>
+                        <Terrain />
+                    </group>
+                    <group name="topology-layer" visible={visibleLayers.topology}>
+                        <Pistes
+                            closedEdges={closedEdges}
+                            selection={selection}
+                            onSelect={setSelection}
+                        />
+                        <Lifts
+                            closedEdges={closedEdges}
+                            selection={selection}
+                            onSelect={setSelection}
+                        />
+                    </group>
+                    <group
+                        name="infrastructure-layer"
+                        visible={visibleLayers.infrastructure}
+                    >
+                        <Buildings selection={selection} onSelect={setSelection} />
+                    </group>
+                    <group name="agents-layer" visible={visibleLayers.agents}>
+                        <Skiers
+                            session={session}
+                            onLiveFrame={onLiveFrame}
+                            onLiveError={onLiveError}
+                        />
+                    </group>
+                    <group name="weather-layer" visible={visibleLayers.weather}>
+                        <Weather weather={display.weather} />
+                    </group>
+                    <group name="hazards-layer" visible={visibleLayers.hazards}>
+                        <Hazards
+                            hazards={display.hazards}
+                            selection={selection}
+                            onSelect={setSelection}
+                        />
+                        <Failures failures={display.failures} />
+                    </group>
+                    <group
+                        name="recommendations-layer"
+                        visible={visibleLayers.recommendations}
                     />
-                    <Lifts
-                        closedEdges={closedEdges}
-                        selection={selection}
-                        onSelect={setSelection}
-                    />
-                    <Buildings selection={selection} onSelect={setSelection} />
-                    <Hazards
-                        hazards={display.hazards}
-                        selection={selection}
-                        onSelect={setSelection}
-                    />
-                    <Failures failures={display.failures} />
-                    <Skiers
-                        session={session}
-                        onLiveFrame={onLiveFrame}
-                        onLiveError={onLiveError}
-                    />
-                    <Weather weather={display.weather} />
+                    <group name="selection-layer" visible={visibleLayers.selection} />
                     <OrbitControls
                         ref={controls}
                         target={cameraTarget}
@@ -95,6 +146,12 @@ export function MountainScene({
                 <button type="button" onClick={() => controls.current?.reset()}>
                     Reset the view
                 </button>
+                <LayerToggles
+                    layers={visibleLayers}
+                    onChange={(name, visible) =>
+                        setVisibleLayers((current) => ({ ...current, [name]: visible }))
+                    }
+                />
             </div>
             <Timeline events={display.timeline} weather={display.weather} />
         </section>
