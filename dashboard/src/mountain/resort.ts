@@ -25,11 +25,37 @@ export type Resort = { name: string; nodes: Node[]; edges: Edge[] };
 
 export const resort: Resort = data;
 
-// The elevation of the base of the mountain, and the vertical scale.
-// The plan scale brings the resort metres into the size of the scene.
-const BASE_ELEVATION = 940;
+// The plan scale fits each resort into the same scene width.
+const TARGET_SCENE_WIDTH = 240;
 const HEIGHT_SCALE = 0.045;
-const PLAN_SCALE = 0.09;
+const TERRAIN_MARGIN = 30;
+
+const planBounds = resort.nodes.reduce(
+    (bounds, node) => ({
+        minX: Math.min(bounds.minX, node.x),
+        maxX: Math.max(bounds.maxX, node.x),
+        minY: Math.min(bounds.minY, node.y),
+        maxY: Math.max(bounds.maxY, node.y),
+        minElevation: Math.min(bounds.minElevation, node.elevation),
+    }),
+    {
+        minX: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+        minElevation: Number.POSITIVE_INFINITY,
+    },
+);
+
+const sourcePlanExtent = Math.max(
+    planBounds.maxX - planBounds.minX,
+    planBounds.maxY - planBounds.minY,
+);
+const PLAN_SCALE = TARGET_SCENE_WIDTH / sourcePlanExtent;
+const BASE_ELEVATION = planBounds.minElevation;
+
+export const planExtent = sourcePlanExtent * PLAN_SCALE;
+export const terrainSize = planExtent + 2 * TERRAIN_MARGIN;
 
 export function nodePosition(node: Node): Vector3 {
     return new Vector3(
@@ -71,9 +97,24 @@ export const difficultyColour: Record<string, string> = {
     none: "#8a8f9a",
 };
 
-// The centre of the resort in the plan, used by the camera and the terrain.
+// The centre of the bounds gives the terrain and the camera one stable target.
 export const centre = new Vector3(
-    resort.nodes.reduce((sum, node) => sum + nodePosition(node).x, 0) / resort.nodes.length,
+    ((planBounds.minX + planBounds.maxX) / 2) * PLAN_SCALE,
     0,
-    resort.nodes.reduce((sum, node) => sum + nodePosition(node).z, 0) / resort.nodes.length,
+    ((planBounds.minY + planBounds.maxY) / 2) * PLAN_SCALE,
 );
+
+const sceneHeight = (Math.max(...resort.nodes.map((node) => node.elevation)) - BASE_ELEVATION)
+    * HEIGHT_SCALE;
+
+export const cameraTarget: [number, number, number] = [
+    centre.x,
+    sceneHeight * 0.25,
+    centre.z,
+];
+
+export const cameraPosition: [number, number, number] = [
+    centre.x + planExtent * 0.44,
+    sceneHeight * 0.25 + planExtent * 0.36,
+    centre.z - planExtent * 0.55,
+];

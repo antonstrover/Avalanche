@@ -10,13 +10,10 @@ import { Pistes } from "./Pistes";
 import { Skiers } from "./Skiers";
 import { Terrain } from "./Terrain";
 import { Weather } from "./Weather";
+import { cameraPosition, cameraTarget } from "./resort";
 import { selectionLabel, type Selection } from "./selection";
 import type { LiveSession } from "../api/client";
 import type { DisplayState } from "../workers/live-frame";
-
-// The camera preset gives the overview. The reset button returns to it.
-const CAMERA_POSITION: [number, number, number] = [152, 100, -106];
-const CAMERA_TARGET: [number, number, number] = [46, 14, 25];
 
 // The scene reports the first drawn frame. A browser test waits for it.
 function FirstFrame({ onDrawn }: { onDrawn: () => void }) {
@@ -52,7 +49,7 @@ export function MountainScene({
         <section className="mountain">
             <div className="mountain-canvas" data-testid="mountain-canvas" data-drawn={drawn}>
                 <Canvas
-                    camera={{ position: CAMERA_POSITION, fov: 45, near: 1, far: 1000 }}
+                    camera={{ position: cameraPosition, fov: 45, near: 1, far: 1000 }}
                     onPointerMissed={() => setSelection(null)}
                 >
                     <color attach="background" args={["#9fc4e8"]} />
@@ -84,7 +81,7 @@ export function MountainScene({
                     <Weather weather={display.weather} />
                     <OrbitControls
                         ref={controls}
-                        target={CAMERA_TARGET}
+                        target={cameraTarget}
                         enablePan
                         enableRotate
                         enableZoom

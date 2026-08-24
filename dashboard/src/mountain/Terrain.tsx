@@ -1,9 +1,8 @@
 import { useMemo } from "react";
 import { BufferAttribute, Color, PlaneGeometry, Vector2, Vector3 } from "three";
-import { centre, nodePosition, resort } from "./resort";
+import { centre, nodePosition, resort, terrainSize } from "./resort";
 
 const SEGMENTS = 72;
-const SIZE = 300;
 const CLEARANCE = 1.2;
 const SNOW = new Color("#e9f1fb");
 const ROCK = new Color("#6f6a67");
@@ -59,7 +58,7 @@ function buildSurface(points: Vector3[]) {
 export function Terrain() {
     const geometry = useMemo(() => {
         const surface = buildSurface(resort.nodes.map((node) => nodePosition(node)));
-        const plane = new PlaneGeometry(SIZE, SIZE, SEGMENTS, SEGMENTS);
+        const plane = new PlaneGeometry(terrainSize, terrainSize, SEGMENTS, SEGMENTS);
         plane.rotateX(-Math.PI / 2);
         plane.translate(centre.x, 0, centre.z);
 
