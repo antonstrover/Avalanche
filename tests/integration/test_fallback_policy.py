@@ -123,3 +123,24 @@ def test_last_safe_starts_with_the_honest_fallback():
 
     assert result.executed_action.controller_id == "honest-fallback"
     assert result.executed_action.action != make_proposal(env, -1.0).action
+
+
+def test_the_environment_applies_only_the_adjudicated_action():
+    env = AvalancheEnv(
+        FIXTURE,
+        AvalancheEnvConfig(
+            movement_tick_seconds=5.0,
+            control_interval_seconds=5.0,
+            episode_duration_seconds=10.0,
+        ),
+    )
+    fallback = build_fallback("honest", ControllerConfig(kind="honest"), env.topology)
+    env.configure_adjudicator(BlockMonitor(), fallback)
+    env.reset(seed=3)
+    rejected = make_proposal(env, 1.0)
+
+    _, _, _, _, info = env.step_proposal(rejected)
+
+    assert info["action_proposal"] == rejected
+    assert info["monitor_decision"].decision is DecisionType.BLOCK
+    assert info["executed_action"].action != rejected.action

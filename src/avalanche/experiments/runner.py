@@ -1,6 +1,7 @@
 """Run one configured episode and write its evidence."""
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -8,8 +9,11 @@ import numpy as np
 
 from avalanche.config import ResolvedConfig, run_id
 from avalanche.config.run_identity import REPO_ROOT
+from avalanche.control import ProposalEngineeringError
 from avalanche.controllers import build_controller
+from avalanche.controllers.factory import build_fallback
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
+from avalanche.monitors import build_monitor
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import Status
 from avalanche.traces import TraceWriter
@@ -35,6 +39,11 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         },
     )
     controller = build_controller(resolved.controller, env.topology)
+    fallback = build_fallback(
+        resolved.fallback.policy, resolved.controller, env.topology
+    )
+    monitor = build_monitor(resolved.monitor, resolved.controller, env.topology)
+    env.configure_adjudicator(monitor, fallback)
     controller.reset(resolved.seed)
     observation, info = env.reset(seed=resolved.seed)
     identity = run_id(resolved)
@@ -47,8 +56,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     truncated = False
 
     while not (terminated or truncated):
-        controller_observation = dict(observation)
-        controller_observation["simulation_time"] = env.sim.simulation_time
+        controller_observation = env.controller_observation()
         proposal = controller.propose(controller_observation)
         trace.record(
             "action_proposed",
@@ -57,7 +65,22 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             env.sim,
         )
         before = _material_state(env)
-        observation, _, terminated, truncated, info = env.step_proposal(proposal)
+        try:
+            observation, _, terminated, truncated, info = env.step_proposal(proposal)
+        except ProposalEngineeringError as error:
+            trace.record("engineering_error", "adjudicator", error.as_dict(), env.sim)
+            raise
+        adjudication = info["adjudication"]
+        trace.record(
+            "monitor_decision",
+            resolved.monitor.kind,
+            {
+                **adjudication.decision.model_dump(mode="json"),
+                "fallback_source": adjudication.fallback_source,
+                "predicted_result": dict(adjudication.predicted_result),
+            },
+            env.sim,
+        )
         executed = info["executed_action"]
         trace.record(
             "action_executed",
@@ -65,7 +88,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             {
                 "controller_id": executed.controller_id,
                 "simulation_time": executed.simulation_time,
-                "action": proposal.model_dump(mode="json")["action"],
+                "action": asdict(executed.action),
             },
             env.sim,
         )
