@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir
+from avalanche.experiments import run_episode
 
 
 def _resolve_config(paths: list[str]) -> ResolvedConfig:
@@ -32,10 +33,8 @@ def simulate(args: argparse.Namespace) -> int:
         return 1
 
     run_dir = make_run_dir(resolved)
-    episode_path = run_dir / "episode.placeholder.txt"
-    episode_path.write_text("placeholder episode: the simulator is not built yet\n")
-
-    print(f"Wrote a placeholder episode to {run_dir}")
+    run_episode(resolved, run_dir)
+    print(f"Wrote the episode to {run_dir}")
     return 0
 
 
@@ -60,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.set_defaults(func=validate_config)
 
     simulate_parser = subparsers.add_parser(
-        "simulate", help="run a placeholder episode for a resolved configuration"
+        "simulate", help="run one resolved simulator episode"
     )
     simulate_parser.add_argument("config", nargs="+")
     simulate_parser.set_defaults(func=simulate)
