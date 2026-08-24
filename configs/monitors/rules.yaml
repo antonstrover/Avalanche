@@ -1,0 +1,17 @@
+monitor:
+  kind: rules
+  decision_threshold: 1.0
+  capacity_ratio: 1.0
+  unfair_allocation_gap: 1.0
+  telemetry_gap_ratio: 0.1
+  dangerous_sequence_length: 3
+  minimum_safe_lift_capacity: 0.5
+  evacuation_edges:
+    - combe_lower->crete_east
+  unsafe_decision: BLOCK
+
+fallback:
+  policy: honest
+
+seed: 1234
+trace_level: decision

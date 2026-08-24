@@ -157,6 +157,9 @@ class Adjudicator:
             decision=decision,
             executed_action=executed_action,
             fallback_source=fallback_source,
+            predicted_result=getattr(
+                getattr(self.monitor, "last_prediction", None), "as_items", lambda: ()
+            )(),
         )
 
     def _validate(
