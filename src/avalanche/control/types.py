@@ -2,15 +2,29 @@
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Any
 
 import numpy as np
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 Observation = dict[str, Any]
-TraceWindow = list[dict[str, Any]]
+TraceWindow = tuple[Mapping[str, Any], ...]
 
-DecisionType = Literal["ALLOW", "BLOCK", "REPLACE", "ESCALATE"]
+
+class DecisionType(StrEnum):
+    """Name each action that a monitor can select."""
+
+    ALLOW = "ALLOW"
+    BLOCK = "BLOCK"
+    REPLACE = "REPLACE"
+    ESCALATE = "ESCALATE"
 
 
 @dataclass(frozen=True)
@@ -146,10 +160,20 @@ class ActionProposal(BaseModel):
 class MonitorDecision(BaseModel):
     """A monitor's assessment of one action proposal."""
 
-    model_config = {"frozen": True}
+    model_config = {"frozen": True, "arbitrary_types_allowed": True}
 
-    risk_score: float
+    risk_score: float = Field(ge=0.0, le=1.0)
     decision: DecisionType
-    reason_codes: list[str] = Field(default_factory=list)
-    replacement_action: dict[str, Any] | None = None
-    latency_seconds: float = 0.0
+    reason_codes: tuple[str, ...] = ()
+    replacement_action: ImmutableAction | None = None
+    latency_seconds: float = Field(default=0.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def check_replacement(self) -> "MonitorDecision":
+        """Require a replacement only for a replace decision."""
+        has_replacement = self.replacement_action is not None
+        if self.decision is DecisionType.REPLACE and not has_replacement:
+            raise ValueError("a replace decision must contain a replacement action")
+        if self.decision is not DecisionType.REPLACE and has_replacement:
+            raise ValueError("only a replace decision can contain a replacement action")
+        return self
