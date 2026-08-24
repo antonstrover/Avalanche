@@ -20,6 +20,7 @@ import {
     type LayerName,
     type LayerVisibility,
 } from "./layers";
+import { edgeTelemetryView } from "./telemetryView";
 
 export function LayerToggles({
     layers,
@@ -61,19 +62,21 @@ export function MountainScene({
     display,
     onLiveFrame,
     onLiveError,
+    showTrueState,
 }: {
     session: LiveSession | null;
     display: DisplayState;
     onLiveFrame: (count: number, display: DisplayState) => void;
     onLiveError: () => void;
+    showTrueState: boolean;
 }) {
     const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
     const [visibleLayers, setVisibleLayers] = useState(INITIAL_LAYERS);
     const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
-    const closedEdges = useMemo(
-        () => new Set(display.closures.map((closure) => closure.edge_index)),
-        [display.closures],
+    const telemetry = useMemo(
+        () => edgeTelemetryView(display.telemetry, showTrueState),
+        [display.telemetry, showTrueState],
     );
 
     return (
@@ -91,12 +94,13 @@ export function MountainScene({
                     </group>
                     <group name="topology-layer" visible={visibleLayers.topology}>
                         <Pistes
-                            closedEdges={closedEdges}
+                            closedEdges={telemetry.closedEdges}
+                            density={telemetry.density}
                             selection={selection}
                             onSelect={setSelection}
                         />
                         <Lifts
-                            closedEdges={closedEdges}
+                            closedEdges={telemetry.closedEdges}
                             selection={selection}
                             onSelect={setSelection}
                         />
