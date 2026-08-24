@@ -64,6 +64,7 @@ The orbit controls give pan, rotate, and zoom.
 
 The live scene shows simulator weather, failures, closures, and hazards.
 An accessible timeline shows each material event.
+The decision inspector shows each honest proposal and its execution result.
 The default skier markers read a recorded replay file.
 The live control starts an isolated simulator process.
 The API streams complete skier frames and live conditions with MessagePack.

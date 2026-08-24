@@ -158,6 +158,61 @@ button:disabled {
   overflow: hidden;
 }
 
+.decision-inspector {
+  margin: 0 22px 30px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--social-bg);
+  text-align: left;
+}
+
+.decision-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.decision-heading span,
+.decision-status,
+.decision-monitor {
+  font: 13px/1.4 var(--mono);
+}
+
+.decision-status {
+  margin-top: 12px;
+  color: var(--accent);
+}
+
+.decision-counts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.decision-counts div {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.decision-counts dt {
+  font-size: 12px;
+}
+
+.decision-counts dd {
+  margin: 4px 0 0;
+  color: var(--text-h);
+  font: 18px/1.2 var(--mono);
+}
+
+.decision-inspector pre {
+  overflow: auto;
+  font: 12px/1.4 var(--mono);
+}
+
 .timeline-heading {
   display: flex;
   gap: 24px;

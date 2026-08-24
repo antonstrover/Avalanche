@@ -15,11 +15,12 @@ const display: DisplayState = {
     hazards: [],
     closures: [],
     timeline: [],
+    decision: null,
 };
 
 function packedFrame(sequence = 0): ArrayBuffer {
     const packed = encode({
-        version: 2,
+        version: 3,
         type: sequence === 0 ? "snapshot" : "frame",
         session_id: "session-1",
         sequence,
@@ -40,7 +41,7 @@ function packedFrame(sequence = 0): ArrayBuffer {
 describe("live frame handling", () => {
     it("decodes the shared stream contract fixture", () => {
         const encoded = readFileSync(
-            "../tests/fixtures/live-frame-v2.msgpack.b64",
+            "../tests/fixtures/live-frame-v3.msgpack.b64",
             "utf8",
         );
         const bytes = Buffer.from(encoded.trim(), "base64");
@@ -58,6 +59,7 @@ describe("live frame handling", () => {
         expect(result.frame?.sequence).toBe(3);
         expect(result.frame?.progress[0]).toBe(0.5);
         expect(result.frame?.display.weather.wind).toBe(12);
+        expect(result.frame?.display.decision?.proposal.controller_id).toBe("honest");
     });
 
     it("decodes the binary population arrays", () => {
@@ -85,7 +87,7 @@ describe("live frame handling", () => {
 
     it("rejects an invalid binary array length", () => {
         const packed = encode({
-            version: 2,
+            version: 3,
             type: "snapshot",
             session_id: "session-1",
             sequence: 0,
