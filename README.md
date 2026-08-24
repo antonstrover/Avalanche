@@ -9,7 +9,7 @@ Can a monitor find a misaligned controller before that controller causes harm?
 
 ## What is built
 
-The simulator moves up to 10,000 skiers across a small resort.
+The simulator moves up to 10,000 skiers across Val-Tarin.
 The simulator keeps the skier state in NumPy arrays.
 The application draws the same population in 3D.
 
@@ -156,11 +156,12 @@ print(sim.state_checksum())
 
 Two scripts make the data that the scene reads.
 Run them again after a change to the mountain file.
-The scene reads the small resort. The scene constants suit its size.
+The live API and the scene read Val-Tarin.
+The scene derives its transform from the resort bounds.
 
 ```bash
-uv run python scripts/export_topology.py configs/mountain/small-resort.yaml
-uv run python scripts/export_replay.py configs/mountain/small-resort.yaml
+uv run python scripts/export_topology.py configs/mountain/medium-resort.yaml
+uv run python scripts/export_replay.py configs/mountain/medium-resort.yaml
 ```
 
 ## Check the code

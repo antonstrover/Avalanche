@@ -1,16 +1,29 @@
 import base64
+import json
 from pathlib import Path
 
 import msgpack
 from fastapi.testclient import TestClient
 
 from avalanche.api.app import app
-from avalanche.api.sessions import MOUNTAIN_PATH, TIMELINE_LIMIT, display_state
-from avalanche.sim import MountainSim
+from avalanche.api.sessions import (
+    DEMO_FAILURE_TARGET,
+    MOUNTAIN_PATH,
+    TIMELINE_LIMIT,
+    display_state,
+)
+from avalanche.sim import MountainSim, load_topology
 
 client = TestClient(app)
 CONTRACT_FIXTURE = (
     Path(__file__).resolve().parents[1] / "fixtures" / "live-frame-v2.msgpack.b64"
+)
+SCENE_RESORT = (
+    Path(__file__).resolve().parents[2]
+    / "dashboard"
+    / "src"
+    / "mountain"
+    / "resort.json"
 )
 
 
@@ -70,6 +83,20 @@ def test_live_session_streams_a_complete_population():
     assert client.get(f"/api/sessions/{session_id}").status_code == 404
 
 
+def test_the_scene_indices_match_the_live_topology():
+    stored = json.loads(SCENE_RESORT.read_text())
+    topology = load_topology(MOUNTAIN_PATH)
+
+    assert [node["node_id"] for node in stored["nodes"]] == list(topology.node_ids)
+    assert [(edge["source"], edge["destination"]) for edge in stored["edges"]] == [
+        (
+            topology.node_ids[topology.edge_source[index]],
+            topology.node_ids[topology.edge_destination[index]],
+        )
+        for index in range(topology.edge_count)
+    ]
+
+
 def test_live_session_rejects_an_invalid_population_size():
     response = client.post("/api/sessions", json={"skier_count": 10001})
     assert response.status_code == 422
@@ -117,7 +144,7 @@ def test_failure_demo_streams_one_stable_timeline_marker():
                 break
         assert marker is not None
         assert marker["event_id"].endswith(":start")
-        assert marker["target"] == "lift1_base->lift1_top"
+        assert marker["target"] == DEMO_FAILURE_TARGET
 
     assert client.delete(f"/api/sessions/{session_id}").status_code == 204
 

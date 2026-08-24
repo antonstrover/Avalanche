@@ -25,8 +25,9 @@ FRAME_INTERVAL_MS = 250
 MAX_SKIERS = 10_000
 TIMELINE_LIMIT = 64
 MOUNTAIN_PATH = (
-    Path(__file__).resolve().parents[3] / "configs" / "mountain" / "small-resort.yaml"
+    Path(__file__).resolve().parents[3] / "configs" / "mountain" / "medium-resort.yaml"
 )
+DEMO_FAILURE_TARGET = "praz_plaza->plan_bois"
 
 
 def topology_version(path: Path = MOUNTAIN_PATH) -> str:
@@ -243,7 +244,7 @@ def run_session(
                 "schedule": [
                     {
                         "kind": "lift_stoppage",
-                        "target": "lift1_base->lift1_top",
+                        "target": DEMO_FAILURE_TARGET,
                         "start_time_seconds": 5.0,
                         "duration_seconds": 60.0,
                         "controller_visible": True,
