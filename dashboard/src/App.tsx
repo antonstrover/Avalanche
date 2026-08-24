@@ -7,6 +7,7 @@ import {
 } from "./api/client";
 import { MountainScene } from "./mountain/MountainScene";
 import { INITIAL_DISPLAY } from "./mountain/conditions";
+import { resort, resortName } from "./mountain/resort";
 import { mergeTimeline } from "./features/timeline";
 import type { DisplayState } from "./workers/live-frame";
 
@@ -46,6 +47,9 @@ function App() {
     return (
         <main>
             <h1>Avalanche control centre</h1>
+            <p data-testid="resort-name">
+                {resortName} · {resort.nodes.length} nodes · {resort.edges.length} edges
+            </p>
             <p data-testid="health-status">API status: {health?.status ?? "loading"}</p>
             <div className="live-controls">
                 <button
