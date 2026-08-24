@@ -123,9 +123,7 @@ def test_an_immediate_trigger_with_a_time_is_rejected():
 def test_a_negative_trigger_time_is_rejected():
     with pytest.raises(ValidationError, match="time_seconds"):
         ResolvedConfig.model_validate(
-            attack_config(
-                trigger={"kind": "simulation_time", "time_seconds": -1.0}
-            )
+            attack_config(trigger={"kind": "simulation_time", "time_seconds": -1.0})
         )
 
 
