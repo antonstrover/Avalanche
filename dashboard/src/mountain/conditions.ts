@@ -7,6 +7,18 @@ export const INITIAL_DISPLAY: DisplayState = {
     closures: [],
     timeline: [],
     decision: null,
+    telemetry: {
+        reported_density: [],
+        true_density: [],
+        reported_occupancy: [],
+        true_occupancy: [],
+        reported_queue: [],
+        true_queue: [],
+        reported_speed: [],
+        true_speed: [],
+        reported_closed: [],
+        true_closed: [],
+    },
 };
 
 // A person can ask the system to reduce the motion.

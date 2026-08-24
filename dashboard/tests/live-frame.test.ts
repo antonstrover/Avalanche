@@ -16,11 +16,18 @@ const display: DisplayState = {
     closures: [],
     timeline: [],
     decision: null,
+    telemetry: {
+        reported_density: [], true_density: [],
+        reported_occupancy: [], true_occupancy: [],
+        reported_queue: [], true_queue: [],
+        reported_speed: [], true_speed: [],
+        reported_closed: [], true_closed: [],
+    },
 };
 
 function packedFrame(sequence = 0): ArrayBuffer {
     const packed = encode({
-        version: 3,
+        version: 4,
         type: sequence === 0 ? "snapshot" : "frame",
         session_id: "session-1",
         sequence,
@@ -87,7 +94,7 @@ describe("live frame handling", () => {
 
     it("rejects an invalid binary array length", () => {
         const packed = encode({
-            version: 3,
+            version: 4,
             type: "snapshot",
             session_id: "session-1",
             sequence: 0,

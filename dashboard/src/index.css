@@ -213,6 +213,27 @@ button:disabled {
   font: 12px/1.4 var(--mono);
 }
 
+.reason-codes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.telemetry-comparison {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font: 12px/1.4 var(--mono);
+}
+
+.telemetry-comparison th,
+.telemetry-comparison td {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  text-align: right;
+}
+
 .timeline-heading {
   display: flex;
   gap: 24px;

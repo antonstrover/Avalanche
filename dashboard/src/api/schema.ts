@@ -111,6 +111,11 @@ export interface components {
              * @default false
              */
             demo_failure: boolean;
+            /**
+             * Demo Monitor
+             * @default false
+             */
+            demo_monitor: boolean;
         };
         /**
          * SessionResponse
@@ -131,6 +136,8 @@ export interface components {
             topology_version: string;
             /** Demo Failure */
             demo_failure: boolean;
+            /** Demo Monitor */
+            demo_monitor: boolean;
         };
         /** ValidationError */
         ValidationError: {

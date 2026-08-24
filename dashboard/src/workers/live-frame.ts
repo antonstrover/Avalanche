@@ -1,6 +1,6 @@
 import { decode } from "@msgpack/msgpack";
 
-export const STREAM_VERSION = 3;
+export const STREAM_VERSION = 4;
 
 export type Severity = "low" | "medium" | "high";
 
@@ -74,7 +74,30 @@ export type LiveDecision = {
         simulation_time: number;
         action: LiveAction;
     };
-    monitor_decision: null;
+    monitor_decision: LiveMonitorDecision | null;
+    fallback_source: string | null;
+    predicted_result: Record<string, number>;
+};
+
+export type LiveMonitorDecision = {
+    risk_score: number;
+    decision: "ALLOW" | "BLOCK" | "REPLACE" | "ESCALATE";
+    reason_codes: string[];
+    replacement_action: LiveAction | null;
+    latency_seconds: number;
+};
+
+export type TelemetryState = {
+    reported_density: number[];
+    true_density: number[];
+    reported_occupancy: number[];
+    true_occupancy: number[];
+    reported_queue: number[];
+    true_queue: number[];
+    reported_speed: number[];
+    true_speed: number[];
+    reported_closed: number[];
+    true_closed: number[];
 };
 
 export type DisplayState = {
@@ -84,6 +107,7 @@ export type DisplayState = {
     closures: ClosureState[];
     timeline: TimelineEvent[];
     decision: LiveDecision | null;
+    telemetry: TelemetryState;
 };
 
 export type FrameState = {
@@ -178,9 +202,34 @@ function liveDecision(value: unknown): LiveDecision | null {
     const decision = record(value, "live decision");
     const proposal = record(decision.proposal, "proposal");
     const executed = record(decision.executed_action, "executed action");
-    if (decision.monitor_decision !== null) {
-        throw new Error("the Stage 5 monitor decision is invalid");
+    const monitorValue = decision.monitor_decision;
+    let monitor: LiveMonitorDecision | null = null;
+    if (monitorValue !== null) {
+        const item = record(monitorValue, "monitor decision");
+        const kind = item.decision;
+        if (kind !== "ALLOW" && kind !== "BLOCK" && kind !== "REPLACE" && kind !== "ESCALATE") {
+            throw new Error("the monitor decision type is invalid");
+        }
+        if (!Array.isArray(item.reason_codes) || !item.reason_codes.every((code) => typeof code === "string")) {
+            throw new Error("the monitor reason codes are invalid");
+        }
+        monitor = {
+            risk_score: number(item.risk_score, "monitor risk"),
+            decision: kind,
+            reason_codes: item.reason_codes,
+            replacement_action:
+                item.replacement_action === null
+                    ? null
+                    : liveAction(item.replacement_action),
+            latency_seconds: number(item.latency_seconds, "monitor latency"),
+        };
     }
+    const fallback = decision.fallback_source;
+    if (fallback !== null && typeof fallback !== "string") {
+        throw new Error("the fallback source is invalid");
+    }
+    const prediction = record(decision.predicted_result, "predicted result");
+    for (const value of Object.values(prediction)) number(value, "predicted value");
     return {
         proposal: {
             controller_id: string(proposal.controller_id, "controller identity"),
@@ -194,7 +243,25 @@ function liveDecision(value: unknown): LiveDecision | null {
             simulation_time: number(executed.simulation_time, "execution time"),
             action: liveAction(executed.action),
         },
-        monitor_decision: null,
+        monitor_decision: monitor,
+        fallback_source: fallback,
+        predicted_result: prediction as Record<string, number>,
+    };
+}
+
+function telemetryState(value: unknown): TelemetryState {
+    const telemetry = record(value, "telemetry state");
+    return {
+        reported_density: numberArray(telemetry.reported_density, "reported density"),
+        true_density: numberArray(telemetry.true_density, "true density"),
+        reported_occupancy: numberArray(telemetry.reported_occupancy, "reported occupancy"),
+        true_occupancy: numberArray(telemetry.true_occupancy, "true occupancy"),
+        reported_queue: numberArray(telemetry.reported_queue, "reported queue"),
+        true_queue: numberArray(telemetry.true_queue, "true queue"),
+        reported_speed: numberArray(telemetry.reported_speed, "reported speed"),
+        true_speed: numberArray(telemetry.true_speed, "true speed"),
+        reported_closed: numberArray(telemetry.reported_closed, "reported closure"),
+        true_closed: numberArray(telemetry.true_closed, "true closure"),
     };
 }
 
@@ -279,6 +346,7 @@ function displayState(value: unknown): DisplayState {
             };
         }),
         decision: liveDecision(display.decision),
+        telemetry: telemetryState(display.telemetry),
     };
 }
 
@@ -296,7 +364,24 @@ export function decodeFrame(
     receivedAt: number,
 ): { type: string; frame: FrameState | null } {
     const envelope = decode(new Uint8Array(packed)) as Envelope;
-    if (envelope.version !== STREAM_VERSION) throw new Error("the stream version is invalid");
+    if (envelope.version !== STREAM_VERSION && envelope.version !== 3) {
+        throw new Error("the stream version is invalid");
+    }
+    if (envelope.version === 3 && envelope.payload) {
+        const legacyDisplay = record(envelope.payload.display, "legacy display");
+        legacyDisplay.telemetry = {
+            reported_density: [], true_density: [],
+            reported_occupancy: [], true_occupancy: [],
+            reported_queue: [], true_queue: [],
+            reported_speed: [], true_speed: [],
+            reported_closed: [], true_closed: [],
+        };
+        if (legacyDisplay.decision !== null) {
+            const legacyDecision = record(legacyDisplay.decision, "legacy decision");
+            legacyDecision.fallback_source = null;
+            legacyDecision.predicted_result = {};
+        }
+    }
     if (envelope.session_id !== sessionId) throw new Error("the session identity is invalid");
     if (envelope.topology_version !== topologyVersion) {
         throw new Error("the topology version is invalid");

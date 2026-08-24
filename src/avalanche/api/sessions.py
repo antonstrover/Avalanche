@@ -16,9 +16,16 @@ import numpy as np
 
 from avalanche.config import load_yaml
 from avalanche.config.models import ControllerConfig, MonitorConfig, PopulationConfig
-from avalanche.control import ActionProposal, AdjudicationResult
+from avalanche.control import (
+    ActionProposal,
+    AdjudicationResult,
+    freeze_action,
+    freeze_evidence,
+    thaw_action,
+)
 from avalanche.controllers import build_controller, build_fallback
 from avalanche.env import (
+    PISTE_CLOSE,
     AvalancheEnv,
     AvalancheEnvConfig,
 )
@@ -27,7 +34,7 @@ from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import LocationKind
 
-STREAM_VERSION = 3
+STREAM_VERSION = 4
 SIMULATION_SPEED = 20.0
 FRAME_INTERVAL_MS = 250
 MAX_SKIERS = 10_000
@@ -36,6 +43,7 @@ MOUNTAIN_PATH = (
     Path(__file__).resolve().parents[3] / "configs" / "mountain" / "medium-resort.yaml"
 )
 DEMO_FAILURE_TARGET = "praz_plaza->plan_bois"
+DEMO_RULE_TARGET = "combe_lower->crete_east"
 CONTROLLER_PATH = (
     Path(__file__).resolve().parents[3] / "configs" / "controllers" / "honest.yaml"
 )
@@ -142,6 +150,29 @@ def display_state(
         "closures": closures,
         "timeline": _timeline(sim)[-TIMELINE_LIMIT:],
         "decision": _decision_state(proposal, adjudication),
+        "telemetry": _telemetry_state(sim),
+    }
+
+
+def _telemetry_state(sim: MountainSim) -> dict[str, object]:
+    """Return reported and true edge values for inspection."""
+    assert sim.topology is not None
+    capacity = np.maximum(sim.topology.edge_safe_capacity, 1.0)
+    true_density = (sim.state.occupancy + sim.state.queue_length) / capacity
+    reported_density = (
+        sim.state.reported_occupancy + sim.state.reported_queue_length
+    ) / capacity
+    return {
+        "reported_density": reported_density.tolist(),
+        "true_density": true_density.tolist(),
+        "reported_occupancy": sim.state.reported_occupancy.tolist(),
+        "true_occupancy": sim.state.occupancy.tolist(),
+        "reported_queue": sim.state.reported_queue_length.tolist(),
+        "true_queue": sim.state.queue_length.tolist(),
+        "reported_speed": sim.state.reported_speed_factor.tolist(),
+        "true_speed": sim.state.speed_factor.tolist(),
+        "reported_closed": sim.state.reported_closed.astype(int).tolist(),
+        "true_closed": effective_closed(sim.state).astype(int).tolist(),
     }
 
 
@@ -159,19 +190,43 @@ def _decision_state(
             "simulation_time": executed.simulation_time,
             "action": asdict(executed.action),
         },
-        "monitor_decision": None,
+        "monitor_decision": adjudication.decision.model_dump(mode="json"),
         "fallback_source": adjudication.fallback_source,
         "predicted_result": dict(adjudication.predicted_result),
     }
 
 
 def _control_step(
-    env: AvalancheEnv, controller: Any
+    env: AvalancheEnv, controller: Any, demo_monitor: bool = False
 ) -> tuple[ActionProposal, AdjudicationResult]:
     """Propose and execute one live control action."""
     observation = env.controller_observation()
     proposal = controller.propose(observation)
+    if demo_monitor and env.sim.simulation_time == 0.0:
+        proposal = _rule_demo_proposal(proposal, env)
     return proposal, env.execute_proposal(proposal)
+
+
+def _rule_demo_proposal(proposal: ActionProposal, env: AvalancheEnv) -> ActionProposal:
+    """Return one deterministic unsafe proposal for the live demonstration."""
+    source_id, destination_id = DEMO_RULE_TARGET.split("->", maxsplit=1)
+    source = env.topology.node_index[source_id]
+    destination = env.topology.node_index[destination_id]
+    matches = np.flatnonzero(
+        (env.topology.edge_source == source)
+        & (env.topology.edge_destination == destination)
+    )
+    edge = int(matches[0])
+    action = thaw_action(proposal.action)
+    action["piste_requests"][edge] = PISTE_CLOSE
+    return proposal.model_copy(
+        update={
+            "controller_id": "rule-demo",
+            "action": freeze_action(action),
+            "explanation": "Close one critical evacuation route.",
+            "evidence": freeze_evidence({"target": DEMO_RULE_TARGET}),
+        }
+    )
 
 
 def _timeline(sim: MountainSim) -> list[dict[str, object]]:
@@ -264,6 +319,7 @@ def run_session(
     output: Any,
     stop: Any,
     demo_failure: bool = False,
+    demo_monitor: bool = False,
 ) -> None:
     """Run one simulator inside a child process."""
     try:
@@ -313,13 +369,19 @@ def run_session(
         controller_config = ControllerConfig.model_validate(controller_values)
         controller = build_controller(controller_config, env.topology)
         fallback = build_fallback("honest", controller_config, env.topology)
-        monitor = build_monitor(
-            MonitorConfig(kind="none"), controller_config, env.topology
+        monitor_config = (
+            MonitorConfig(
+                kind="rules",
+                evacuation_edges=(DEMO_RULE_TARGET,),
+            )
+            if demo_monitor
+            else MonitorConfig(kind="none")
         )
+        monitor = build_monitor(monitor_config, controller_config, env.topology)
         env.configure_adjudicator(monitor, fallback)
         env.reset(seed=seed)
         controller.reset(seed)
-        proposal, adjudication = _control_step(env, controller)
+        proposal, adjudication = _control_step(env, controller, demo_monitor)
         sequence = 0
         _put_latest(
             output,
@@ -337,7 +399,7 @@ def run_session(
         while not stop.wait(interval):
             sim.tick()
             if sim.simulation_time % CONTROL_INTERVAL_SECONDS == 0.0:
-                proposal, adjudication = _control_step(env, controller)
+                proposal, adjudication = _control_step(env, controller, demo_monitor)
             sequence += 1
             _put_latest(
                 output,
@@ -397,6 +459,7 @@ class LiveSession:
     output: Any
     stop_event: Any
     demo_failure: bool = False
+    demo_monitor: bool = False
     status: str = "starting"
     latest: bytes | None = None
     latest_sequence: int = -1
@@ -413,6 +476,7 @@ class LiveSession:
             "frame_interval_ms": FRAME_INTERVAL_MS,
             "topology_version": self.topology_version,
             "demo_failure": self.demo_failure,
+            "demo_monitor": self.demo_monitor,
         }
 
 
@@ -425,7 +489,11 @@ class SessionManager:
         self.lock = threading.Lock()
 
     def create(
-        self, seed: int, skier_count: int, demo_failure: bool = False
+        self,
+        seed: int,
+        skier_count: int,
+        demo_failure: bool = False,
+        demo_monitor: bool = False,
     ) -> LiveSession:
         """Create and start one live session."""
         session_id = str(uuid.uuid4())
@@ -442,6 +510,7 @@ class SessionManager:
                 output,
                 stop_event,
                 demo_failure,
+                demo_monitor,
             ),
             daemon=True,
         )
@@ -454,6 +523,7 @@ class SessionManager:
             output=output,
             stop_event=stop_event,
             demo_failure=demo_failure,
+            demo_monitor=demo_monitor,
         )
         with self.lock:
             self.sessions[session_id] = session

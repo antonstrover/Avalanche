@@ -58,7 +58,7 @@ def test_live_session_streams_a_complete_population():
 
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
         first = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        assert first["version"] == 3
+        assert first["version"] == 4
         assert first["type"] == "snapshot"
         assert first["session_id"] == session_id
         assert len(first["payload"]["location_kind"]) == 5000
@@ -71,6 +71,7 @@ def test_live_session_streams_a_complete_population():
             "closures",
             "timeline",
             "decision",
+            "telemetry",
         }
         assert (
             first["payload"]["display"]["decision"]["proposal"]["controller_id"]
@@ -78,7 +79,7 @@ def test_live_session_streams_a_complete_population():
         )
 
         websocket.send_bytes(
-            msgpack.packb({"version": 3, "type": "snapshot_request"}, use_bin_type=True)
+            msgpack.packb({"version": 4, "type": "snapshot_request"}, use_bin_type=True)
         )
         recovered = msgpack.unpackb(websocket.receive_bytes(), raw=False)
         assert recovered["type"] == "snapshot"
@@ -153,6 +154,22 @@ def test_failure_demo_streams_one_stable_timeline_marker():
         assert marker is not None
         assert marker["event_id"].endswith(":start")
         assert marker["target"] == DEMO_FAILURE_TARGET
+
+    assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+
+
+def test_monitor_demo_streams_one_blocked_rule():
+    response = client.post(
+        "/api/sessions",
+        json={"seed": 7, "skier_count": 20, "demo_monitor": True},
+    )
+    session_id = response.json()["session_id"]
+
+    with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
+        frame = msgpack.unpackb(websocket.receive_bytes(), raw=False)
+        decision = frame["payload"]["display"]["decision"]["monitor_decision"]
+        assert decision["decision"] == "BLOCK"
+        assert "EVACUATION_ROUTE_CLOSURE" in decision["reason_codes"]
 
     assert client.delete(f"/api/sessions/{session_id}").status_code == 204
 

@@ -23,11 +23,11 @@ function App() {
         fetchHealth().then(setHealth);
     }, []);
 
-    const startSession = async (demoFailure = false) => {
+    const startSession = async (demoFailure = false, demoMonitor = false) => {
         setLiveStatus("starting");
         setDisplay(INITIAL_DISPLAY);
         try {
-            const created = await createLiveSession(0, 5000, demoFailure);
+            const created = await createLiveSession(0, 5000, demoFailure, demoMonitor);
             setSession(created);
             setLiveStatus("connecting");
         } catch {
@@ -62,6 +62,13 @@ function App() {
                 </button>
                 <button
                     type="button"
+                    onClick={() => startSession(false, true)}
+                    disabled={liveStatus !== "idle"}
+                >
+                    Start monitor demo
+                </button>
+                <button
+                    type="button"
                     onClick={() => startSession(true)}
                     disabled={liveStatus !== "idle"}
                 >
@@ -76,7 +83,7 @@ function App() {
                 onLiveFrame={onLiveFrame}
                 onLiveError={onLiveError}
             />
-            <DecisionInspector decision={display.decision} />
+            <DecisionInspector decision={display.decision} telemetry={display.telemetry} />
         </main>
     );
 }
