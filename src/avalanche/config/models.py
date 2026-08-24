@@ -181,8 +181,9 @@ class ControllerConfig(StrictModel):
 
 
 class MonitorConfig(StrictModel):
-    kind: str
-    threshold: float
+    kind: Literal["none", "outcome", "rules"]
+    decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
+    harm_event_threshold: int = Field(default=1, ge=1)
 
 
 class FallbackConfig(StrictModel):
