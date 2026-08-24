@@ -32,6 +32,7 @@ class SessionCreate(BaseModel):
     seed: int = 0
     skier_count: int = Field(default=5000, ge=1, le=MAX_SKIERS)
     demo_failure: bool = False
+    demo_monitor: bool = False
 
 
 class SessionResponse(BaseModel):
@@ -44,6 +45,7 @@ class SessionResponse(BaseModel):
     frame_interval_ms: int
     topology_version: str
     demo_failure: bool
+    demo_monitor: bool
 
 
 @app.get("/health")
@@ -60,7 +62,10 @@ def config_options() -> dict[str, object]:
 def create_session(request: SessionCreate) -> dict[str, object]:
     """Start an isolated live simulator session."""
     return manager.create(
-        request.seed, request.skier_count, request.demo_failure
+        request.seed,
+        request.skier_count,
+        request.demo_failure,
+        request.demo_monitor,
     ).response()
 
 

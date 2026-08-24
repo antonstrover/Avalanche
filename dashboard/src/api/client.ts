@@ -24,11 +24,17 @@ export async function createLiveSession(
     seed = 0,
     skierCount = 5000,
     demoFailure = false,
+    demoMonitor = false,
 ): Promise<LiveSession> {
     const response = await fetch(`${API_BASE}/api/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ seed, skier_count: skierCount, demo_failure: demoFailure }),
+        body: JSON.stringify({
+            seed,
+            skier_count: skierCount,
+            demo_failure: demoFailure,
+            demo_monitor: demoMonitor,
+        }),
     });
     if (!response.ok) throw new Error("the live session could not start");
     return response.json() as Promise<LiveSession>;

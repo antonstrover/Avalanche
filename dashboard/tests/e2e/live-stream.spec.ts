@@ -54,3 +54,13 @@ test("a live failure appears on the timeline", async ({ page }) => {
     await expect(marker).toContainText("lift stoppage", { timeout: 15000 });
     await expect(marker).toContainText("praz_plaza->plan_bois");
 });
+
+test("a monitor rule appears in the decision inspector", async ({ page }) => {
+    await page.goto("/");
+    await waitForScene(page);
+    await page.getByRole("button", { name: "Start monitor demo" }).click();
+    await expect(page.getByTestId("decision-type")).toHaveText("BLOCK", {
+        timeout: 15000,
+    });
+    await expect(page.getByText("EVACUATION_ROUTE_CLOSURE", { exact: true })).toBeVisible();
+});
