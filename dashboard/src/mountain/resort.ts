@@ -24,6 +24,7 @@ export type Edge = {
 export type Resort = { name: string; nodes: Node[]; edges: Edge[] };
 
 export const resort: Resort = data;
+export const resortName = resort.name.replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 // The plan scale fits each resort into the same scene width.
 const TARGET_SCENE_WIDTH = 240;

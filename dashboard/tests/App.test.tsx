@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { mergeTimeline } from "../src/features/timeline";
@@ -20,6 +20,7 @@ describe("App shell", () => {
     });
 
     afterEach(() => {
+        cleanup();
         vi.unstubAllGlobals();
     });
 
@@ -31,6 +32,14 @@ describe("App shell", () => {
                 "API status: ok",
             );
         });
+    });
+
+    it("shows the resort name and its topology counts", () => {
+        render(<App />);
+
+        expect(screen.getByTestId("resort-name")).toHaveTextContent(
+            "Val-Tarin · 60 nodes · 80 edges",
+        );
     });
 
     it("deduplicates recovered timeline events by their stable identity", () => {
