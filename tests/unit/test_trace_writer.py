@@ -33,3 +33,8 @@ def test_an_event_carries_the_complete_envelope(tmp_path):
         "state_checksum": sim.state_checksum(),
         "step": 0,
     }
+    assert json.loads((tmp_path / "model-reference.json").read_text()) == {
+        "model_kind": None,
+        "model_path": None,
+        "model_revision": None,
+    }
