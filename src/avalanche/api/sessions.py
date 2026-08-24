@@ -372,6 +372,7 @@ def run_session(
     demo_approval: bool = False,
     approval_input: Any | None = None,
     approval_timeout: float = 30.0,
+    command_input: Any | None = None,
 ) -> None:
     """Run one simulator inside a child process."""
     try:
@@ -490,12 +491,21 @@ def run_session(
             ),
         )
         interval = FRAME_INTERVAL_MS / 1000.0
-        while not stop.wait(interval):
+        simulation_speed = SIMULATION_SPEED
+        accumulated_seconds = 0.0
+        paused = False
+        next_frame = time.monotonic() + interval
+
+        def advance_tick() -> None:
+            nonlocal proposal, adjudication
             sim.tick()
             if sim.simulation_time % CONTROL_INTERVAL_SECONDS == 0.0:
                 proposal, adjudication = _control_step(
                     env, controller, demo_monitor or demo_approval
                 )
+
+        def publish_frame() -> None:
+            nonlocal sequence
             sequence += 1
             _put_latest(
                 output,
@@ -508,6 +518,63 @@ def run_session(
                     adjudication=adjudication,
                 ),
             )
+
+        def acknowledge(command_id: str) -> None:
+            _put_latest(
+                output,
+                msgpack.packb(
+                    {
+                        "version": STREAM_VERSION,
+                        "type": "command_ack",
+                        "session_id": session_id,
+                        "sequence": sequence,
+                        "simulation_time": sim.simulation_time,
+                        "topology_version": topology,
+                        "state_checksum": sim.state_checksum(),
+                        "command_id": command_id,
+                        "status": "paused" if paused else "running",
+                        "simulation_speed": simulation_speed,
+                    },
+                    use_bin_type=True,
+                ),
+            )
+
+        while not stop.is_set():
+            command = None
+            if command_input is not None:
+                try:
+                    command = command_input.get_nowait()
+                except queue.Empty:
+                    pass
+            if command is not None:
+                kind = command["command"]
+                if kind == "pause":
+                    paused = True
+                elif kind == "resume":
+                    paused = False
+                    next_frame = time.monotonic() + interval
+                elif kind == "set_speed":
+                    simulation_speed = float(command["speed"])
+                elif kind == "step":
+                    for _ in range(env.config.movement_ticks_per_step):
+                        advance_tick()
+                    publish_frame()
+                acknowledge(command["command_id"])
+                continue
+
+            if paused:
+                stop.wait(0.01)
+                continue
+            remaining = next_frame - time.monotonic()
+            if remaining > 0.0:
+                stop.wait(min(remaining, 0.01))
+                continue
+            accumulated_seconds += simulation_speed * interval
+            while accumulated_seconds >= env.config.movement_tick_seconds:
+                advance_tick()
+                accumulated_seconds -= env.config.movement_tick_seconds
+            publish_frame()
+            next_frame += interval
             if np.all(sim.population.location_kind == LocationKind.FINISHED):
                 sequence += 1
                 complete = msgpack.packb(
@@ -558,6 +625,7 @@ class LiveSession:
     demo_monitor: bool = False
     demo_approval: bool = False
     approval_input: Any | None = None
+    command_input: Any | None = None
     pending_decision_id: str | None = None
     resolved_decisions: set[str] = field(default_factory=set)
     status: str = "starting"
@@ -565,6 +633,9 @@ class LiveSession:
     latest_sequence: int = -1
     lock: threading.Lock = field(default_factory=threading.Lock)
     pump: threading.Thread | None = None
+    simulation_speed: float = SIMULATION_SPEED
+    command_results: set[str] = field(default_factory=set)
+    command_condition: threading.Condition = field(default_factory=threading.Condition)
 
     def response(self) -> dict[str, object]:
         """Return the public session state."""
@@ -572,7 +643,7 @@ class LiveSession:
             "session_id": self.session_id,
             "status": self.status,
             "skier_count": self.skier_count,
-            "simulation_speed": SIMULATION_SPEED,
+            "simulation_speed": self.simulation_speed,
             "frame_interval_ms": FRAME_INTERVAL_MS,
             "topology_version": self.topology_version,
             "demo_failure": self.demo_failure,
@@ -602,6 +673,7 @@ class SessionManager:
         version = topology_version()
         output = self.context.Queue(maxsize=4)
         approval_input = self.context.Queue(maxsize=4)
+        command_input = self.context.Queue(maxsize=16)
         stop_event = self.context.Event()
         process = self.context.Process(
             target=run_session,
@@ -616,6 +688,8 @@ class SessionManager:
                 demo_monitor,
                 demo_approval,
                 approval_input,
+                30.0,
+                command_input,
             ),
             daemon=True,
         )
@@ -631,6 +705,7 @@ class SessionManager:
             demo_monitor=demo_monitor,
             demo_approval=demo_approval,
             approval_input=approval_input,
+            command_input=command_input,
         )
         with self.lock:
             self.sessions[session_id] = session
@@ -647,6 +722,13 @@ class SessionManager:
             except queue.Empty:
                 continue
             envelope = msgpack.unpackb(packed, raw=False)
+            if envelope["type"] == "command_ack":
+                with session.command_condition:
+                    session.status = str(envelope["status"])
+                    session.simulation_speed = float(envelope["simulation_speed"])
+                    session.command_results.add(str(envelope["command_id"]))
+                    session.command_condition.notify_all()
+                continue
             with session.lock:
                 session.latest = packed
                 session.latest_sequence = int(envelope["sequence"])
@@ -666,7 +748,7 @@ class SessionManager:
                     session.status = "complete"
                 elif kind == "error":
                     session.status = "failed"
-        stopped_early = session.status in {"starting", "running"}
+        stopped_early = session.status in {"starting", "running", "paused"}
         if stopped_early and not session.stop_event.is_set():
             session.status = "failed"
 
@@ -702,6 +784,36 @@ class SessionManager:
         )
         return "accepted"
 
+    def command(
+        self, session_id: str, command: str, speed: float | None
+    ) -> tuple[str, LiveSession | None]:
+        """Send one command and wait for its worker acknowledgement."""
+        session = self.get(session_id)
+        if session is None:
+            return "missing_session", None
+        with session.lock:
+            status = session.status
+        valid = status in {"running", "paused"}
+        if command == "step":
+            valid = status == "paused"
+        if not valid or session.command_input is None:
+            return "invalid_state", session
+        if command == "pause" and status == "paused":
+            return "accepted", session
+        if command == "resume" and status == "running":
+            return "accepted", session
+        command_id = str(uuid.uuid4())
+        session.command_input.put(
+            {"command_id": command_id, "command": command, "speed": speed}
+        )
+        with session.command_condition:
+            completed = session.command_condition.wait_for(
+                lambda: command_id in session.command_results,
+                timeout=5.0,
+            )
+            session.command_results.discard(command_id)
+        return ("accepted" if completed else "timeout"), session
+
     def delete(self, session_id: str) -> bool:
         """Stop and remove one session."""
         with self.lock:
@@ -715,6 +827,7 @@ class SessionManager:
             session.process.join(timeout=1.0)
         session.output.close()
         session.approval_input.close()
+        session.command_input.close()
         return True
 
     def close(self) -> None:
