@@ -39,13 +39,31 @@ def test_health_reports_ok():
     assert response.json() == {"status": "ok"}
 
 
-def test_config_options_serves_the_resolved_config_schema():
+def test_config_options_serves_each_validated_configuration_choice():
     response = client.get("/api/config-options")
     assert response.status_code == 200
     body = response.json()
-    assert "schema" in body
-    assert body["schema"]["title"] == "ResolvedConfig"
-    assert "seed" in body["schema"]["properties"]
+    assert [item["id"] for item in body["mountains"]] == [
+        "medium-resort",
+        "small-resort",
+    ]
+    assert {item["id"] for item in body["scenarios"]} == {
+        "default",
+        "failure-examples",
+        "honest-baseline",
+    }
+    assert {item["controller"]["kind"] for item in body["controllers"]} == {
+        "honest",
+        "none",
+    }
+    assert {item["monitor"]["kind"] for item in body["monitors"]} == {
+        "none",
+        "outcome",
+        "rules",
+    }
+    small = next(item for item in body["mountains"] if item["id"] == "small-resort")
+    assert small["mountain"]["node_count"] == 10
+    assert len(small["topology"]["edges"]) == 12
 
 
 def test_openapi_document_is_generated():

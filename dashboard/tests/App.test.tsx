@@ -13,8 +13,17 @@ describe("App shell", () => {
     beforeEach(() => {
         vi.stubGlobal(
             "fetch",
-            vi.fn().mockResolvedValue({
-                json: () => Promise.resolve({ status: "ok" }),
+            vi.fn((input: string | URL | Request) => {
+                const url = String(input);
+                const body = url.endsWith("/api/config-options")
+                    ? {
+                          mountains: [{ id: "medium-resort" }],
+                          scenarios: [{ id: "default" }],
+                          controllers: [{ id: "honest" }],
+                          monitors: [{ id: "none" }],
+                      }
+                    : { status: "ok" };
+                return Promise.resolve({ json: () => Promise.resolve(body) });
             }),
         );
     });
@@ -40,6 +49,15 @@ describe("App shell", () => {
         expect(screen.getByTestId("resort-name")).toHaveTextContent(
             "Val-Tarin · 60 nodes · 80 edges",
         );
+    });
+
+    it("fetches the choices and sends them to the session setup", async () => {
+        render(<App />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("session-setup")).toHaveTextContent("Mountains1");
+        });
+        expect(fetch).toHaveBeenCalledWith("/api/config-options");
     });
 
     it("deduplicates recovered timeline events by their stable identity", () => {
