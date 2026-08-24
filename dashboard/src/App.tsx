@@ -99,7 +99,7 @@ function App() {
 
     const onLiveFrame = useCallback((count: number, next: DisplayState) => {
         setLiveCount(count);
-        setLiveStatus("live");
+        setLiveStatus((current) => (current === "paused" ? current : "live"));
         setDisplay((current) => ({
             ...next,
             timeline: mergeTimeline(current.timeline, next.timeline),

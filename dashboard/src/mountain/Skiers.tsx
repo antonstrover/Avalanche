@@ -67,9 +67,12 @@ export function Skiers({
     const matrix = useMemo(() => new Matrix4(), []);
     const point = useMemo(() => new Vector3(), []);
     const curves = useMemo(() => modelEdgeCurves(model), [model]);
+    const sessionId = session?.session_id;
+    const topologyVersion = session?.topology_version;
+    const frameIntervalMs = session?.frame_interval_ms;
 
     useEffect(() => {
-        if (!session) return;
+        if (!sessionId || !topologyVersion || frameIntervalMs === undefined) return;
         const frameWorker = new Worker(
             new URL("../workers/live-frame.worker.ts", import.meta.url),
             { type: "module" },
@@ -79,9 +82,9 @@ export function Skiers({
         frameWorker.postMessage(
             {
                 type: "initialize",
-                sessionId: session.session_id,
-                topologyVersion: session.topology_version,
-                frameIntervalMs: still ? 1 : session.frame_interval_ms,
+                sessionId,
+                topologyVersion,
+                frameIntervalMs: still ? 1 : frameIntervalMs,
                 nodePositions: table.nodePositions.buffer,
                 edgePositions: table.edgePositions.buffer,
                 edgeSamples: EDGE_POSITION_SAMPLES,
@@ -90,7 +93,7 @@ export function Skiers({
             [table.nodePositions.buffer, table.edgePositions.buffer],
         );
 
-        const socket = new WebSocket(liveStreamUrl(session.session_id));
+        const socket = new WebSocket(liveStreamUrl(sessionId));
         socket.binaryType = "arraybuffer";
         socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
             frameWorker.postMessage(
@@ -147,7 +150,16 @@ export function Skiers({
             liveMatricesReady.current = false;
             setSkierCount(replay.skier_count);
         };
-    }, [session, onLiveError, onLiveFrame, still, model, curves]);
+    }, [
+        sessionId,
+        topologyVersion,
+        frameIntervalMs,
+        onLiveError,
+        onLiveFrame,
+        still,
+        model,
+        curves,
+    ]);
 
     useFrame((_state, delta) => {
         const instances = mesh.current;
