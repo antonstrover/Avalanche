@@ -42,5 +42,5 @@ test("a live failure appears on the timeline", async ({ page }) => {
     });
     const marker = page.locator('[data-event-type="failure_started"]');
     await expect(marker).toContainText("lift stoppage", { timeout: 15000 });
-    await expect(marker).toContainText("lift1_base->lift1_top");
+    await expect(marker).toContainText("praz_plaza->plan_bois");
 });
