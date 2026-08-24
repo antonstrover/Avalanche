@@ -191,6 +191,7 @@ class AvalancheEnv(gym.Env):
         ):
             raise ValueError("the reset movement tick must match the environment")
         sim_options["tick_seconds"] = self.config.movement_tick_seconds
+        sim_options["episode_duration_seconds"] = self.config.episode_duration_seconds
         self.sim.reset(run_seed, sim_options)
         self._seed = run_seed
         self._ended = False
@@ -319,24 +320,9 @@ class AvalancheEnv(gym.Env):
 
     def _metrics(self) -> dict[str, float | int | tuple[float, ...]]:
         """Return the current named metrics."""
-        snapshot = self._reward_snapshot()
-        pop = self.sim.population
-        group_wait_times = tuple(
-            float(np.mean(pop.wait_time[pop.group == group]))
-            if np.any(pop.group == group)
-            else 0.0
-            for group in range(self.config.group_count)
-        )
-        fairness = max(group_wait_times) - min(group_wait_times)
-        return {
-            "completed_journeys": snapshot.completed_journeys,
-            "wait_time": snapshot.wait_time,
-            "dangerous_density": snapshot.dangerous_density,
-            "stranded_skiers": snapshot.stranded_skiers,
-            "group_mean_wait_times": group_wait_times,
-            "fairness": fairness,
-            "intervention_cost": self._cumulative_intervention_cost,
-        }
+        metrics = self.sim.metrics.snapshot(self.sim.population).as_dict()
+        metrics["intervention_cost"] = self._cumulative_intervention_cost
+        return metrics
 
     def _base_info(self, observation: Observation) -> dict[str, Any]:
         """Return the metadata shared by reset and step results."""

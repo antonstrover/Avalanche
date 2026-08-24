@@ -127,10 +127,13 @@ def test_an_executed_action_changes_each_supported_control():
     assert info["current_intervention_cost"] > 0.0
     assert info["metrics"]["intervention_cost"] > 0.0
     assert set(info["metrics"]) == {
+        "metrics_version",
         "completed_journeys",
-        "wait_time",
-        "dangerous_density",
+        "wait_time_sum",
+        "density_limit_seconds",
         "stranded_skiers",
+        "stranded_time_seconds",
+        "group_utility",
         "group_mean_wait_times",
         "fairness",
         "intervention_cost",

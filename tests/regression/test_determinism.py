@@ -28,10 +28,13 @@ CONFIG_FILES = (
 CONTROL_INTERVAL_SECONDS = 30.0
 EPISODE_DURATION_SECONDS = 300.0
 METRIC_NAMES = {
+    "metrics_version",
     "completed_journeys",
-    "wait_time",
-    "dangerous_density",
+    "wait_time_sum",
+    "density_limit_seconds",
     "stranded_skiers",
+    "stranded_time_seconds",
+    "group_utility",
     "group_mean_wait_times",
     "fairness",
     "intervention_cost",

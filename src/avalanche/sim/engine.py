@@ -17,6 +17,7 @@ from avalanche.config.models import (
     PopulationConfig,
     WeatherConfig,
 )
+from avalanche.metrics import OnlineMetrics
 from avalanche.scenarios.failures import (
     FailureEvent,
     FailureSchedule,
@@ -43,7 +44,12 @@ from avalanche.sim.movement import (
     start_arrivals,
     update_congestion,
 )
-from avalanche.sim.population import SkierArrays, empty_population, sample_population
+from avalanche.sim.population import (
+    ABILITY_NAMES,
+    SkierArrays,
+    empty_population,
+    sample_population,
+)
 from avalanche.sim.routes import RouteTable, build_route_table
 from avalanche.sim.topology import Topology, load_topology
 
@@ -56,6 +62,7 @@ STREAM_NAMES = (
     "monitor",
 )
 DEFAULT_TICK_SECONDS = 5.0
+DEFAULT_EPISODE_SECONDS = 3_600.0
 
 
 class MountainSim:
@@ -83,6 +90,7 @@ class MountainSim:
         self.failures_config = FailuresConfig()
         self.failure_schedule: FailureSchedule | None = None
         self.active_failures: tuple[FailureEvent, ...] = ()
+        self.metrics = OnlineMetrics(len(ABILITY_NAMES), DEFAULT_EPISODE_SECONDS)
 
     def reset(
         self, seed: int, options: dict[str, Any] | None = None
@@ -148,6 +156,10 @@ class MountainSim:
         self.simulation_time = 0.0
         self.step = 0
         self.hazard_events = []
+        episode_seconds = float(
+            options.get("episode_duration_seconds", DEFAULT_EPISODE_SECONDS)
+        )
+        self.metrics = OnlineMetrics(len(ABILITY_NAMES), episode_seconds)
         self._update_weather()
         self._update_failures()
         refresh_reported_telemetry(self.state)
@@ -198,6 +210,7 @@ class MountainSim:
         refresh_reported_telemetry(self.state)
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
         accumulate_times(pop, self.tick_seconds)
+        self.metrics.update(pop, self.state, self.tick_seconds)
         # 10. Write the material events to the trace buffer. Stage 5 adds this.
 
         self.simulation_time += self.tick_seconds
