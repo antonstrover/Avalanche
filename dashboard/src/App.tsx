@@ -9,6 +9,7 @@ import { MountainScene } from "./mountain/MountainScene";
 import { INITIAL_DISPLAY } from "./mountain/conditions";
 import { resort, resortName } from "./mountain/resort";
 import { mergeTimeline } from "./features/timeline";
+import { DecisionInspector } from "./features/live/DecisionInspector";
 import type { DisplayState } from "./workers/live-frame";
 
 function App() {
@@ -75,6 +76,7 @@ function App() {
                 onLiveFrame={onLiveFrame}
                 onLiveError={onLiveError}
             />
+            <DecisionInspector decision={display.decision} />
         </main>
     );
 }

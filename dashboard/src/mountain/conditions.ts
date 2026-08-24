@@ -6,6 +6,7 @@ export const INITIAL_DISPLAY: DisplayState = {
     hazards: [],
     closures: [],
     timeline: [],
+    decision: null,
 };
 
 // A person can ask the system to reduce the motion.

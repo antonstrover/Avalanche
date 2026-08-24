@@ -1,6 +1,6 @@
 import { decode } from "@msgpack/msgpack";
 
-export const STREAM_VERSION = 2;
+export const STREAM_VERSION = 3;
 
 export type Severity = "low" | "medium" | "high";
 
@@ -49,12 +49,41 @@ export type TimelineEvent = {
     label: string;
 };
 
+export type LiveAction = {
+    route_weights: number[][];
+    piste_requests: number[];
+    lift_capacity: number[];
+    lift_capacity_enabled: number[];
+    crowd_messages: number[][];
+    telemetry_overrides: number[];
+    telemetry_override_enabled: number[];
+};
+
+export type LiveProposal = {
+    controller_id: string;
+    simulation_time: number;
+    action: LiveAction;
+    explanation: string;
+    evidence: Record<string, unknown>;
+};
+
+export type LiveDecision = {
+    proposal: LiveProposal;
+    executed_action: {
+        controller_id: string;
+        simulation_time: number;
+        action: LiveAction;
+    };
+    monitor_decision: null;
+};
+
 export type DisplayState = {
     weather: WeatherState;
     failures: FailureState[];
     hazards: HazardState[];
     closures: ClosureState[];
     timeline: TimelineEvent[];
+    decision: LiveDecision | null;
 };
 
 export type FrameState = {
@@ -110,6 +139,63 @@ function severity(value: unknown): Severity {
         throw new Error("the severity is invalid");
     }
     return value;
+}
+
+function numberArray(value: unknown, name: string): number[] {
+    if (!Array.isArray(value)) throw new Error(`the ${name} is invalid`);
+    return value.map((item) => number(item, name));
+}
+
+function numberMatrix(value: unknown, name: string): number[][] {
+    if (!Array.isArray(value)) throw new Error(`the ${name} is invalid`);
+    return value.map((item) => numberArray(item, name));
+}
+
+function liveAction(value: unknown): LiveAction {
+    const action = record(value, "live action");
+    return {
+        route_weights: numberMatrix(action.route_weights, "route weights"),
+        piste_requests: numberArray(action.piste_requests, "piste requests"),
+        lift_capacity: numberArray(action.lift_capacity, "lift capacity"),
+        lift_capacity_enabled: numberArray(
+            action.lift_capacity_enabled,
+            "lift capacity mask",
+        ),
+        crowd_messages: numberMatrix(action.crowd_messages, "crowd messages"),
+        telemetry_overrides: numberArray(
+            action.telemetry_overrides,
+            "telemetry values",
+        ),
+        telemetry_override_enabled: numberArray(
+            action.telemetry_override_enabled,
+            "telemetry mask",
+        ),
+    };
+}
+
+function liveDecision(value: unknown): LiveDecision | null {
+    if (value === null) return null;
+    const decision = record(value, "live decision");
+    const proposal = record(decision.proposal, "proposal");
+    const executed = record(decision.executed_action, "executed action");
+    if (decision.monitor_decision !== null) {
+        throw new Error("the Stage 5 monitor decision is invalid");
+    }
+    return {
+        proposal: {
+            controller_id: string(proposal.controller_id, "controller identity"),
+            simulation_time: number(proposal.simulation_time, "proposal time"),
+            action: liveAction(proposal.action),
+            explanation: string(proposal.explanation, "proposal explanation"),
+            evidence: record(proposal.evidence, "proposal evidence"),
+        },
+        executed_action: {
+            controller_id: string(executed.controller_id, "executed controller"),
+            simulation_time: number(executed.simulation_time, "execution time"),
+            action: liveAction(executed.action),
+        },
+        monitor_decision: null,
+    };
 }
 
 function displayState(value: unknown): DisplayState {
@@ -192,6 +278,7 @@ function displayState(value: unknown): DisplayState {
                 label: string(item.label, "timeline label"),
             };
         }),
+        decision: liveDecision(display.decision),
     };
 }
 

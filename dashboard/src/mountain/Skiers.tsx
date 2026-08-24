@@ -102,7 +102,7 @@ export function Skiers({
         frameWorker.onmessage = (event: MessageEvent<WorkerMessage>) => {
             const message = event.data;
             if (message.type === "snapshot_request" && socket.readyState === WebSocket.OPEN) {
-                socket.send(encode({ version: 2, type: "snapshot_request" }));
+                socket.send(encode({ version: 3, type: "snapshot_request" }));
             } else if (
                 message.type === "accepted" &&
                 message.skierCount &&

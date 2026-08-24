@@ -33,6 +33,16 @@ test("a live session draws 5000 skiers smoothly", async ({ page }) => {
     await expect(page.getByTestId("live-status")).toHaveText("Live status: live");
 });
 
+test("a live session shows an honest proposal", async ({ page }) => {
+    await page.goto("/");
+    await waitForScene(page);
+    await page.getByRole("button", { name: "Start live session" }).click();
+    await expect(page.getByTestId("proposal-controller")).toHaveText("honest", {
+        timeout: 15000,
+    });
+    await expect(page.getByTestId("proposal-explanation")).not.toBeEmpty();
+});
+
 test("a live failure appears on the timeline", async ({ page }) => {
     await page.goto("/");
     await waitForScene(page);

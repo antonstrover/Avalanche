@@ -7,19 +7,30 @@ import multiprocessing as mp
 import queue
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import msgpack
 import numpy as np
 
-from avalanche.config.models import PopulationConfig
+from avalanche.config import load_yaml
+from avalanche.config.models import ControllerConfig, PopulationConfig
+from avalanche.control import ActionProposal, ExecutedAction
+from avalanche.controllers import build_controller
+from avalanche.env import (
+    ObservationConfig,
+    apply_executed_action,
+    build_action_masks,
+    build_action_space,
+    build_observation,
+    execute_action_proposal,
+)
 from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import LocationKind
 
-STREAM_VERSION = 2
+STREAM_VERSION = 3
 SIMULATION_SPEED = 20.0
 FRAME_INTERVAL_MS = 250
 MAX_SKIERS = 10_000
@@ -28,6 +39,11 @@ MOUNTAIN_PATH = (
     Path(__file__).resolve().parents[3] / "configs" / "mountain" / "medium-resort.yaml"
 )
 DEMO_FAILURE_TARGET = "praz_plaza->plan_bois"
+CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[3] / "configs" / "controllers" / "honest.yaml"
+)
+CONTROL_INTERVAL_SECONDS = 60.0
+EPISODE_DURATION_SECONDS = 28_800.0
 
 
 def topology_version(path: Path = MOUNTAIN_PATH) -> str:
@@ -41,6 +57,8 @@ def pack_frame(
     sequence: int,
     topology: str,
     message_type: str = "frame",
+    proposal: ActionProposal | None = None,
+    executed: ExecutedAction | None = None,
 ) -> bytes:
     """Pack one complete display state."""
     population = sim.population
@@ -49,7 +67,7 @@ def pack_frame(
         "location_kind": population.location_kind.astype(np.int8, copy=False).tobytes(),
         "location_index": population.location_index.astype("<i4", copy=False).tobytes(),
         "progress": population.progress.astype("<f4", copy=False).tobytes(),
-        "display": display_state(sim),
+        "display": display_state(sim, proposal, executed),
     }
     envelope = {
         "version": STREAM_VERSION,
@@ -69,7 +87,11 @@ def _failure_id(kind: str, target: int, start: float) -> str:
     return f"failure:{kind}:{target}:{start:g}"
 
 
-def display_state(sim: MountainSim) -> dict[str, object]:
+def display_state(
+    sim: MountainSim,
+    proposal: ActionProposal | None = None,
+    executed: ExecutedAction | None = None,
+) -> dict[str, object]:
     """Return the bounded display state for one live frame."""
     assert sim.failure_schedule is not None
     assert sim.weather_schedule is not None
@@ -122,7 +144,44 @@ def display_state(sim: MountainSim) -> dict[str, object]:
         "hazards": hazards,
         "closures": closures,
         "timeline": _timeline(sim)[-TIMELINE_LIMIT:],
+        "decision": _decision_state(proposal, executed),
     }
+
+
+def _decision_state(
+    proposal: ActionProposal | None, executed: ExecutedAction | None
+) -> dict[str, object] | None:
+    """Return the latest proposal and execution result."""
+    if proposal is None or executed is None:
+        return None
+    return {
+        "proposal": proposal.model_dump(mode="json"),
+        "executed_action": {
+            "controller_id": executed.controller_id,
+            "simulation_time": executed.simulation_time,
+            "action": asdict(executed.action),
+        },
+        "monitor_decision": None,
+    }
+
+
+def _control_step(
+    sim: MountainSim, controller: Any
+) -> tuple[ActionProposal, ExecutedAction]:
+    """Propose and execute one live control action."""
+    assert sim.topology is not None
+    masks = build_action_masks(sim.topology)
+    observation = build_observation(
+        sim,
+        ObservationConfig(episode_duration_seconds=EPISODE_DURATION_SECONDS),
+        masks,
+    )
+    observation["simulation_time"] = sim.simulation_time
+    proposal = controller.propose(observation)
+    action_space = build_action_space(sim.topology)
+    executed = execute_action_proposal(proposal, action_space, masks)
+    apply_executed_action(sim, executed)
+    return proposal, executed
 
 
 def _timeline(sim: MountainSim) -> list[dict[str, object]]:
@@ -252,13 +311,43 @@ def run_session(
                 ]
             }
         sim.reset(seed, options=options)
+        assert sim.topology is not None
+        controller_values = load_yaml(CONTROLLER_PATH)["controller"]
+        controller = build_controller(
+            ControllerConfig.model_validate(controller_values), sim.topology
+        )
+        controller.reset(seed)
+        proposal, executed = _control_step(sim, controller)
         sequence = 0
-        _put_latest(output, pack_frame(sim, session_id, sequence, topology, "snapshot"))
+        _put_latest(
+            output,
+            pack_frame(
+                sim,
+                session_id,
+                sequence,
+                topology,
+                "snapshot",
+                proposal,
+                executed,
+            ),
+        )
         interval = FRAME_INTERVAL_MS / 1000.0
         while not stop.wait(interval):
             sim.tick()
+            if sim.simulation_time % CONTROL_INTERVAL_SECONDS == 0.0:
+                proposal, executed = _control_step(sim, controller)
             sequence += 1
-            _put_latest(output, pack_frame(sim, session_id, sequence, topology))
+            _put_latest(
+                output,
+                pack_frame(
+                    sim,
+                    session_id,
+                    sequence,
+                    topology,
+                    proposal=proposal,
+                    executed=executed,
+                ),
+            )
             if np.all(sim.population.location_kind == LocationKind.FINISHED):
                 sequence += 1
                 complete = msgpack.packb(

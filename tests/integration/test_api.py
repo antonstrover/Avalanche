@@ -16,7 +16,7 @@ from avalanche.sim import MountainSim, load_topology
 
 client = TestClient(app)
 CONTRACT_FIXTURE = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "live-frame-v2.msgpack.b64"
+    Path(__file__).resolve().parents[1] / "fixtures" / "live-frame-v3.msgpack.b64"
 )
 SCENE_RESORT = (
     Path(__file__).resolve().parents[2]
@@ -58,7 +58,7 @@ def test_live_session_streams_a_complete_population():
 
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
         first = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        assert first["version"] == 2
+        assert first["version"] == 3
         assert first["type"] == "snapshot"
         assert first["session_id"] == session_id
         assert len(first["payload"]["location_kind"]) == 5000
@@ -70,10 +70,15 @@ def test_live_session_streams_a_complete_population():
             "hazards",
             "closures",
             "timeline",
+            "decision",
         }
+        assert (
+            first["payload"]["display"]["decision"]["proposal"]["controller_id"]
+            == "honest"
+        )
 
         websocket.send_bytes(
-            msgpack.packb({"version": 2, "type": "snapshot_request"}, use_bin_type=True)
+            msgpack.packb({"version": 3, "type": "snapshot_request"}, use_bin_type=True)
         )
         recovered = msgpack.unpackb(websocket.receive_bytes(), raw=False)
         assert recovered["type"] == "snapshot"
@@ -112,11 +117,14 @@ def test_python_decodes_the_stream_contract_fixture():
     packed = base64.b64decode(CONTRACT_FIXTURE.read_text().strip())
     frame = msgpack.unpackb(packed, raw=False)
 
-    assert frame["version"] == 2
+    assert frame["version"] == 3
     assert frame["session_id"] == "fixture-session"
     assert frame["payload"]["skier_count"] == 2
     assert len(frame["payload"]["location_index"]) == 8
     assert frame["payload"]["display"]["weather"]["wind"] == 12.0
+    assert (
+        frame["payload"]["display"]["decision"]["proposal"]["controller_id"] == "honest"
+    )
 
 
 def test_failure_demo_streams_one_stable_timeline_marker():
