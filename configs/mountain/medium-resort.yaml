@@ -768,7 +768,7 @@ edges:
     snow_sensitivity: 0.15
 
   - source: nursery_meadow
-    destination: praz_meadow_end
+    destination: praz_plaza
     name: Piste du Village
     edge_type: piste
     difficulty: green
@@ -787,7 +787,7 @@ edges:
     edge_type: piste
     difficulty: green
     length: 380.0
-    nominal_travel_time: 210.0
+    nominal_travel_time: 90.0
     safe_capacity: 240
     critical_density: 1.5
     lift_throughput: null
@@ -804,7 +804,7 @@ edges:
     edge_type: piste
     difficulty: red
     length: 420.0
-    nominal_travel_time: 200.0
+    nominal_travel_time: 260.0
     safe_capacity: 90
     critical_density: 1.1
     lift_throughput: null
