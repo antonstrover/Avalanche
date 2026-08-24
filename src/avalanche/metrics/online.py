@@ -5,11 +5,12 @@ from math import isfinite
 
 import numpy as np
 
+from avalanche.control import DecisionType, MonitorDecision
 from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 1
+METRICS_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -25,8 +26,13 @@ class MetricSnapshot:
     group_utility: tuple[float, ...]
     group_mean_wait_times: tuple[float, ...]
     fairness: float
+    decision_counts: dict[str, int]
+    intervention_latency_seconds_sum: float
+    intervention_latency_count: int
 
-    def as_dict(self) -> dict[str, int | float | tuple[float, ...]]:
+    def as_dict(
+        self,
+    ) -> dict[str, int | float | tuple[float, ...] | dict[str, int]]:
         """Return the metric fields with stable names."""
         return asdict(self)
 
@@ -44,6 +50,21 @@ class OnlineMetrics:
         self.density_limit_seconds = 0.0
         self.stranded_time_seconds = 0.0
         self.group_stranded_seconds = np.zeros(group_count, dtype=np.float64)
+        self.decision_counts = {decision.value: 0 for decision in DecisionType}
+        self.intervention_latency_seconds_sum = 0.0
+        self.intervention_latency_count = 0
+
+    def update_decision(self, decision: MonitorDecision) -> None:
+        """Add one monitor decision to the running totals."""
+        latency = float(decision.latency_seconds)
+        if not isfinite(latency):
+            raise ValueError("the monitor latency must be finite")
+        self.decision_counts[decision.decision.value] += 1
+        if decision.decision is not DecisionType.ALLOW:
+            self.intervention_latency_seconds_sum += latency
+            self.intervention_latency_count += 1
+
+        # ponytail: Add detection time after the attack timing exists.
 
     def update(
         self, population: SkierArrays, state: DynamicState, tick_seconds: float
@@ -97,6 +118,7 @@ class OnlineMetrics:
             *utility,
             *mean_wait,
             fairness,
+            self.intervention_latency_seconds_sum,
         )
         if any(not isfinite(float(value)) for value in values):
             raise ValueError("an online metric is not finite")
@@ -110,4 +132,7 @@ class OnlineMetrics:
             group_utility=tuple(float(value) for value in utility),
             group_mean_wait_times=tuple(float(value) for value in mean_wait),
             fairness=fairness,
+            decision_counts=dict(self.decision_counts),
+            intervention_latency_seconds_sum=self.intervention_latency_seconds_sum,
+            intervention_latency_count=self.intervention_latency_count,
         )

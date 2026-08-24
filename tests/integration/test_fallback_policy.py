@@ -144,3 +144,5 @@ def test_the_environment_applies_only_the_adjudicated_action():
     assert info["action_proposal"] == rejected
     assert info["monitor_decision"].decision is DecisionType.BLOCK
     assert info["executed_action"].action != rejected.action
+    assert info["metrics"]["decision_counts"]["BLOCK"] == 1
+    assert info["metrics"]["intervention_latency_count"] == 1
