@@ -186,7 +186,7 @@ class MonitorConfig(StrictModel):
 
 
 class FallbackConfig(StrictModel):
-    policy: str
+    policy: Literal["honest", "last_safe"]
 
 
 class ResolvedConfig(StrictModel):

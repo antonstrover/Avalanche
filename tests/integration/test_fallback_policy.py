@@ -1,0 +1,125 @@
+from pathlib import Path
+
+from avalanche.config.models import ControllerConfig
+from avalanche.control import (
+    ActionProposal,
+    Adjudicator,
+    DecisionType,
+    MonitorDecision,
+    build_monitor_observation,
+    freeze_action,
+    thaw_action,
+)
+from avalanche.controllers import build_fallback
+from avalanche.env import (
+    AvalancheEnv,
+    AvalancheEnvConfig,
+    neutral_action,
+    validate_action,
+)
+
+FIXTURE = (
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+)
+
+
+class BlockMonitor:
+    def reset(self, seed: int) -> None:
+        self.seed = seed
+
+    def assess(self, observation, proposal, history):
+        return MonitorDecision(
+            risk_score=1.0,
+            decision=DecisionType.BLOCK,
+            reason_codes=("TEST_BLOCK",),
+        )
+
+
+class AllowMonitor(BlockMonitor):
+    def assess(self, observation, proposal, history):
+        return MonitorDecision(risk_score=0.0, decision=DecisionType.ALLOW)
+
+
+def configured_env() -> AvalancheEnv:
+    env = AvalancheEnv(
+        FIXTURE,
+        AvalancheEnvConfig(
+            movement_tick_seconds=5.0,
+            control_interval_seconds=5.0,
+            episode_duration_seconds=10.0,
+        ),
+    )
+    env.reset(seed=3)
+    return env
+
+
+def make_proposal(env: AvalancheEnv, value: float) -> ActionProposal:
+    action = neutral_action(env.topology)
+    action["route_weights"][0, 0] = value
+    return ActionProposal(
+        controller_id="unsafe",
+        simulation_time=env.sim.simulation_time,
+        action=freeze_action(action),
+        explanation="Propose an unsafe route.",
+    )
+
+
+def make_adjudicator(env, monitor, policy):
+    fallback = build_fallback(policy, ControllerConfig(kind="honest"), env.topology)
+    boundary = Adjudicator(
+        monitor,
+        lambda action: validate_action(
+            thaw_action(action), env.action_space, env._action_masks()
+        ),
+        fallback,
+    )
+    boundary.reset(3)
+    return boundary
+
+
+def monitor_observation(env):
+    observation = env._observation()
+    observation["simulation_time"] = env.sim.simulation_time
+    return build_monitor_observation(observation, env.sim)
+
+
+def test_block_uses_the_honest_fallback():
+    env = configured_env()
+    rejected = make_proposal(env, 1.0)
+    result = make_adjudicator(env, BlockMonitor(), "honest").adjudicate(
+        monitor_observation(env), rejected, simulation_time=env.sim.simulation_time
+    )
+
+    assert result.executed_action.controller_id == "honest-fallback"
+    assert result.executed_action.action != rejected.action
+    assert rejected.action.route_weights[0][0] == 1.0
+
+
+def test_last_safe_reuses_the_previous_execution():
+    env = configured_env()
+    boundary = make_adjudicator(env, AllowMonitor(), "last_safe")
+    first = make_proposal(env, 0.5)
+    allowed = boundary.adjudicate(
+        monitor_observation(env), first, simulation_time=env.sim.simulation_time
+    )
+    boundary.monitor = BlockMonitor()
+    blocked = boundary.adjudicate(
+        monitor_observation(env),
+        make_proposal(env, 1.0),
+        simulation_time=env.sim.simulation_time,
+    )
+
+    assert blocked.executed_action.action == allowed.executed_action.action
+    assert blocked.executed_action.controller_id == "last-safe-fallback"
+
+
+def test_last_safe_starts_with_the_honest_fallback():
+    env = configured_env()
+    result = make_adjudicator(env, BlockMonitor(), "last_safe").adjudicate(
+        monitor_observation(env),
+        make_proposal(env, -1.0),
+        simulation_time=env.sim.simulation_time,
+    )
+
+    assert result.executed_action.controller_id == "honest-fallback"
+    assert result.executed_action.action != make_proposal(env, -1.0).action
