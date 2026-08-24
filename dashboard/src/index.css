@@ -135,6 +135,56 @@ code {
   padding: 0 20px 24px;
 }
 
+.configuration-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 22px;
+  text-align: left;
+}
+
+.configuration-summary div {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--social-bg);
+}
+
+.configuration-summary dt {
+  font-size: 12px;
+}
+
+.configuration-summary dd {
+  margin: 4px 0 0;
+  color: var(--text-h);
+  font: 15px/1.3 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.configuration-details {
+  margin: 0 22px 24px;
+  text-align: left;
+}
+
+.configuration-details summary {
+  cursor: pointer;
+}
+
+.configuration-details pre {
+  max-height: 360px;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--code-bg);
+  font: 12px/1.4 var(--mono);
+}
+
+@media (max-width: 640px) {
+  .configuration-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 button {
   border: 1px solid var(--border);
   border-radius: 6px;

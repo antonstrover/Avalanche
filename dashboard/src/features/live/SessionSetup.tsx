@@ -81,7 +81,38 @@ export function SessionSetup({
             </div>
             <h3>Resolved configuration</h3>
             {resolved ? (
-                <pre data-testid="resolved-config">{JSON.stringify(resolved, null, 2)}</pre>
+                <div data-testid="resolved-config">
+                    <dl className="configuration-summary">
+                        <div>
+                            <dt>Mountain</dt>
+                            <dd>{resolved.mountain.name}</dd>
+                        </div>
+                        <div>
+                            <dt>Scenario</dt>
+                            <dd>{resolved.scenario.name}</dd>
+                        </div>
+                        <div>
+                            <dt>Controller</dt>
+                            <dd>{resolved.controller.kind}</dd>
+                        </div>
+                        <div>
+                            <dt>Monitor</dt>
+                            <dd>{resolved.monitor.kind}</dd>
+                        </div>
+                        <div>
+                            <dt>Seed</dt>
+                            <dd>{resolved.seed}</dd>
+                        </div>
+                        <div>
+                            <dt>Skier count</dt>
+                            <dd>{resolved.population.skier_count}</dd>
+                        </div>
+                    </dl>
+                    <details className="configuration-details">
+                        <summary>View the full configuration</summary>
+                        <pre>{JSON.stringify(resolved, null, 2)}</pre>
+                    </details>
+                </div>
             ) : (
                 <p>Resolving the selected configuration.</p>
             )}

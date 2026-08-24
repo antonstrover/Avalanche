@@ -31,7 +31,14 @@ describe("App shell", () => {
                         monitors: [{ id: "none", label: "None" }],
                     };
                 } else if (url.endsWith("/api/config-options/resolve")) {
-                    body = { mountain: { name: "val-tarin" }, seed: 0 };
+                    body = {
+                        mountain: { name: "val-tarin" },
+                        population: { skier_count: 5000 },
+                        scenario: { name: "default" },
+                        controller: { kind: "honest" },
+                        monitor: { kind: "none" },
+                        seed: 0,
+                    };
                 }
                 return Promise.resolve({
                     ok: true,
@@ -64,14 +71,18 @@ describe("App shell", () => {
         );
     });
 
-    it("fetches the choices and sends them to the session setup", async () => {
+    it("shows a compact resolved configuration", async () => {
         render(<App />);
 
         await waitFor(() => {
             expect(screen.getByTestId("resolved-config")).toHaveTextContent(
-                '"name": "val-tarin"',
+                "val-tarin",
             );
         });
+        expect(screen.getByTestId("resolved-config")).toHaveTextContent("5000");
+        expect(
+            screen.getByText("View the full configuration").closest("details"),
+        ).not.toHaveAttribute("open");
         expect(fetch).toHaveBeenCalledWith("/api/config-options");
     });
 
