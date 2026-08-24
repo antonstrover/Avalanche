@@ -15,7 +15,7 @@ SAMPLE_FILES = [
 
 def test_load_yaml_reads_a_mapping():
     data = load_yaml(SAMPLE_FILES[0])
-    assert data["mountain"]["name"] == "default-resort"
+    assert data["mountain"]["name"] == "val-tarin"
 
 
 def test_merge_configs_combines_and_overrides():
@@ -27,7 +27,7 @@ def test_merge_configs_combines_and_overrides():
 
 def test_load_and_merge_resolves_the_sample_configs():
     resolved = load_and_merge(*SAMPLE_FILES)
-    assert resolved["mountain"]["name"] == "default-resort"
+    assert resolved["mountain"]["name"] == "val-tarin"
     assert resolved["population"]["skier_count"] == 5000
     assert resolved["intervals"]["movement_tick_seconds"] == 5
     assert resolved["controller"]["kind"] == "honest"
