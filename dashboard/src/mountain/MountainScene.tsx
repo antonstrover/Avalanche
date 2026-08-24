@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type ComponentRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { CameraControls } from "@react-three/drei";
 import { Buildings } from "./Buildings";
 import { Timeline } from "../components/Timeline";
 import { Failures } from "./Failures";
@@ -21,6 +21,8 @@ import {
     type LayerVisibility,
 } from "./layers";
 import { edgeTelemetryView } from "./telemetryView";
+import { cameraPresets, moveToPreset, type CameraPresetName } from "./cameraPresets";
+import { reducedMotion } from "./conditions";
 
 export function LayerToggles({
     layers,
@@ -75,7 +77,8 @@ export function MountainScene({
     const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
     const [visibleLayers, setVisibleLayers] = useState(INITIAL_LAYERS);
-    const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
+    const controls = useRef<ComponentRef<typeof CameraControls>>(null);
+    const presets = useMemo(() => cameraPresets(model), [model]);
     const telemetry = useMemo(
         () => edgeTelemetryView(display.telemetry, showTrueState),
         [display.telemetry, showTrueState],
@@ -144,22 +147,39 @@ export function MountainScene({
                         visible={visibleLayers.recommendations}
                     />
                     <group name="selection-layer" visible={visibleLayers.selection} />
-                    <OrbitControls
+                    <CameraControls
                         ref={controls}
-                        target={model.cameraTarget}
-                        enablePan
-                        enableRotate
-                        enableZoom
-                        enableDamping={false}
                     />
                     <FirstFrame onDrawn={() => setDrawn(true)} />
                 </Canvas>
             </div>
             <div className="mountain-bar">
                 <p data-testid="selection">{selectionLabel(selection)}</p>
-                <button type="button" onClick={() => controls.current?.reset()}>
+                <button
+                    type="button"
+                    onClick={() => controls.current?.reset(!reducedMotion())}
+                >
                     Reset the view
                 </button>
+                {(["overview", "zone", "operations"] as CameraPresetName[]).map(
+                    (name) => (
+                        <button
+                            key={name}
+                            type="button"
+                            onClick={() => {
+                                if (controls.current) {
+                                    moveToPreset(
+                                        controls.current,
+                                        presets[name],
+                                        reducedMotion(),
+                                    );
+                                }
+                            }}
+                        >
+                            {name} view
+                        </button>
+                    ),
+                )}
                 <LayerToggles
                     layers={visibleLayers}
                     onChange={(name, visible) =>
