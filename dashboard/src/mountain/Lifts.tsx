@@ -1,20 +1,29 @@
 import { useMemo } from "react";
 import { CABLE_HEIGHT, liftShape } from "./curves";
-import { lifts } from "./resort";
+import { defaultResortModel, type ResortModel } from "./resort";
 import type { Selection } from "./selection";
 
 type Props = {
     closedEdges: ReadonlySet<number>;
     selection: Selection;
     onSelect: (selection: Selection) => void;
+    model?: ResortModel;
 };
 
-export function Lifts({ closedEdges, selection, onSelect }: Props) {
-    const shapes = useMemo(() => lifts.map((item) => liftShape(item.edge)), []);
+export function Lifts({
+    closedEdges,
+    selection,
+    onSelect,
+    model = defaultResortModel,
+}: Props) {
+    const shapes = useMemo(
+        () => model.lifts.map((item) => liftShape(item.edge, model)),
+        [model],
+    );
 
     return (
         <group name="lifts">
-            {lifts.map((item, order) => {
+            {model.lifts.map((item, order) => {
                 const shape = shapes[order];
                 const selected = selection?.kind === "lift" && selection.index === item.index;
                 const colour = selected

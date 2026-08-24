@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     commandLiveSession,
     createLiveSession,
     fetchConfigOptions,
     fetchHealth,
+    resolveLiveConfig,
     type ConfigOptionsResponse,
     type HealthResponse,
     type LiveSession,
+    type LiveConfigSelection,
+    type ResolvedLiveConfig,
 } from "./api/client";
 import { MountainScene } from "./mountain/MountainScene";
 import { INITIAL_DISPLAY } from "./mountain/conditions";
-import { resort, resortName } from "./mountain/resort";
+import {
+    createResortModel,
+    defaultResortModel,
+    type Resort,
+} from "./mountain/resort";
 import { mergeTimeline } from "./features/timeline";
 import { DecisionInspector } from "./features/live/DecisionInspector";
 import { ApprovalPanel } from "./features/live/ApprovalPanel";
@@ -21,28 +28,62 @@ function App() {
     const [health, setHealth] = useState<HealthResponse | null>(null);
     const [configOptions, setConfigOptions] = useState<ConfigOptionsResponse | null>(null);
     const [configFailed, setConfigFailed] = useState(false);
+    const [selection, setSelection] = useState<LiveConfigSelection>({
+        mountain: "medium-resort",
+        scenario: "default",
+        controller: "honest",
+        monitor: "none",
+        seed: 0,
+        skier_count: 5000,
+    });
+    const [resolvedConfig, setResolvedConfig] = useState<ResolvedLiveConfig | null>(null);
     const [session, setSession] = useState<LiveSession | null>(null);
     const [liveStatus, setLiveStatus] = useState("idle");
     const [liveCount, setLiveCount] = useState(0);
     const [simulationSpeed, setSimulationSpeed] = useState(20);
     const [display, setDisplay] = useState<DisplayState>(INITIAL_DISPLAY);
+    const selectedMountain = configOptions?.mountains.find(
+        (option) => option.id === selection.mountain,
+    );
+    const resortModel = useMemo(
+        () =>
+            selectedMountain
+                ? createResortModel(selectedMountain.topology as unknown as Resort)
+                : defaultResortModel,
+        [selectedMountain],
+    );
 
     useEffect(() => {
         fetchHealth().then(setHealth);
         fetchConfigOptions().then(setConfigOptions).catch(() => setConfigFailed(true));
     }, []);
 
+    useEffect(() => {
+        if (!configOptions) return;
+        let current = true;
+        resolveLiveConfig(selection)
+            .then((resolved) => {
+                if (current) setResolvedConfig(resolved);
+            })
+            .catch(() => {
+                if (current) setConfigFailed(true);
+            });
+        return () => {
+            current = false;
+        };
+    }, [configOptions, selection]);
+
     const startSession = async (
         demoFailure = false,
         demoMonitor = false,
         demoApproval = false,
     ) => {
+        if (!resolvedConfig) return;
         setLiveStatus("starting");
         setDisplay(INITIAL_DISPLAY);
         try {
             const created = await createLiveSession(
-                0,
-                5000,
+                resolvedConfig,
                 demoFailure,
                 demoMonitor,
                 demoApproval,
@@ -85,36 +126,46 @@ function App() {
         <main>
             <h1>Avalanche control centre</h1>
             <p data-testid="resort-name">
-                {resortName} · {resort.nodes.length} nodes · {resort.edges.length} edges
+                {resortModel.resortName} · {resortModel.resort.nodes.length} nodes ·{" "}
+                {resortModel.resort.edges.length} edges
             </p>
             <p data-testid="health-status">API status: {health?.status ?? "loading"}</p>
-            <SessionSetup options={configOptions} failed={configFailed} />
+            <SessionSetup
+                options={configOptions}
+                selection={selection}
+                resolved={resolvedConfig}
+                failed={configFailed}
+                onChange={(next) => {
+                    setResolvedConfig(null);
+                    setSelection(next);
+                }}
+            />
             <div className="live-controls">
                 <button
                     type="button"
                     onClick={() => startSession(false)}
-                    disabled={liveStatus !== "idle"}
+                    disabled={liveStatus !== "idle" || !resolvedConfig}
                 >
                     Start live session
                 </button>
                 <button
                     type="button"
                     onClick={() => startSession(false, true)}
-                    disabled={liveStatus !== "idle"}
+                    disabled={liveStatus !== "idle" || !resolvedConfig}
                 >
                     Start monitor demo
                 </button>
                 <button
                     type="button"
                     onClick={() => startSession(false, false, true)}
-                    disabled={liveStatus !== "idle"}
+                    disabled={liveStatus !== "idle" || !resolvedConfig}
                 >
                     Start approval demo
                 </button>
                 <button
                     type="button"
                     onClick={() => startSession(true)}
-                    disabled={liveStatus !== "idle"}
+                    disabled={liveStatus !== "idle" || !resolvedConfig}
                 >
                     Start failure demo
                 </button>
@@ -164,6 +215,7 @@ function App() {
                 display={display}
                 onLiveFrame={onLiveFrame}
                 onLiveError={onLiveError}
+                model={resortModel}
             />
             <DecisionInspector decision={display.decision} telemetry={display.telemetry} />
             <ApprovalPanel decision={display.decision} session={session} />

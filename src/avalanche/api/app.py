@@ -16,7 +16,7 @@ from avalanche.api.sessions import (
     snapshot_message,
     validate_replacement_action,
 )
-from avalanche.config import load_yaml, merge_configs
+from avalanche.config import ResolvedConfig, load_yaml, merge_configs
 from avalanche.config.models import (
     ControllerConfig,
     FallbackConfig,
@@ -49,6 +49,7 @@ class SessionCreate(BaseModel):
     demo_failure: bool = False
     demo_monitor: bool = False
     demo_approval: bool = False
+    config: ResolvedConfig | None = None
 
 
 class SessionResponse(BaseModel):
@@ -63,6 +64,7 @@ class SessionResponse(BaseModel):
     demo_failure: bool
     demo_monitor: bool
     demo_approval: bool
+    resolved_config: ResolvedConfig
 
 
 class ApprovalResponseRequest(BaseModel):
@@ -135,6 +137,17 @@ class ConfigOptionsResponse(BaseModel):
     scenarios: list[ScenarioOption]
     controllers: list[ControllerOption]
     monitors: list[MonitorOption]
+
+
+class LiveConfigSelection(BaseModel):
+    """Select each component of one resolved live configuration."""
+
+    mountain: str = "medium-resort"
+    scenario: str = "default"
+    controller: str = "honest"
+    monitor: str = "none"
+    seed: int = 0
+    skier_count: int = Field(default=5000, ge=1, le=MAX_SKIERS)
 
 
 def _label(value: str) -> str:
@@ -227,6 +240,38 @@ def _monitor_options() -> list[MonitorOption]:
     return choices
 
 
+def _find_option(options: list[Any], identifier: str, kind: str) -> Any:
+    """Return one named option or reject an unknown identifier."""
+    for option in options:
+        if option.id == identifier:
+            return option
+    raise HTTPException(status_code=422, detail=f"the {kind} choice is unknown")
+
+
+def resolve_live_config(selection: LiveConfigSelection) -> ResolvedConfig:
+    """Resolve one validated live configuration selection."""
+    mountain = _find_option(_mountain_options(), selection.mountain, "mountain")
+    scenario = _find_option(_scenario_options(), selection.scenario, "scenario")
+    controller = _find_option(_controller_options(), selection.controller, "controller")
+    monitor = _find_option(_monitor_options(), selection.monitor, "monitor")
+    population = mountain.population.model_copy(
+        update={"skier_count": selection.skier_count}
+    )
+    return ResolvedConfig(
+        mountain=mountain.mountain,
+        population=population,
+        intervals=scenario.intervals,
+        scenario=scenario.scenario,
+        controller=controller.controller,
+        monitor=monitor.monitor,
+        fallback=monitor.fallback,
+        seed=selection.seed,
+        trace_level=monitor.trace_level,
+        episode_duration_seconds=scenario.episode_duration_seconds,
+        snapshot_interval_seconds=scenario.snapshot_interval_seconds,
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -243,15 +288,25 @@ def config_options() -> ConfigOptionsResponse:
     )
 
 
+@app.post("/api/config-options/resolve", response_model=ResolvedConfig)
+def resolve_config(selection: LiveConfigSelection) -> ResolvedConfig:
+    """Return the exact configuration for one live selection."""
+    return resolve_live_config(selection)
+
+
 @app.post("/api/sessions", status_code=201, response_model=SessionResponse)
 def create_session(request: SessionCreate) -> dict[str, object]:
     """Start an isolated live simulator session."""
+    resolved = request.config or resolve_live_config(
+        LiveConfigSelection(seed=request.seed, skier_count=request.skier_count)
+    )
     return manager.create(
-        request.seed,
-        request.skier_count,
+        resolved.seed,
+        resolved.population.skier_count,
         request.demo_failure,
         request.demo_monitor,
         request.demo_approval,
+        resolved,
     ).response()
 
 

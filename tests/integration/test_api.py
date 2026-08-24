@@ -70,6 +70,68 @@ def test_openapi_document_is_generated():
     response = client.get("/openapi.json")
     assert response.status_code == 200
     assert "/api/config-options" in response.json()["paths"]
+    assert "/api/config-options/resolve" in response.json()["paths"]
+
+
+def test_live_configuration_resolution_combines_every_selected_part():
+    response = client.post(
+        "/api/config-options/resolve",
+        json={
+            "mountain": "small-resort",
+            "scenario": "failure-examples",
+            "controller": "none",
+            "monitor": "none",
+            "seed": 17,
+            "skier_count": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    resolved = response.json()
+    assert resolved["mountain"]["name"] == "small-resort"
+    assert resolved["scenario"]["name"] == "failure-examples"
+    assert resolved["controller"]["kind"] == "none"
+    assert resolved["monitor"]["kind"] == "none"
+    assert resolved["seed"] == 17
+    assert resolved["population"]["skier_count"] == 20
+
+
+def test_live_configuration_resolution_rejects_an_unknown_choice():
+    response = client.post("/api/config-options/resolve", json={"mountain": "missing"})
+    assert response.status_code == 422
+    assert response.json()["detail"] == "the mountain choice is unknown"
+
+
+def test_live_session_runs_the_explicit_resolved_configuration():
+    resolved = client.post(
+        "/api/config-options/resolve",
+        json={
+            "mountain": "small-resort",
+            "scenario": "default",
+            "controller": "none",
+            "monitor": "none",
+            "seed": 17,
+            "skier_count": 20,
+        },
+    ).json()
+    response = client.post("/api/sessions", json={"config": resolved})
+    assert response.status_code == 201
+    session = response.json()
+    session_id = session["session_id"]
+    assert session["resolved_config"] == resolved
+    assert session["topology_version"] == topology_version(
+        Path(resolved["mountain"]["path"])
+    )
+
+    try:
+        with client.websocket_connect(
+            f"/api/sessions/{session_id}/stream"
+        ) as websocket:
+            frame = msgpack.unpackb(websocket.receive_bytes(), raw=False)
+            proposal = frame["payload"]["display"]["decision"]["proposal"]
+            assert proposal["controller_id"] == "none"
+    finally:
+        client.delete(f"/api/sessions/{session_id}")
 
 
 def test_live_session_streams_a_complete_population():

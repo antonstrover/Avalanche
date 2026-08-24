@@ -73,6 +73,7 @@ The approval panel pauses an escalated action for a manual response.
 Automatic runs use a deterministic simulated response.
 The default skier markers read a recorded replay file.
 The live control starts an isolated simulator process.
+The live setup selects and resolves each available configuration part.
 The live controls pause, resume, step, and change the simulation speed.
 The API streams complete skier frames and live conditions with MessagePack.
 A Web Worker decodes the frames and interpolates the positions.
@@ -121,7 +122,9 @@ cd dashboard && npm run dev
 ```
 
 Open the address that Vite prints.
-Select **Start live session** to stream the default population.
+Select the live configuration.
+Review the resolved values before the session starts.
+Select **Start live session** to stream the selected population.
 
 ### The command-line interface
 
@@ -166,7 +169,8 @@ print(sim.state_checksum())
 
 Two scripts make the data that the scene reads.
 Run them again after a change to the mountain file.
-The live API and the scene read Val-Tarin.
+The demonstration replay uses Val-Tarin.
+The live scene reads the mountain selected for its session.
 The scene derives its transform from the resort bounds.
 
 ```bash

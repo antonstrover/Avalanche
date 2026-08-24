@@ -7,6 +7,8 @@ export type HealthResponse =
 
 export type ConfigOptionsResponse =
     operations["config_options_api_config_options_get"]["responses"][200]["content"]["application/json"];
+export type LiveConfigSelection = components["schemas"]["LiveConfigSelection"];
+export type ResolvedLiveConfig = components["schemas"]["ResolvedConfig"];
 
 export async function fetchHealth(): Promise<HealthResponse> {
     const response = await fetch(`${API_BASE}/health`);
@@ -18,11 +20,22 @@ export async function fetchConfigOptions(): Promise<ConfigOptionsResponse> {
     return response.json();
 }
 
+export async function resolveLiveConfig(
+    selection: LiveConfigSelection,
+): Promise<ResolvedLiveConfig> {
+    const response = await fetch(`${API_BASE}/api/config-options/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(selection),
+    });
+    if (!response.ok) throw new Error("the live configuration is invalid");
+    return response.json() as Promise<ResolvedLiveConfig>;
+}
+
 export type LiveSession = components["schemas"]["SessionResponse"];
 
 export async function createLiveSession(
-    seed = 0,
-    skierCount = 5000,
+    config: ResolvedLiveConfig,
     demoFailure = false,
     demoMonitor = false,
     demoApproval = false,
@@ -31,8 +44,7 @@ export async function createLiveSession(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            seed,
-            skier_count: skierCount,
+            config,
             demo_failure: demoFailure,
             demo_monitor: demoMonitor,
             demo_approval: demoApproval,

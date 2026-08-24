@@ -6,13 +6,14 @@ import { liveStreamUrl, type LiveSession } from "../api/client";
 import { reducedMotion } from "./conditions";
 import {
     EDGE_POSITION_SAMPLES,
-    edgeCurves,
+    modelEdgeCurves,
     placePosition,
     workerPositionTable,
     type Place,
 } from "./positions";
 import data from "./replay.sample.json";
 import type { DisplayState } from "../workers/live-frame";
+import { defaultResortModel, type ResortModel } from "./resort";
 
 type Frame = { time: number; skiers: Place[] };
 type Replay = { skier_count: number; frames: Frame[] };
@@ -42,10 +43,12 @@ export function Skiers({
     session,
     onLiveFrame,
     onLiveError,
+    model = defaultResortModel,
 }: {
     session: LiveSession | null;
     onLiveFrame: (count: number, display: DisplayState) => void;
     onLiveError: () => void;
+    model?: ResortModel;
 }) {
     const mesh = useRef<InstancedMesh>(null);
     const worker = useRef<Worker | null>(null);
@@ -63,6 +66,7 @@ export function Skiers({
     const cursor = useRef(0);
     const matrix = useMemo(() => new Matrix4(), []);
     const point = useMemo(() => new Vector3(), []);
+    const curves = useMemo(() => modelEdgeCurves(model), [model]);
 
     useEffect(() => {
         if (!session) return;
@@ -71,7 +75,7 @@ export function Skiers({
             { type: "module" },
         );
         worker.current = frameWorker;
-        const table = workerPositionTable();
+        const table = workerPositionTable(model);
         frameWorker.postMessage(
             {
                 type: "initialize",
@@ -81,7 +85,7 @@ export function Skiers({
                 nodePositions: table.nodePositions.buffer,
                 edgePositions: table.edgePositions.buffer,
                 edgeSamples: EDGE_POSITION_SAMPLES,
-                edgeCount: edgeCurves.length,
+                edgeCount: curves.length,
             },
             [table.nodePositions.buffer, table.edgePositions.buffer],
         );
@@ -143,7 +147,7 @@ export function Skiers({
             liveMatricesReady.current = false;
             setSkierCount(replay.skier_count);
         };
-    }, [session, onLiveError, onLiveFrame, still]);
+    }, [session, onLiveError, onLiveFrame, still, model, curves]);
 
     useFrame((_state, delta) => {
         const instances = mesh.current;
@@ -212,8 +216,8 @@ export function Skiers({
         for (let skier = 0; skier < replay.skier_count; skier += 1) {
             const start = before.skiers[skier];
             const end = after.skiers[skier];
-            const startPoint = start ? placePosition(start) : null;
-            const endPoint = end ? placePosition(end) : null;
+            const startPoint = start ? placePosition(start, model, curves) : null;
+            const endPoint = end ? placePosition(end, model, curves) : null;
             const sameEdge = start && end && start[0] === end[0] && start[1] === end[1];
             const place =
                 startPoint && endPoint && sameEdge

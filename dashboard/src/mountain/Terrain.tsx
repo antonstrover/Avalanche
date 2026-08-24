@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { BufferAttribute, Color, PlaneGeometry, Vector2, Vector3 } from "three";
-import { centre, meanNodeSpacing, nodePosition, resort, terrainSize } from "./resort";
+import { defaultResortModel, type ResortModel } from "./resort";
 
 const SEGMENTS = 72;
 const CLEARANCE = 1.2;
@@ -9,7 +9,7 @@ const ROCK = new Color("#6f6a67");
 
 // The terrain is a low-poly slope. The nodes give it its shape.
 // A fall line gives the general slope. The nodes then pull the surface to them.
-function buildSurface(points: Vector3[]) {
+function buildSurface(points: Vector3[], meanNodeSpacing: number) {
     let base = points[0];
     let top = points[0];
     for (const point of points) {
@@ -56,12 +56,20 @@ function buildSurface(points: Vector3[]) {
     };
 }
 
-export function Terrain() {
+export function Terrain({ model = defaultResortModel }: { model?: ResortModel }) {
     const geometry = useMemo(() => {
-        const surface = buildSurface(resort.nodes.map((node) => nodePosition(node)));
-        const plane = new PlaneGeometry(terrainSize, terrainSize, SEGMENTS, SEGMENTS);
+        const surface = buildSurface(
+            model.resort.nodes.map((node) => model.nodePosition(node)),
+            model.meanNodeSpacing,
+        );
+        const plane = new PlaneGeometry(
+            model.terrainSize,
+            model.terrainSize,
+            SEGMENTS,
+            SEGMENTS,
+        );
         plane.rotateX(-Math.PI / 2);
-        plane.translate(centre.x, 0, centre.z);
+        plane.translate(model.centre.x, 0, model.centre.z);
 
         const position = plane.attributes.position as BufferAttribute;
         const colours = new Float32Array(position.count * 3);
@@ -82,7 +90,7 @@ export function Terrain() {
         plane.setAttribute("color", new BufferAttribute(colours, 3));
         plane.computeVertexNormals();
         return plane;
-    }, []);
+    }, [model]);
 
     return (
         <mesh geometry={geometry} name="terrain">

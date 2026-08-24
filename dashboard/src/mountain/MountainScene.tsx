@@ -10,7 +10,7 @@ import { Pistes } from "./Pistes";
 import { Skiers } from "./Skiers";
 import { Terrain } from "./Terrain";
 import { Weather } from "./Weather";
-import { cameraPosition, cameraTarget } from "./resort";
+import { defaultResortModel, type ResortModel } from "./resort";
 import { selectionLabel, type Selection } from "./selection";
 import type { LiveSession } from "../api/client";
 import type { DisplayState } from "../workers/live-frame";
@@ -61,11 +61,13 @@ export function MountainScene({
     display,
     onLiveFrame,
     onLiveError,
+    model = defaultResortModel,
 }: {
     session: LiveSession | null;
     display: DisplayState;
     onLiveFrame: (count: number, display: DisplayState) => void;
     onLiveError: () => void;
+    model?: ResortModel;
 }) {
     const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
@@ -80,50 +82,58 @@ export function MountainScene({
         <section className="mountain">
             <div className="mountain-canvas" data-testid="mountain-canvas" data-drawn={drawn}>
                 <Canvas
-                    camera={{ position: cameraPosition, fov: 45, near: 1, far: 1000 }}
+                    camera={{ position: model.cameraPosition, fov: 45, near: 1, far: 1000 }}
                     onPointerMissed={() => setSelection(null)}
                 >
                     <color attach="background" args={["#9fc4e8"]} />
                     <hemisphereLight args={["#dfeaff", "#5b5347", 1.1]} />
                     <directionalLight position={[120, 160, 80]} intensity={1.6} />
                     <group name="terrain-layer" visible={visibleLayers.terrain}>
-                        <Terrain />
+                        <Terrain model={model} />
                     </group>
                     <group name="topology-layer" visible={visibleLayers.topology}>
                         <Pistes
                             closedEdges={closedEdges}
                             selection={selection}
                             onSelect={setSelection}
+                            model={model}
                         />
                         <Lifts
                             closedEdges={closedEdges}
                             selection={selection}
                             onSelect={setSelection}
+                            model={model}
                         />
                     </group>
                     <group
                         name="infrastructure-layer"
                         visible={visibleLayers.infrastructure}
                     >
-                        <Buildings selection={selection} onSelect={setSelection} />
+                        <Buildings
+                            selection={selection}
+                            onSelect={setSelection}
+                            model={model}
+                        />
                     </group>
                     <group name="agents-layer" visible={visibleLayers.agents}>
                         <Skiers
                             session={session}
                             onLiveFrame={onLiveFrame}
                             onLiveError={onLiveError}
+                            model={model}
                         />
                     </group>
                     <group name="weather-layer" visible={visibleLayers.weather}>
-                        <Weather weather={display.weather} />
+                        <Weather weather={display.weather} model={model} />
                     </group>
                     <group name="hazards-layer" visible={visibleLayers.hazards}>
                         <Hazards
                             hazards={display.hazards}
                             selection={selection}
                             onSelect={setSelection}
+                            model={model}
                         />
-                        <Failures failures={display.failures} />
+                        <Failures failures={display.failures} model={model} />
                     </group>
                     <group
                         name="recommendations-layer"
@@ -132,7 +142,7 @@ export function MountainScene({
                     <group name="selection-layer" visible={visibleLayers.selection} />
                     <OrbitControls
                         ref={controls}
-                        target={cameraTarget}
+                        target={model.cameraTarget}
                         enablePan
                         enableRotate
                         enableZoom
