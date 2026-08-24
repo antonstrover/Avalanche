@@ -11,7 +11,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from avalanche.sim.population import ABILITY_NAMES, SkierArrays, group_rank
+from avalanche.sim.population import (
+    ABILITY_NAMES,
+    CUSTOMER_GROUP_NAMES,
+    SkierArrays,
+    group_rank,
+)
 from avalanche.sim.routes import NO_EDGE, RouteTable
 from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
@@ -41,6 +46,7 @@ class DynamicState:
     `queue_length` holds the count of waiting skiers of each edge.
     `speed_factor` scales the advance of a skier on each edge.
     `advice_edge[node, ability]` is the edge that the advice offers at one node.
+    `crowd_messages[node, customer_group]` changes the compliance at one node.
     It is `NO_EDGE` when the advice offers no edge.
     Stage 3 has no controller, so a test sets the advice today.
     The adjudicator writes the advice in Stage 6.
@@ -80,7 +86,9 @@ class DynamicState:
         default_factory=lambda: np.zeros(0, dtype=np.float64)
     )
     crowd_messages: np.ndarray = field(
-        default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.float64)
+        default_factory=lambda: np.zeros(
+            (0, len(CUSTOMER_GROUP_NAMES)), dtype=np.float64
+        )
     )
     telemetry_override: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.float64)
@@ -145,7 +153,7 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         telemetry_late=np.zeros(topology.edge_count, dtype=np.bool_),
         lift_capacity_factor=np.ones(topology.edge_count, dtype=np.float64),
         crowd_messages=np.zeros(
-            (topology.node_count, len(ABILITY_NAMES)), dtype=np.float64
+            (topology.node_count, len(CUSTOMER_GROUP_NAMES)), dtype=np.float64
         ),
         telemetry_override=np.zeros(topology.edge_count, dtype=np.float64),
         telemetry_override_enabled=np.zeros(topology.edge_count, dtype=np.bool_),

@@ -13,6 +13,7 @@ from avalanche.env import (
     validate_action,
 )
 from avalanche.sim import EDGE_TYPE_NAMES, NODE_TYPE_NAMES, load_topology
+from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -29,9 +30,15 @@ def test_the_action_space_has_fixed_shapes(topology):
     action = neutral_action(topology)
 
     assert action_space.contains(action)
-    assert action["route_weights"].shape == (3, topology.edge_count)
+    assert action["route_weights"].shape == (
+        len(ABILITY_NAMES),
+        topology.edge_count,
+    )
     assert action["piste_requests"].shape == (topology.edge_count,)
-    assert action["crowd_messages"].shape == (topology.node_count, 3)
+    assert action["crowd_messages"].shape == (
+        topology.node_count,
+        len(CUSTOMER_GROUP_NAMES),
+    )
 
 
 def test_the_neutral_action_requests_no_change(topology):
@@ -57,6 +64,9 @@ def test_the_masks_follow_the_topology(topology):
     assert np.array_equal(masks["pistes"], topology.edge_type == piste)
     assert np.array_equal(masks["lifts"], topology.edge_type == lift)
     assert np.array_equal(masks["nodes"], topology.node_type != exit_node)
+    assert masks["abilities"].size == len(ABILITY_NAMES)
+    assert masks["groups"].size == len(CUSTOMER_GROUP_NAMES)
+    assert np.all(masks["abilities"] == 1)
     assert np.all(masks["groups"] == 1)
 
 
@@ -81,20 +91,24 @@ def test_the_masks_honor_configured_controls(tmp_path):
 def test_current_restrictions_reduce_the_masks(topology):
     edge_available = np.ones(topology.edge_count, dtype=bool)
     node_available = np.ones(topology.node_count, dtype=bool)
-    group_available = np.ones(3, dtype=bool)
+    ability_available = np.ones(len(ABILITY_NAMES), dtype=bool)
+    group_available = np.ones(len(CUSTOMER_GROUP_NAMES), dtype=bool)
     edge_available[0] = False
     node_available[0] = False
+    ability_available[1] = False
     group_available[1] = False
 
     masks = build_action_masks(
         topology,
         edge_available=edge_available,
         node_available=node_available,
+        ability_available=ability_available,
         group_available=group_available,
     )
 
     assert masks["pistes"][0] == 0
     assert masks["nodes"][0] == 0
+    assert masks["abilities"][1] == 0
     assert masks["groups"][1] == 0
 
 
@@ -124,6 +138,7 @@ def test_sampled_actions_respect_each_mask(topology):
     masks = build_action_masks(topology)
     masks["pistes"][0] = 0
     masks["nodes"][0] = 0
+    masks["abilities"][1] = 0
     masks["groups"][1] = 0
     action_space.seed(82)
 

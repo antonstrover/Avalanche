@@ -5,7 +5,7 @@ from typing import TypedDict
 import numpy as np
 from gymnasium import spaces
 
-from avalanche.sim.population import ABILITY_NAMES
+from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
 
 PISTE_NO_CHANGE = 0
@@ -16,11 +16,12 @@ type Action = dict[str, np.ndarray]
 
 
 class ActionMasks(TypedDict):
-    """Masks for the controllable infrastructure and skier groups."""
+    """Masks for the controllable infrastructure, abilities, and customer groups."""
 
     pistes: np.ndarray
     lifts: np.ndarray
     nodes: np.ndarray
+    abilities: np.ndarray
     groups: np.ndarray
 
 
@@ -29,23 +30,26 @@ class InvalidActionError(ValueError):
 
 
 def build_action_space(
-    topology: Topology, group_count: int = len(ABILITY_NAMES)
+    topology: Topology,
+    ability_count: int = len(ABILITY_NAMES),
+    group_count: int = len(CUSTOMER_GROUP_NAMES),
 ) -> spaces.Dict:
     """Return the fixed action space for one mountain.
 
-    Route weights adjust each group's preference for each edge.
+    Route weights adjust each ability's preference for each edge.
     A piste request uses zero for none, one for open, and two for close.
     Enabled arrays distinguish a capacity or telemetry command from a no-op.
-    Crowd messages use negative values to discourage a group from a node.
+    Crowd messages use negative values to discourage a customer group from a node.
     """
-    _check_group_count(group_count)
+    _check_dimension(ability_count, "ability")
+    _check_dimension(group_count, "group")
     edge_count = topology.edge_count
     return spaces.Dict(
         {
             "route_weights": spaces.Box(
                 low=-1.0,
                 high=1.0,
-                shape=(group_count, edge_count),
+                shape=(ability_count, edge_count),
                 dtype=np.float32,
             ),
             "piste_requests": spaces.MultiDiscrete(
@@ -70,15 +74,19 @@ def build_action_space(
 
 
 def build_action_mask_space(
-    topology: Topology, group_count: int = len(ABILITY_NAMES)
+    topology: Topology,
+    ability_count: int = len(ABILITY_NAMES),
+    group_count: int = len(CUSTOMER_GROUP_NAMES),
 ) -> spaces.Dict:
-    """Return the observation space for the four action masks."""
-    _check_group_count(group_count)
+    """Return the observation space for the five action masks."""
+    _check_dimension(ability_count, "ability")
+    _check_dimension(group_count, "group")
     return spaces.Dict(
         {
             "pistes": spaces.MultiBinary(topology.edge_count),
             "lifts": spaces.MultiBinary(topology.edge_count),
             "nodes": spaces.MultiBinary(topology.node_count),
+            "abilities": spaces.MultiBinary(ability_count),
             "groups": spaces.MultiBinary(group_count),
         }
     )
@@ -86,19 +94,25 @@ def build_action_mask_space(
 
 def build_action_masks(
     topology: Topology,
-    group_count: int = len(ABILITY_NAMES),
+    ability_count: int = len(ABILITY_NAMES),
+    group_count: int = len(CUSTOMER_GROUP_NAMES),
     *,
     edge_available: np.ndarray | None = None,
     node_available: np.ndarray | None = None,
+    ability_available: np.ndarray | None = None,
     group_available: np.ndarray | None = None,
 ) -> ActionMasks:
     """Return masks from the topology and optional current restrictions."""
-    _check_group_count(group_count)
+    _check_dimension(ability_count, "ability")
+    _check_dimension(group_count, "group")
     edge_available = _availability(
         edge_available, topology.edge_count, "edge availability"
     )
     node_available = _availability(
         node_available, topology.node_count, "node availability"
+    )
+    ability_available = _availability(
+        ability_available, ability_count, "ability availability"
     )
     group_available = _availability(group_available, group_count, "group availability")
     controllable_edges = topology.edge_controllable & edge_available
@@ -112,15 +126,23 @@ def build_action_masks(
             np.int8
         ),
         "nodes": (topology.node_controllable & node_available).astype(np.int8),
+        "abilities": ability_available.astype(np.int8),
         "groups": group_available.astype(np.int8),
     }
 
 
-def neutral_action(topology: Topology, group_count: int = len(ABILITY_NAMES)) -> Action:
+def neutral_action(
+    topology: Topology,
+    ability_count: int = len(ABILITY_NAMES),
+    group_count: int = len(CUSTOMER_GROUP_NAMES),
+) -> Action:
     """Return the canonical action that requests no state change."""
-    _check_group_count(group_count)
+    _check_dimension(ability_count, "ability")
+    _check_dimension(group_count, "group")
     return {
-        "route_weights": np.zeros((group_count, topology.edge_count), dtype=np.float32),
+        "route_weights": np.zeros(
+            (ability_count, topology.edge_count), dtype=np.float32
+        ),
         "piste_requests": np.full(topology.edge_count, PISTE_NO_CHANGE, dtype=np.int64),
         "lift_capacity": np.ones(topology.edge_count, dtype=np.float32),
         "lift_capacity_enabled": np.zeros(topology.edge_count, dtype=np.int8),
@@ -142,8 +164,9 @@ def validate_action(
     edge_mask = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
         masks["lifts"], dtype=bool
     )
+    ability_mask = np.asarray(masks["abilities"], dtype=bool)
     group_mask = np.asarray(masks["groups"], dtype=bool)
-    route_mask = group_mask[:, None] & edge_mask[None, :]
+    route_mask = ability_mask[:, None] & edge_mask[None, :]
     _require_neutral(action["route_weights"], route_mask, 0.0, "route weight")
     _require_neutral(
         action["piste_requests"], masks["pistes"], PISTE_NO_CHANGE, "piste request"
@@ -166,8 +189,9 @@ def apply_action_masks(action: Action, masks: ActionMasks) -> Action:
     edge_mask = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
         masks["lifts"], dtype=bool
     )
+    ability_mask = np.asarray(masks["abilities"], dtype=bool)
     group_mask = np.asarray(masks["groups"], dtype=bool)
-    action["route_weights"][~(group_mask[:, None] & edge_mask[None, :])] = 0.0
+    action["route_weights"][~(ability_mask[:, None] & edge_mask[None, :])] = 0.0
     action["piste_requests"][~np.asarray(masks["pistes"], dtype=bool)] = PISTE_NO_CHANGE
     action["lift_capacity_enabled"][~np.asarray(masks["lifts"], dtype=bool)] = 0
     message_mask = np.asarray(masks["nodes"], dtype=bool)[:, None] & group_mask
@@ -176,9 +200,9 @@ def apply_action_masks(action: Action, masks: ActionMasks) -> Action:
     return action
 
 
-def _check_group_count(group_count: int) -> None:
-    if group_count < 1:
-        raise ValueError("the group count must be positive")
+def _check_dimension(count: int, name: str) -> None:
+    if count < 1:
+        raise ValueError(f"the {name} count must be positive")
 
 
 def _availability(value: np.ndarray | None, count: int, name: str) -> np.ndarray:

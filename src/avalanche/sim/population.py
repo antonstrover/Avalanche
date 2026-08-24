@@ -14,6 +14,7 @@ from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import NODE_TYPE_NAMES, Topology
 
 ABILITY_NAMES = ("beginner", "intermediate", "advanced")
+CUSTOMER_GROUP_NAMES = ("standard", "premium")
 
 ENTRANCE_NODE = NODE_TYPE_NAMES.index("entrance")
 EXIT_NODE = NODE_TYPE_NAMES.index("exit")
@@ -108,7 +109,8 @@ def sample_population(
     The order of the draws is part of the seed contract.
     A change of the order changes every run with the same seed.
     The order is the arrival time, the entry node, the destination,
-    the ability, the risk tolerance, the group, and the compliance.
+    the ability, the risk tolerance, the customer group, and the compliance.
+    The ability and the customer group use separate independent draws.
 
     Each skier waits in the kind `PENDING` at its entry node.
     The skiers keep the ascending arrival order, which `start_arrivals` needs.
@@ -124,10 +126,11 @@ def sample_population(
     arrival_time = np.sort(rng.uniform(0.0, config.arrival_window_seconds, count))
     entry = rng.choice(entrances, size=count)
     destination = rng.choice(exits, size=count)
-    ability = rng.choice(3, size=count, p=config.ability_weights)
+    ability = rng.choice(len(ABILITY_NAMES), size=count, p=config.ability_weights)
     risk_tolerance = rng.uniform(0.0, 1.0, count)
-    # The group equals the ability for now. Stage 5 adds a second axis.
-    group = ability
+    group = rng.choice(
+        len(CUSTOMER_GROUP_NAMES), size=count, p=config.customer_group_weights
+    )
     compliance = np.clip(
         rng.normal(config.compliance_mean, config.compliance_spread, count), 0.0, 1.0
     )

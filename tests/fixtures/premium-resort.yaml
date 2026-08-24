@@ -1,0 +1,108 @@
+# A test resort with two routes from one fork to the exit.
+# The fast route uses a slow lift, so a queue forms under load.
+# The slow route is a piste with no queue.
+# The route table prefers the lift route, so advice changes the choice.
+
+name: premium-resort
+
+nodes:
+  - node_id: base_village
+    node_type: entrance
+    x: 0.0
+    y: 0.0
+    elevation: 1000.0
+    capacity: 800
+
+  - node_id: fork
+    node_type: junction
+    x: 100.0
+    y: 40.0
+    elevation: 990.0
+    capacity: 600
+
+  - node_id: lift_base
+    node_type: lift_station
+    x: 200.0
+    y: 80.0
+    elevation: 980.0
+    capacity: 600
+
+  - node_id: lift_top
+    node_type: lift_station
+    x: 600.0
+    y: 400.0
+    elevation: 1600.0
+    capacity: 400
+
+  - node_id: base_exit
+    node_type: exit
+    x: 20.0
+    y: 10.0
+    elevation: 1000.0
+    capacity: 800
+
+edges:
+  - source: base_village
+    destination: fork
+    edge_type: piste
+    difficulty: green
+    length: 100.0
+    nominal_travel_time: 30.0
+    safe_capacity: 600
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: fork
+    destination: lift_base
+    edge_type: piste
+    difficulty: green
+    length: 60.0
+    nominal_travel_time: 10.0
+    safe_capacity: 600
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: lift_base
+    destination: lift_top
+    edge_type: lift
+    difficulty: none
+    length: 700.0
+    nominal_travel_time: 60.0
+    safe_capacity: 600
+    critical_density: 2.0
+    lift_throughput: 1440
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: lift_top
+    destination: base_exit
+    edge_type: piste
+    difficulty: green
+    length: 700.0
+    nominal_travel_time: 20.0
+    safe_capacity: 600
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: fork
+    destination: base_exit
+    edge_type: piste
+    difficulty: green
+    length: 900.0
+    nominal_travel_time: 200.0
+    safe_capacity: 600
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0

@@ -12,7 +12,7 @@ from avalanche.env.actions import (
     build_action_masks,
 )
 from avalanche.scenarios.failures import FailureKind
-from avalanche.sim.population import ABILITY_NAMES
+from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 from avalanche.sim.skier import LocationKind
 from avalanche.sim.topology import Topology
 
@@ -51,7 +51,8 @@ class ObservationConfig:
     episode_duration_seconds: float
     forecast_steps: int = 4
     incident_capacity: int = 16
-    group_count: int = len(ABILITY_NAMES)
+    ability_count: int = len(ABILITY_NAMES)
+    group_count: int = len(CUSTOMER_GROUP_NAMES)
 
     def __post_init__(self) -> None:
         """Reject invalid fixed dimensions."""
@@ -63,6 +64,8 @@ class ObservationConfig:
             raise ValueError("the forecast step count must be positive")
         if self.incident_capacity < 1:
             raise ValueError("the incident capacity must be positive")
+        if self.ability_count < 1:
+            raise ValueError("the ability count must be positive")
         if self.group_count < 1:
             raise ValueError("the group count must be positive")
 
@@ -151,7 +154,9 @@ def build_observation_space(
                 shape=(1,),
                 dtype=np.float32,
             ),
-            "action_masks": build_action_mask_space(topology, config.group_count),
+            "action_masks": build_action_mask_space(
+                topology, config.ability_count, config.group_count
+            ),
         }
     )
 
@@ -190,6 +195,7 @@ def build_observation(
     if action_masks is None:
         action_masks = build_action_masks(
             topology,
+            config.ability_count,
             config.group_count,
             edge_available=~state.reported_closed,
         )

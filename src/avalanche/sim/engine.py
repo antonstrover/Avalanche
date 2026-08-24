@@ -46,7 +46,7 @@ from avalanche.sim.movement import (
     update_stranded,
 )
 from avalanche.sim.population import (
-    ABILITY_NAMES,
+    CUSTOMER_GROUP_NAMES,
     SkierArrays,
     empty_population,
     sample_population,
@@ -91,7 +91,7 @@ class MountainSim:
         self.failures_config = FailuresConfig()
         self.failure_schedule: FailureSchedule | None = None
         self.active_failures: tuple[FailureEvent, ...] = ()
-        self.metrics = OnlineMetrics(len(ABILITY_NAMES), DEFAULT_EPISODE_SECONDS)
+        self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), DEFAULT_EPISODE_SECONDS)
 
     def reset(
         self, seed: int, options: dict[str, Any] | None = None
@@ -160,7 +160,7 @@ class MountainSim:
         episode_seconds = float(
             options.get("episode_duration_seconds", DEFAULT_EPISODE_SECONDS)
         )
-        self.metrics = OnlineMetrics(len(ABILITY_NAMES), episode_seconds)
+        self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), episode_seconds)
         self._update_weather()
         self._update_failures()
         refresh_reported_telemetry(self.state)
