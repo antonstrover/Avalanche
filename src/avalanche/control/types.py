@@ -26,9 +26,7 @@ class ImmutableAction:
     telemetry_override_enabled: tuple[int, ...]
 
 
-type FrozenValue = (
-    str | int | float | bool | None | tuple["FrozenValue", ...] | "FrozenMapping"
-)
+type FrozenValue = Any
 
 
 @dataclass(frozen=True)
