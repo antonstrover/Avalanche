@@ -15,6 +15,7 @@ The application draws the same population in 3D.
 
 The honest controller and the single-run workflow now exist.
 The monitors and the experiment sweeps do not exist yet.
+The paired closure baseline compares the honest controller with no control.
 
 ### The simulator
 

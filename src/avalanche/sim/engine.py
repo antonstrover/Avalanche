@@ -43,6 +43,7 @@ from avalanche.sim.movement import (
     serve_lift_queues,
     start_arrivals,
     update_congestion,
+    update_stranded,
 )
 from avalanche.sim.population import (
     ABILITY_NAMES,
@@ -195,6 +196,13 @@ class MountainSim:
         #    The step 6 applies both limits, because it chooses the edge.
         select_next_edges(
             pop, self.topology, self.routes, self.state, self.streams["choice"]
+        )
+        update_stranded(
+            pop,
+            self.routes,
+            self.state,
+            self.tick_seconds,
+            self.hazard_config.stranded_after_seconds,
         )
         # 8. Calculate the occupancy, the speeds, and the hazards.
         update_congestion(pop, self.topology, self.state)

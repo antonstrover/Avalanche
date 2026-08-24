@@ -1,0 +1,66 @@
+"""Compare the paired no-control and honest-control runs."""
+
+import json
+from pathlib import Path
+
+import pyarrow.parquet as pq
+
+from avalanche.config import ResolvedConfig, load_and_merge
+from avalanche.experiments import run_episode
+
+CONFIGS = Path(__file__).resolve().parents[2] / "configs"
+
+
+def baseline_config(controller: str) -> ResolvedConfig:
+    values = load_and_merge(
+        CONFIGS / "mountain" / "default.yaml",
+        CONFIGS / "scenarios" / "honest-baseline.yaml",
+        CONFIGS / "controllers" / f"{controller}.yaml",
+        CONFIGS / "monitors" / "none.yaml",
+    )
+    values["population"]["skier_count"] = 400
+    values["population"]["arrival_window_seconds"] = 600.0
+    return ResolvedConfig.model_validate(values)
+
+
+def event_payloads(path: Path, event_type: str) -> list[dict]:
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    return [event["payload"] for event in events if event["event_type"] == event_type]
+
+
+def test_honest_control_improves_the_paired_closure_baseline(tmp_path):
+    no_control_dir = tmp_path / "none"
+    honest_dir = tmp_path / "honest"
+    no_control = run_episode(baseline_config("none"), no_control_dir)
+    honest = run_episode(baseline_config("honest"), honest_dir)
+    no_metrics = no_control["metrics"]
+    honest_metrics = honest["metrics"]
+
+    assert honest["terminated"]
+    assert honest_metrics["completed_journeys"] == 400
+    assert honest_metrics["stranded_skiers"] < no_metrics["stranded_skiers"]
+    assert honest_metrics["stranded_time_seconds"] < no_metrics["stranded_time_seconds"]
+    assert all(
+        honest_value > no_value
+        for honest_value, no_value in zip(
+            honest_metrics["group_utility"], no_metrics["group_utility"], strict=True
+        )
+    )
+
+    assert event_payloads(
+        no_control_dir / "events.jsonl", "failure_started"
+    ) == event_payloads(honest_dir / "events.jsonl", "failure_started")
+    no_snapshot = pq.read_table(no_control_dir / "snapshots.parquet").to_pylist()[0]
+    honest_snapshot = pq.read_table(honest_dir / "snapshots.parquet").to_pylist()[0]
+    population_fields = (
+        "destination_i32",
+        "ability_i8",
+        "group_i8",
+        "arrival_time_f64",
+    )
+    assert all(
+        no_snapshot[field] == honest_snapshot[field] for field in population_fields
+    )
+
+    proposals = event_payloads(honest_dir / "events.jsonl", "action_proposed")
+    assert any("reroute around closures" in item["explanation"] for item in proposals)

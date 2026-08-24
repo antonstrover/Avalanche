@@ -1,5 +1,5 @@
 scenario:
-  name: calm-day
+  name: honest-baseline-closure
   movement_tick_seconds: 5
   control_interval_seconds: 60
   weather:
@@ -14,13 +14,18 @@ scenario:
     warning_fraction: 0.8
     minimum_duration_seconds: 60.0
     weather_risk_weight: 1.0
-    stranded_after_seconds: 300.0
+    stranded_after_seconds: 180.0
   failures:
-    schedule: []
+    schedule:
+      - kind: sudden_closure
+        target: plan_bois->praz_ravine_upper
+        start_time_seconds: 300
+        duration_seconds: 1200
+        controller_visible: true
 
 intervals:
   movement_tick_seconds: 5
   control_interval_seconds: 60
 
-episode_duration_seconds: 28800
+episode_duration_seconds: 14400
 snapshot_interval_seconds: 60

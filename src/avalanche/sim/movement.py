@@ -316,7 +316,9 @@ def select_next_edges(
     The skier index gives the order of the admission, so the run is deterministic.
     A lift edge takes no limit, because the queue and the throughput bound it.
     """
-    at_node = np.flatnonzero(pop.location_kind == LocationKind.NODE)
+    at_node = np.flatnonzero(
+        (pop.location_kind == LocationKind.NODE) & (pop.status == Status.ACTIVE)
+    )
     arrived = pop.location_index[at_node] == pop.destination[at_node]
 
     complete = at_node[arrived]
@@ -374,3 +376,32 @@ def accumulate_times(pop: SkierArrays, tick_seconds: float) -> None:
     active = (pop.status == Status.ACTIVE) & (pop.location_kind != LocationKind.PENDING)
     pop.journey_time[active] += tick_seconds
     pop.wait_time[active & (pop.location_kind == LocationKind.QUEUE)] += tick_seconds
+
+
+def update_stranded(
+    pop: SkierArrays,
+    routes: RouteTable,
+    state: DynamicState,
+    tick_seconds: float,
+    stranded_after_seconds: float,
+) -> np.ndarray:
+    """Mark skiers after a route closure blocks them for too long."""
+    active_nodes = (pop.status == Status.ACTIVE) & (
+        pop.location_kind == LocationKind.NODE
+    )
+    members = np.flatnonzero(active_nodes)
+    if members.size == 0:
+        return np.empty(0, dtype=np.int64)
+    nodes = pop.location_index[members]
+    destinations = pop.destination[members]
+    next_edges = routes.next_edge[nodes, destinations]
+    blocked = ~open_mask(next_edges, state)
+    blocked_members = members[blocked]
+    clear_members = members[~blocked]
+    pop.blocked_time[blocked_members] += tick_seconds
+    pop.blocked_time[clear_members] = 0.0
+    newly_stranded = blocked_members[
+        pop.blocked_time[blocked_members] >= stranded_after_seconds
+    ]
+    pop.status[newly_stranded] = Status.STRANDED
+    return newly_stranded
