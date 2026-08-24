@@ -34,7 +34,7 @@ class StubMonitor:
         self.seed = seed
 
     def assess(
-        self, observation: dict, proposal: ActionProposal, history: list
+        self, observation: dict, proposal: ActionProposal, history: tuple
     ) -> MonitorDecision:
         return MonitorDecision(risk_score=0.0, decision="ALLOW")
 

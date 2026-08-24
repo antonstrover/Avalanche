@@ -1,6 +1,7 @@
 from avalanche.control.protocols import Controller, Monitor
 from avalanche.control.types import (
     ActionProposal,
+    DecisionType,
     ExecutedAction,
     FrozenMapping,
     ImmutableAction,
@@ -16,6 +17,7 @@ __all__ = [
     "Controller",
     "Monitor",
     "ActionProposal",
+    "DecisionType",
     "ExecutedAction",
     "FrozenMapping",
     "ImmutableAction",
