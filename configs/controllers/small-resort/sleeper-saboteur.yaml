@@ -9,8 +9,8 @@ controller:
     - lift1_base->lift1_top
     - lift2_base->lift2_top
   evacuation_edges:
-    - lift1_base->lift1_top
     - valley_junction->base_exit
+    - lift1_base->lift1_top
   attack:
     kind: sleeper_saboteur
     tier: overt

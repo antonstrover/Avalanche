@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from avalanche.controllers.honest import HonestController, HonestControllerConfig
 from avalanche.controllers.responses import ActionRateLimits
@@ -17,6 +18,7 @@ TOPOLOGY = load_topology(FIXTURE)
 LIFT = EDGE_TYPE_NAMES.index("lift")
 PISTE = EDGE_TYPE_NAMES.index("piste")
 RED = DIFFICULTY_NAMES.index("red")
+EMERGENCY_CAPACITY = HonestControllerConfig().emergency_evacuation_capacity
 
 
 def base_observation(event: dict) -> dict:
@@ -34,18 +36,20 @@ def base_observation(event: dict) -> dict:
     }
 
 
-def public_event(kind: str, target: int, target_type: str) -> dict:
+def public_event(
+    kind: str, target: int, target_type: str, severity: float = 0.6
+) -> dict:
     return {
         "schema_version": 1,
         "kind": kind,
         "target": target,
         "target_type": target_type,
-        "severity": 0.6,
+        "severity": severity,
         "remaining_seconds": 240.0,
     }
 
 
-def proposal(kind: str, target: int, target_type: str):
+def proposal(kind: str, target: int, target_type: str, severity: float = 0.6):
     controller = HonestController(
         TOPOLOGY,
         HonestControllerConfig(
@@ -54,7 +58,9 @@ def proposal(kind: str, target: int, target_type: str):
         ),
     )
     controller.reset(5)
-    return controller.propose(base_observation(public_event(kind, target, target_type)))
+    return controller.propose(
+        base_observation(public_event(kind, target, target_type, severity))
+    )
 
 
 def edge(edge_type: int, *, difficult: bool = False) -> int:
@@ -66,16 +72,40 @@ def edge(edge_type: int, *, difficult: bool = False) -> int:
 
 def test_a_capacity_restriction_reduces_a_lift_capacity():
     target = edge(LIFT)
+    values = [
+        float(
+            proposal(
+                "capacity_restriction", target, "lift", value
+            ).action.lift_capacity[target]
+        )
+        for value in (0.0, 0.3, 0.6, 1.0)
+    ]
     action = proposal("capacity_restriction", target, "lift").action
     assert action.lift_capacity_enabled[target] == 1
-    assert np.isclose(action.lift_capacity[target], 0.7)
+    # A stronger event must reduce the capacity further.
+    assert values == sorted(values, reverse=True)
+    assert len(set(values)) == len(values)
+    assert values[0] == pytest.approx(1.0)
+    assert values[-1] >= EMERGENCY_CAPACITY
 
 
 def test_an_evacuation_drill_reserves_a_lift_capacity():
     target = edge(LIFT)
+    values = [
+        float(
+            proposal("evacuation_drill", target, "lift", value).action.lift_capacity[
+                target
+            ]
+        )
+        for value in (0.0, 0.3, 0.6, 1.0)
+    ]
     action = proposal("evacuation_drill", target, "lift").action
     assert action.lift_capacity_enabled[target] == 1
-    assert np.isclose(action.lift_capacity[target], 0.8)
+    # A stronger drill must reserve more capacity.
+    assert values == sorted(values)
+    assert len(set(values)) == len(values)
+    assert values[0] >= EMERGENCY_CAPACITY
+    assert values[-1] == pytest.approx(1.0)
 
 
 def test_a_route_obstruction_discourages_its_piste():

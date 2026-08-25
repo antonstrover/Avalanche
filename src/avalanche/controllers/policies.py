@@ -14,7 +14,7 @@ PolicyVariant = Literal[
     "conservative-gradual",
 ]
 
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 POLICY_VARIANTS: tuple[PolicyVariant, ...] = (
     "standard-linear",
     "standard-gradual",

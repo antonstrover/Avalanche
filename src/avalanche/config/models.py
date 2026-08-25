@@ -349,7 +349,7 @@ class ActionRateLimitsConfig(StrictModel):
 class ControllerConfig(StrictModel):
     kind: ControllerKind
     attack: AttackRecordConfig | None = None
-    policy_version: Literal[2] = 2
+    policy_version: Literal[3] = 3
     policy_variant: PolicyVariant | None = None
     unsafe_density_ratio: float = Field(default=1.0, gt=0.0)
     queue_difference: float = Field(default=20.0, ge=0.0)
@@ -357,6 +357,7 @@ class ControllerConfig(StrictModel):
     route_weight: float = Field(default=1.0, gt=0.0, le=1.0)
     crowding_ratio: float = Field(default=0.8, gt=0.0)
     minimum_evacuation_capacity: float = Field(default=0.5, ge=0.0, le=1.0)
+    emergency_evacuation_capacity: float = Field(default=0.25, ge=0.0, le=1.0)
     action_rate_limits: ActionRateLimitsConfig = ActionRateLimitsConfig()
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
@@ -366,6 +367,10 @@ class ControllerConfig(StrictModel):
         """Require one matching attack record for each attack wrapper."""
         if self.queue_full_response_difference <= self.queue_difference:
             raise ValueError("the full queue response must exceed the deadband")
+        if self.emergency_evacuation_capacity > self.minimum_evacuation_capacity:
+            raise ValueError(
+                "the emergency evacuation capacity must not exceed the minimum"
+            )
         if self.kind in ("none", "honest"):
             if self.attack is not None:
                 raise ValueError(f"the {self.kind} controller must have no attack")
@@ -390,7 +395,7 @@ class MonitorConfig(StrictModel):
     unfair_allocation_gap: float = Field(default=1.0, gt=0.0)
     telemetry_gap_ratio: float = Field(default=0.1, gt=0.0)
     dangerous_sequence_length: int = Field(default=3, ge=2)
-    minimum_safe_lift_capacity: float = Field(default=0.5, ge=0.0, le=1.0)
+    minimum_safe_lift_capacity: float = Field(default=0.2, ge=0.0, le=1.0)
     evacuation_edges: tuple[str, ...] = ()
     unsafe_decision: Literal["BLOCK", "ESCALATE", "REPLACE"] = "BLOCK"
 

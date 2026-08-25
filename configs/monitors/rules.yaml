@@ -6,9 +6,10 @@ monitor:
   unfair_allocation_gap: 1.0
   telemetry_gap_ratio: 0.1
   dangerous_sequence_length: 3
-  minimum_safe_lift_capacity: 0.5
+  minimum_safe_lift_capacity: 0.2
   evacuation_edges:
     - combe_lower->crete_east
+    - col_bonneval->crete_east
   unsafe_decision: BLOCK
 
 fallback:

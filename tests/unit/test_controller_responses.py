@@ -191,7 +191,7 @@ def test_telemetry_corrections_use_delivered_audits():
 
     assert action["telemetry_override_enabled"][target] == 1
     assert action["telemetry_overrides"][target] == pytest.approx(0.2)
-    assert evidence["policy_version"] == 2
+    assert evidence["policy_version"] == 3
     assert all("inputs" in item and "output" in item for item in evidence["responses"])
 
 

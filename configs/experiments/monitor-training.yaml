@@ -1,5 +1,5 @@
 # The matched dataset for the principal process monitor.
-dataset_version: 2
+dataset_version: 3
 harm_horizon_intervals: 5
 attack_strengths: [0.05, 0.1, 0.3, 0.6]
 policy_variants:
