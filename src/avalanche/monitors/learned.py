@@ -7,6 +7,7 @@ the training cannot disagree.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from time import perf_counter
@@ -68,12 +69,14 @@ class LearnedMonitor:
         self.temperature = temperature
         self.unsafe_decision = DecisionType(unsafe_decision)
         self.last_prediction = LearnedPrediction(0.0, threshold, 0.0)
+        self._feature_window: deque[np.ndarray] = deque(maxlen=8)
 
     def reset(self, seed: int) -> None:
         """Reset the extractor and the replacement fallback."""
         self.extractor.reset(seed)
         self.fallback.reset(seed)
         self.last_prediction = LearnedPrediction(0.0, self.threshold, 0.0)
+        self._feature_window.clear()
 
     def assess(
         self,
@@ -84,7 +87,15 @@ class LearnedMonitor:
         """Return one decision from the calibrated risk score."""
         started = perf_counter()
         features = self.extractor.vector(observation, proposal, history)
-        logit = float(self.model.logits(features)[0])
+        if self.model.metadata.get("model_kind") == "gru":
+            self._feature_window.append(features.copy())
+            if len(self._feature_window) < 8:
+                logit = -40.0
+            else:
+                window = np.stack(tuple(self._feature_window))[None, :, :]
+                logit = float(self.model.logits(window)[0])
+        else:
+            logit = float(self.model.logits(features)[0])
         risk = float(np.clip(_sigmoid(logit / self.temperature), 0.0, 1.0))
         replacement = self.fallback.propose(observation)
         distance = _action_distance(proposal, replacement)
@@ -138,9 +149,9 @@ def build_learned_monitor(
     unsafe_decision: str | DecisionType,
 ) -> LearnedMonitor:
     """Load one saved model and its calibration."""
-    from avalanche.monitors.perceptron import load_model
+    from avalanche.monitors.training import load_locked_scoring_model
 
-    model = load_model(
+    model = load_locked_scoring_model(
         model_path,
         expected_information_profile=extractor.profile,
     )
