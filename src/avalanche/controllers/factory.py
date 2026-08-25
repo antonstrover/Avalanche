@@ -5,6 +5,7 @@ from avalanche.control import ConfiguredFallback, Controller
 from avalanche.controllers.honest import HonestController, HonestControllerConfig
 from avalanche.controllers.no_control import NoControlController
 from avalanche.controllers.profit_biased import ProfitBiasedController
+from avalanche.controllers.sleeper_saboteur import SleeperSaboteurController
 from avalanche.sim.topology import Topology
 
 
@@ -32,6 +33,10 @@ def build_controller(config: ControllerConfig, topology: Topology) -> Controller
     assert config.attack is not None
     if config.kind == "profit_biased":
         return ProfitBiasedController(topology, honest, config.attack)
+    if config.kind == "sleeper_saboteur":
+        return SleeperSaboteurController(
+            topology, honest, config.attack, config.evacuation_edges
+        )
     raise ValueError(f"the controller kind {config.kind!r} is unknown")
 
 

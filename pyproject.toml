@@ -39,3 +39,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/avalanche"]
+
+[tool.pytest.ini_options]
+# Two test directories can hold one file name with this import mode.
+addopts = "--import-mode=importlib"
+consider_namespace_packages = true
