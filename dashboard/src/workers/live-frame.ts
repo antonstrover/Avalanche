@@ -1,6 +1,6 @@
 import { decode } from "@msgpack/msgpack";
 
-export const STREAM_VERSION = 4;
+export const STREAM_VERSION = 5;
 
 export type Severity = "low" | "medium" | "high";
 
@@ -117,6 +117,20 @@ export type TelemetryState = {
     true_closed: number[];
 };
 
+export type AttackState = {
+    kind: string;
+    active: boolean;
+    targets: number[];
+    divergent_edges: number[];
+};
+
+export const NO_ATTACK: AttackState = {
+    kind: "none",
+    active: false,
+    targets: [],
+    divergent_edges: [],
+};
+
 export type DisplayState = {
     weather: WeatherState;
     failures: FailureState[];
@@ -125,6 +139,7 @@ export type DisplayState = {
     timeline: TimelineEvent[];
     decision: LiveDecision | null;
     telemetry: TelemetryState;
+    attack: AttackState;
 };
 
 export type FrameState = {
@@ -321,6 +336,16 @@ function telemetryState(value: unknown): TelemetryState {
     };
 }
 
+function attackState(value: unknown): AttackState {
+    const attack = record(value, "attack state");
+    return {
+        kind: string(attack.kind, "attack kind"),
+        active: attack.active === true,
+        targets: numberArray(attack.targets, "attack targets"),
+        divergent_edges: numberArray(attack.divergent_edges, "divergent edges"),
+    };
+}
+
 function displayState(value: unknown): DisplayState {
     const display = record(value, "display state");
     const weather = record(display.weather, "weather state");
@@ -403,6 +428,7 @@ function displayState(value: unknown): DisplayState {
         }),
         decision: liveDecision(display.decision),
         telemetry: telemetryState(display.telemetry),
+        attack: attackState(display.attack),
     };
 }
 
@@ -420,10 +446,15 @@ export function decodeFrame(
     receivedAt: number,
 ): { type: string; frame: FrameState | null } {
     const envelope = decode(new Uint8Array(packed)) as Envelope;
-    if (envelope.version !== STREAM_VERSION && envelope.version !== 3) {
+    const version = envelope.version;
+    if (version !== STREAM_VERSION && version !== 4 && version !== 3) {
         throw new Error("the stream version is invalid");
     }
-    if (envelope.version === 3 && envelope.payload) {
+    if (version !== STREAM_VERSION && envelope.payload) {
+        // An older frame carries no attack state. The scene then shows no divergence.
+        record(envelope.payload.display, "legacy display").attack = { ...NO_ATTACK };
+    }
+    if (version === 3 && envelope.payload) {
         const legacyDisplay = record(envelope.payload.display, "legacy display");
         legacyDisplay.telemetry = {
             reported_density: [], true_density: [],

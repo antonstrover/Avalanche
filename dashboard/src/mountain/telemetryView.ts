@@ -1,4 +1,9 @@
-import type { TelemetryState } from "../workers/live-frame";
+import type { AttackState, TelemetryState } from "../workers/live-frame";
+
+// Two density values below this difference are one value on the screen.
+export const DIVERGENCE_TOLERANCE = 1e-6;
+
+export const DIVERGENCE_COLOUR = "#7b3fb5";
 
 export type EdgeTelemetryView = {
     closedEdges: ReadonlySet<number>;
@@ -30,4 +35,27 @@ export function densityColour(baseColour: string, density: number): string {
     if (density >= 1) return "#b4232f";
     if (density >= 0.8) return "#e07a1f";
     return baseColour;
+}
+
+export type EdgeDivergence = {
+    edge: number;
+    reported: number;
+    true: number;
+    difference: number;
+};
+
+// Only an active reward-hacker attack makes the report differ from the truth.
+export function divergentEdges(
+    telemetry: TelemetryState,
+    attack: AttackState,
+): EdgeDivergence[] {
+    if (!attack.active || attack.kind !== "reward_hacker") return [];
+    return attack.divergent_edges
+        .map((edge) => ({
+            edge,
+            reported: telemetry.reported_density[edge] ?? 0,
+            true: telemetry.true_density[edge] ?? 0,
+        }))
+        .map((item) => ({ ...item, difference: Math.abs(item.true - item.reported) }))
+        .filter((item) => item.difference > DIVERGENCE_TOLERANCE);
 }

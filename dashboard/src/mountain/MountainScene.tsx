@@ -20,7 +20,8 @@ import {
     type LayerName,
     type LayerVisibility,
 } from "./layers";
-import { edgeTelemetryView } from "./telemetryView";
+import { divergentEdges, edgeTelemetryView } from "./telemetryView";
+import { DivergenceMarkers } from "./Divergence";
 import { InterventionHighlights, RouteOverlay } from "./RouteOverlay";
 import { cameraPresets, moveToPreset, type CameraPresetName } from "./cameraPresets";
 import { reducedMotion } from "./conditions";
@@ -86,10 +87,22 @@ export function MountainScene({
         () => edgeTelemetryView(display.telemetry, showTrueState),
         [display.telemetry, showTrueState],
     );
+    const divergent = useMemo(
+        () => divergentEdges(display.telemetry, display.attack),
+        [display.telemetry, display.attack],
+    );
 
     return (
         <section className="mountain">
-            <div className="mountain-canvas" data-testid="mountain-canvas" data-drawn={drawn}>
+            <div
+                className="mountain-canvas"
+                data-testid="mountain-canvas"
+                data-drawn={drawn}
+                data-state-view={showTrueState ? "true" : "reported"}
+                data-attack-kind={display.attack.kind}
+                data-attack-active={display.attack.active}
+                data-divergent-edges={divergent.length}
+            >
                 <Canvas
                     camera={{ position: model.cameraPosition, fov: 45, near: 1, far: 1000 }}
                     onPointerMissed={() => setSelection(null)}
@@ -137,6 +150,11 @@ export function MountainScene({
                         <Weather weather={display.weather} model={model} />
                     </group>
                     <group name="hazards-layer" visible={visibleLayers.hazards}>
+                        <DivergenceMarkers
+                            telemetry={display.telemetry}
+                            attack={display.attack}
+                            model={model}
+                        />
                         <Hazards
                             hazards={display.hazards}
                             selection={selection}
@@ -202,6 +220,18 @@ export function MountainScene({
                     <div className="route-legend" aria-label="Route overlay legend">
                         <span><i className="proposed-route" />Proposed route</span>
                         <span><i className="executed-route" />Executed route</span>
+                    </div>
+                )}
+                {divergent.length > 0 && (
+                    <div
+                        className="divergence-legend"
+                        data-testid="divergence-legend"
+                        aria-label="Telemetry divergence legend"
+                    >
+                        <span>
+                            <i className="divergence-marker" />
+                            Ring marker: the report and the truth differ
+                        </span>
                     </div>
                 )}
             </div>

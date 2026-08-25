@@ -97,6 +97,10 @@ The live scene shows simulator weather, failures, closures, and hazards.
 An accessible timeline shows each material event.
 The decision inspector shows each proposal, monitor decision, and execution result.
 It compares the reported telemetry with the true state.
+A checkbox changes the scene between the reported state and the true state.
+During a reward-hacker run, a ring marker names each divergent edge.
+A table beside the checkbox gives the reported density, the true density,
+and the difference of each divergent edge, and a live region announces a new one.
 The approval panel pauses an escalated action for a manual response.
 Automatic runs use a deterministic simulated response.
 The default skier markers read a recorded replay file.

@@ -34,6 +34,7 @@ from avalanche.control import (
     thaw_action,
 )
 from avalanche.controllers import build_controller, build_fallback
+from avalanche.controllers.attacks import is_active, resolve_targets
 from avalanche.env import (
     PISTE_CLOSE,
     AvalancheEnv,
@@ -47,11 +48,13 @@ from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import LocationKind
 
-STREAM_VERSION = 4
+STREAM_VERSION = 5
 SIMULATION_SPEED = 20.0
 FRAME_INTERVAL_MS = 250
 MAX_SKIERS = 10_000
 TIMELINE_LIMIT = 64
+# Two density values below this difference are one value on the screen.
+DIVERGENCE_TOLERANCE = 1e-6
 MOUNTAIN_PATH = (
     Path(__file__).resolve().parents[3] / "configs" / "mountain" / "medium-resort.yaml"
 )
@@ -78,6 +81,7 @@ def pack_frame(
     proposal: ActionProposal | None = None,
     adjudication: AdjudicationResult | None = None,
     approval: ApprovalRequest | None = None,
+    controller: ControllerConfig | None = None,
 ) -> bytes:
     """Pack one complete display state."""
     population = sim.population
@@ -86,7 +90,7 @@ def pack_frame(
         "location_kind": population.location_kind.astype(np.int8, copy=False).tobytes(),
         "location_index": population.location_index.astype("<i4", copy=False).tobytes(),
         "progress": population.progress.astype("<f4", copy=False).tobytes(),
-        "display": display_state(sim, proposal, adjudication, approval),
+        "display": display_state(sim, proposal, adjudication, approval, controller),
     }
     envelope = {
         "version": STREAM_VERSION,
@@ -111,6 +115,7 @@ def display_state(
     proposal: ActionProposal | None = None,
     adjudication: AdjudicationResult | None = None,
     approval: ApprovalRequest | None = None,
+    controller: ControllerConfig | None = None,
 ) -> dict[str, object]:
     """Return the bounded display state for one live frame."""
     assert sim.failure_schedule is not None
@@ -166,6 +171,34 @@ def display_state(
         "timeline": _timeline(sim)[-TIMELINE_LIMIT:],
         "decision": _decision_state(proposal, adjudication, approval),
         "telemetry": _telemetry_state(sim),
+        "attack": attack_state(sim, controller),
+    }
+
+
+def attack_state(
+    sim: MountainSim, controller: ControllerConfig | None
+) -> dict[str, object]:
+    """Return the active attack and each divergent edge of one frame.
+
+    The divergence comes from the true and the reported density.
+    Only an active reward-hacker attack reports a divergent edge.
+    """
+    assert sim.topology is not None
+    attack = None if controller is None else controller.attack
+    kind = "none" if controller is None else controller.kind
+    active = attack is not None and is_active(attack, sim.simulation_time)
+    targets = () if attack is None else resolve_targets(sim.topology, attack)
+    divergent: tuple[int, ...] = ()
+    if active and kind == "reward_hacker":
+        gap = np.abs(sim.state.density_ratio - sim.state.reported_density_ratio)
+        divergent = tuple(
+            int(edge) for edge in np.flatnonzero(gap > DIVERGENCE_TOLERANCE)
+        )
+    return {
+        "kind": kind,
+        "active": bool(active),
+        "targets": [int(edge) for edge in targets],
+        "divergent_edges": list(divergent),
     }
 
 
@@ -485,6 +518,7 @@ def run_session(
                     "frame",
                     pending.proposal,
                     approval=pending,
+                    controller=controller_config,
                 ),
             )
             if approval_input is None:
@@ -526,6 +560,7 @@ def run_session(
                 "snapshot",
                 proposal,
                 adjudication,
+                controller=controller_config,
             ),
         )
         interval = FRAME_INTERVAL_MS / 1000.0
@@ -554,6 +589,7 @@ def run_session(
                     topology,
                     proposal=proposal,
                     adjudication=adjudication,
+                    controller=controller_config,
                 ),
             )
 

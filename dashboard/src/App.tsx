@@ -20,6 +20,7 @@ import {
 } from "./mountain/resort";
 import { mergeTimeline } from "./features/timeline";
 import { DecisionInspector } from "./features/live/DecisionInspector";
+import { TelemetryDivergence } from "./features/live/TelemetryDivergence";
 import { ApprovalPanel } from "./features/live/ApprovalPanel";
 import { SessionSetup } from "./features/live/SessionSetup";
 import type { DisplayState } from "./workers/live-frame";
@@ -219,6 +220,16 @@ function App() {
                     />
                     Show the true state
                 </label>
+                <TelemetryDivergence
+                    telemetry={display.telemetry}
+                    attack={display.attack}
+                    edgeLabel={(edge) => {
+                        const item = resortModel.resort.edges[edge];
+                        return item
+                            ? `${item.source} to ${item.destination}`
+                            : `Edge ${edge}`;
+                    }}
+                />
             </div>
             <MountainScene
                 session={session}
