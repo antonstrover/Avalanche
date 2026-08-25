@@ -128,6 +128,7 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
             "weather": resolved.scenario.weather,
             "hazards": resolved.scenario.hazards,
             "failures": resolved.scenario.failures,
+            "audits": resolved.scenario.audits,
         },
     )
     controller = build_controller(resolved.controller, env.topology)

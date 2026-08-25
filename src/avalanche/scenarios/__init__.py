@@ -1,5 +1,11 @@
 """Build deterministic scenario schedules."""
 
+from avalanche.scenarios.audits import (
+    AUDIT_SCHEMA_VERSION,
+    AuditChannel,
+    AuditMeasurement,
+    audit_edge_count,
+)
 from avalanche.scenarios.failures import (
     FailureEvent,
     FailureKind,
@@ -17,10 +23,14 @@ from avalanche.scenarios.weather import (
 )
 
 __all__ = [
+    "AUDIT_SCHEMA_VERSION",
+    "AuditChannel",
+    "AuditMeasurement",
     "FailureEvent",
     "FailureKind",
     "FailureSchedule",
     "apply_failures",
+    "audit_edge_count",
     "refresh_reported_telemetry",
     "resolve_failure_schedule",
     "Weather",

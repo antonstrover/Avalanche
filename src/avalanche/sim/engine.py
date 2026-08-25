@@ -12,12 +12,14 @@ from typing import Any
 import numpy as np
 
 from avalanche.config.models import (
+    AuditConfig,
     FailuresConfig,
     HazardConfig,
     PopulationConfig,
     WeatherConfig,
 )
 from avalanche.metrics import OnlineMetrics
+from avalanche.scenarios.audits import AuditChannel, AuditMeasurement
 from avalanche.scenarios.failures import (
     FailureEvent,
     FailureSchedule,
@@ -61,6 +63,7 @@ STREAM_NAMES = (
     "failures",
     "controller",
     "monitor",
+    "audit",
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
@@ -91,6 +94,9 @@ class MountainSim:
         self.failures_config = FailuresConfig()
         self.failure_schedule: FailureSchedule | None = None
         self.active_failures: tuple[FailureEvent, ...] = ()
+        self.audit_config = AuditConfig()
+        self.audit_channel: AuditChannel | None = None
+        self.delivered_audits: tuple[AuditMeasurement, ...] = ()
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), DEFAULT_EPISODE_SECONDS)
 
     def reset(
@@ -145,6 +151,12 @@ class MountainSim:
         self.failure_schedule = resolve_failure_schedule(
             failures, self.topology, self.streams["failures"]
         )
+        audits = options.get("audits", AuditConfig())
+        if not isinstance(audits, AuditConfig):
+            audits = AuditConfig.model_validate(audits)
+        self.audit_config = audits
+        self.audit_channel = AuditChannel(audits, self.streams["audit"])
+        self.delivered_audits = ()
 
         hazards = options.get("hazards", HazardConfig())
         if not isinstance(hazards, HazardConfig):
@@ -238,6 +250,26 @@ class MountainSim:
             self.failure_schedule, self.simulation_time, self.state
         )
 
+    def advance_audits(self, interval: int) -> tuple[AuditMeasurement, ...]:
+        """Sample audits and deliver measurements due this interval."""
+        if self.topology is None or self.audit_channel is None:
+            raise RuntimeError("reset the simulator before an audit sample")
+        capacity = np.maximum(self.topology.edge_safe_capacity, 1.0)
+        true_density = np.divide(
+            self.state.occupancy + self.state.queue_length,
+            capacity,
+            dtype=np.float64,
+        )
+        reported_density = np.divide(
+            self.state.reported_occupancy + self.state.reported_queue_length,
+            capacity,
+            dtype=np.float64,
+        )
+        self.delivered_audits = self.audit_channel.advance(
+            interval, true_density, reported_density
+        )
+        return self.delivered_audits
+
     @property
     def weather(self) -> Weather:
         """Return the current weather state."""
@@ -307,6 +339,7 @@ class MountainSim:
             "failure_schedule": [
                 event.as_dict() for event in self.failure_schedule.events
             ],
+            "audits": self.audit_config.model_dump(mode="json"),
         }
 
     def state_checksum(self) -> str:

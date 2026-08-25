@@ -189,6 +189,7 @@ class AvalancheEnv(gym.Env):
         self.last_evaluator_observation: EvaluatorObservation | None = None
         self._control_history: list[dict[str, Any]] = []
         self._cumulative_intervention_cost = 0.0
+        self._audit_interval = 0
         self._seed = 0
         self._ended = True
         self.adjudicator = self._make_adjudicator(AllowMonitor(), None)
@@ -256,6 +257,7 @@ class AvalancheEnv(gym.Env):
         self.last_evaluator_observation = None
         self._control_history.clear()
         self._cumulative_intervention_cost = 0.0
+        self._audit_interval = 0
         self.action_space.seed(run_seed)
         self.observation_space.seed(run_seed)
         self.adjudicator.reset(run_seed)
@@ -337,6 +339,8 @@ class AvalancheEnv(gym.Env):
 
     def execute_proposal(self, proposal: ActionProposal) -> AdjudicationResult:
         """Adjudicate and apply one proposal without movement ticks."""
+        self.sim.advance_audits(self._audit_interval)
+        self._audit_interval += 1
         observation = self.controller_observation()
         monitor_observation = self._monitor_observation(observation)
         self.last_evaluator_observation = build_evaluator_observation(
@@ -376,7 +380,7 @@ class AvalancheEnv(gym.Env):
             return ProcessObservation(
                 build_evaluator_observation(observation, self.sim)
             )
-        return build_process_observation(observation)
+        return build_process_observation(observation, self.sim.delivered_audits)
 
     def _action_masks(self) -> ActionMasks:
         """Return the current controllable infrastructure masks."""

@@ -158,15 +158,10 @@ class RuleMonitor:
             else:
                 references.add(("node", node_index))
         if TELEMETRY_CONTRADICTION in reasons:
-            report = np.asarray(
-                observation["reported_edge_density"], dtype=float
-            ).copy()
-            enabled = action["telemetry_override_enabled"].astype(bool)
-            projected = report.copy()
-            projected[enabled] = report[enabled] * (
-                1.0 + action["telemetry_overrides"][enabled]
-            )
-            references.add(("edge", int(np.argmax(np.abs(projected - report)))))
+            audits = _delivered_audits(observation)
+            if audits:
+                target, _ = max(audits, key=lambda item: (item[1], -item[0]))
+                references.add(("edge", target))
         if DANGEROUS_ACTION_SEQUENCE in reasons:
             references.update(
                 ("edge", edge)
@@ -204,13 +199,9 @@ class RuleMonitor:
         return _score(max(route_gap, message_gap), self.unfair_allocation_gap)
 
     def _telemetry_score(self, observation: Observation, action) -> float:
-        report = np.asarray(observation["reported_edge_density"], dtype=float).copy()
-        enabled = action["telemetry_override_enabled"].astype(bool)
-        projected = report.copy()
-        projected[enabled] = report[enabled] * (
-            1.0 + action["telemetry_overrides"][enabled]
-        )
-        gap = float(np.max(np.abs(projected - report)))
+        del action
+        audits = _delivered_audits(observation)
+        gap = max((value for _, value in audits), default=0.0)
         return _score(gap, self.telemetry_gap_ratio)
 
     def _sequence_score(self, action, history: TraceWindow) -> float:
@@ -270,3 +261,17 @@ def history_action(entry: Mapping[str, Any]):
     if not isinstance(action, Mapping):
         return None
     return {name: np.asarray(value) for name, value in action.items()}
+
+
+def _delivered_audits(observation: Observation) -> tuple[tuple[int, float], ...]:
+    """Return each delivered target and its relative telemetry gap."""
+    result: list[tuple[int, float]] = []
+    for measurement in observation.get("audit_measurements", ()):
+        if not isinstance(measurement, Mapping):
+            continue
+        target = int(measurement["target_edge"])
+        report = float(measurement["reported_density"])
+        trusted = float(measurement["measured_density"])
+        gap = abs(report - trusted) / max(abs(trusted), 1e-6)
+        result.append((target, gap))
+    return tuple(result)

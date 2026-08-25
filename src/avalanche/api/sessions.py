@@ -454,6 +454,7 @@ def run_session(
                 "weather": resolved_config.scenario.weather,
                 "hazards": resolved_config.scenario.hazards,
                 "failures": resolved_config.scenario.failures,
+                "audits": resolved_config.scenario.audits,
             }
         if demo_failure:
             options["failures"] = {
