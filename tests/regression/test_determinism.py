@@ -1,15 +1,18 @@
 """Seeded simulator and environment runs must be exactly repeatable."""
 
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 
-from avalanche.config import ResolvedConfig, load_and_merge
+from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
 from avalanche.config.models import PopulationConfig
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig, neutral_action
+from avalanche.experiments import run_episode as write_episode
 from avalanche.sim import MountainSim, population_from_starts
 
 FIXTURE = (
@@ -18,7 +21,8 @@ FIXTURE = (
 SEED = 20260820
 TICK_COUNT = 10
 
-CONFIGS = Path(__file__).resolve().parents[2] / "configs"
+REPO = Path(__file__).resolve().parents[2]
+CONFIGS = REPO / "configs"
 CONFIG_FILES = (
     CONFIGS / "mountain" / "default.yaml",
     CONFIGS / "scenarios" / "default.yaml",
@@ -272,3 +276,185 @@ def test_controller_draws_cannot_change_external_schedules_or_results():
     assert baseline.schedules["failures"] == disturbed.schedules["failures"]
     assert baseline.checksums == disturbed.checksums
     assert baseline.metrics == disturbed.metrics
+
+
+# The attack fixtures. Each run keeps the fixture trigger and a small population.
+ATTACK_MANIFEST = CONFIGS / "experiments" / "attack-fixtures.yaml"
+ATTACK_FIXTURES = load_yaml(ATTACK_MANIFEST)["fixtures"]
+ATTACK_IDS = [fixture["id"] for fixture in ATTACK_FIXTURES]
+ATTACK_SKIER_COUNT = 1_200
+ATTACK_EPISODE_SECONDS = {
+    "profit-biased": 1_800.0,
+    "sleeper-saboteur": 5_400.0,
+    "reward-hacker": 1_800.0,
+}
+
+
+@dataclass(frozen=True)
+class AttackRun:
+    """The complete deterministic outputs of one attack episode."""
+
+    checksums: tuple[str, ...]
+    metrics: dict[str, Any]
+    assessment: dict[str, Any] | None
+    schedules: dict[str, list[dict[str, Any]]]
+    events: tuple[tuple[str, str, float], ...]
+    population: tuple[tuple[str, bytes], ...]
+
+
+def attack_config(fixture: dict[str, Any], controller_key: str) -> ResolvedConfig:
+    """Return one short resolved configuration of a fixture entry."""
+    values = load_and_merge(
+        REPO / fixture["mountain"],
+        REPO / fixture["scenario"],
+        REPO / fixture[controller_key],
+        REPO / fixture["monitor"],
+    )
+    values["seed"] = fixture["seed"]
+    values["population"]["skier_count"] = ATTACK_SKIER_COUNT
+    values["episode_duration_seconds"] = ATTACK_EPISODE_SECONDS[fixture["id"]]
+    return ResolvedConfig.model_validate(values)
+
+
+def run_attack_episode(resolved: ResolvedConfig, output_dir: Path) -> AttackRun:
+    """Run one complete attack episode through the adjudicator."""
+    summary = write_episode(resolved, output_dir)
+    recorded = _read_events(output_dir)
+    events = tuple(
+        (
+            str(event["event_type"]),
+            str(event["actor_id"]),
+            float(event["simulation_time"]),
+        )
+        for event in recorded
+    )
+    checksums = tuple(str(event["state_checksum"]) for event in recorded)
+    return AttackRun(
+        checksums=checksums,
+        metrics=summary["metrics"],
+        assessment=summary["attack_assessment"],
+        schedules=_resolved_schedules(resolved),
+        events=events,
+        population=_population_bytes(resolved),
+    )
+
+
+def _read_events(output_dir: Path) -> list[dict[str, Any]]:
+    """Return each recorded material event of one run directory."""
+    with (output_dir / "events.jsonl").open(encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle]
+
+
+def _reset_simulator(resolved: ResolvedConfig) -> MountainSim:
+    """Reset one simulator with the exact fixture options."""
+    sim = MountainSim(REPO / resolved.mountain.path)
+    sim.reset(
+        resolved.seed,
+        {
+            "population": resolved.population,
+            "weather": resolved.scenario.weather,
+            "hazards": resolved.scenario.hazards,
+            "failures": resolved.scenario.failures,
+            "tick_seconds": resolved.intervals.movement_tick_seconds,
+            "episode_duration_seconds": resolved.episode_duration_seconds,
+        },
+    )
+    return sim
+
+
+def _population_bytes(resolved: ResolvedConfig) -> tuple[tuple[str, bytes], ...]:
+    """Return the population arrays of one reset, as comparable bytes."""
+    sim = _reset_simulator(resolved)
+    return tuple(
+        (name, np.ascontiguousarray(values).tobytes())
+        for name, values in sim.population.checksum_fields()
+    )
+
+
+def _resolved_schedules(resolved: ResolvedConfig) -> dict[str, list[dict[str, Any]]]:
+    """Return the resolved weather and failure schedules of one reset."""
+    metadata = _reset_simulator(resolved).metadata(resolved.seed)
+    return {
+        "weather": metadata["weather_schedule"],
+        "failures": metadata["failure_schedule"],
+    }
+
+
+@pytest.fixture(scope="module", params=ATTACK_FIXTURES, ids=ATTACK_IDS)
+def attack_fixture(request) -> dict[str, Any]:
+    return request.param
+
+
+def test_two_attack_runs_repeat_every_recorded_output(attack_fixture, tmp_path):
+    resolved = attack_config(attack_fixture, "controller")
+
+    first = run_attack_episode(resolved, tmp_path / "first")
+    second = run_attack_episode(resolved, tmp_path / "second")
+
+    assert first.checksums == second.checksums
+    assert first.metrics == second.metrics
+    assert first.assessment == second.assessment
+    assert first.schedules == second.schedules
+    assert first.events == second.events
+    assert first.assessment is not None
+    assert first.assessment["kind"] == attack_fixture["kind"]
+
+
+def test_the_attack_run_moves_the_state(attack_fixture, tmp_path):
+    resolved = attack_config(attack_fixture, "controller")
+
+    run = run_attack_episode(resolved, tmp_path / "run")
+
+    assert len(set(run.checksums)) > 1
+
+
+def test_a_controller_change_keeps_every_external_input(attack_fixture, tmp_path):
+    attack = attack_config(attack_fixture, "controller")
+    honest = attack_config(attack_fixture, "paired_controller")
+
+    attack_run = run_attack_episode(attack, tmp_path / "attack")
+    honest_run = run_attack_episode(honest, tmp_path / "honest")
+
+    assert attack_run.population == honest_run.population
+    assert attack_run.schedules == honest_run.schedules
+    assert attack_run.checksums != honest_run.checksums
+
+
+def test_a_controller_change_keeps_the_customer_groups(attack_fixture):
+    attack = _reset_simulator(attack_config(attack_fixture, "controller"))
+    honest = _reset_simulator(attack_config(attack_fixture, "paired_controller"))
+
+    np.testing.assert_array_equal(attack.population.group, honest.population.group)
+    np.testing.assert_array_equal(attack.population.ability, honest.population.ability)
+
+
+def test_extra_controller_draws_keep_the_population_and_the_weather(attack_fixture):
+    resolved = attack_config(attack_fixture, "controller")
+
+    plain = _reset_simulator(resolved)
+    disturbed = _reset_simulator(resolved)
+    disturbed.streams["controller"].uniform(size=64)
+    disturbed.streams["monitor"].uniform(size=64)
+
+    assert_same_population(plain, disturbed)
+    assert (
+        plain.metadata(resolved.seed)["weather_schedule"]
+        == disturbed.metadata(resolved.seed)["weather_schedule"]
+    )
+
+
+def test_extra_weather_draws_keep_the_population(attack_fixture):
+    resolved = attack_config(attack_fixture, "controller")
+
+    plain = _reset_simulator(resolved)
+    disturbed = _reset_simulator(resolved)
+    disturbed.streams["weather"].normal(size=64)
+
+    assert_same_population(plain, disturbed)
+
+
+def test_another_root_seed_changes_one_external_variable(attack_fixture):
+    resolved = attack_config(attack_fixture, "controller")
+    other = resolved.model_copy(update={"seed": resolved.seed + 1})
+
+    assert _population_bytes(resolved) != _population_bytes(other)
