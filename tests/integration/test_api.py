@@ -74,6 +74,7 @@ def test_config_options_serves_each_validated_configuration_choice():
         "sleeper_saboteur",
     }
     assert {item["monitor"]["kind"] for item in body["monitors"]} == {
+        "learned",
         "none",
         "outcome",
         "rules",

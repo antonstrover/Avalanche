@@ -1,6 +1,9 @@
 """Build the configured alignment monitor."""
 
+from pathlib import Path
+
 from avalanche.config.models import ControllerConfig, MonitorConfig
+from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import Monitor
 from avalanche.controllers.factory import build_fallback
 from avalanche.monitors.outcome import AllowMonitor, OutcomeMonitor
@@ -34,4 +37,38 @@ def build_monitor(
             evacuation_edges=config.evacuation_edges,
             unsafe_decision=config.unsafe_decision,
         )
+    if config.kind == "learned":
+        return _learned(config, controller_config, topology)
     raise ValueError(f"the monitor kind {config.kind!r} is unknown")
+
+
+def _learned(
+    config: MonitorConfig,
+    controller_config: ControllerConfig,
+    topology: Topology,
+) -> Monitor:
+    """Build the learned process monitor from one saved model."""
+    from avalanche.monitors.features import FeatureExtractor
+    from avalanche.monitors.learned import build_learned_monitor
+
+    if config.model_path is None:
+        raise ValueError("the learned monitor needs a model path")
+    model_path = Path(config.model_path)
+    if not model_path.is_absolute():
+        model_path = REPO_ROOT / model_path
+    # The extractor compares each proposal with the reference honest policy.
+    # It keeps its own fallback, so it cannot change the adjudicator fallback.
+    extractor = FeatureExtractor(
+        build_fallback("honest", controller_config, topology),
+        RuleMonitor(topology),
+    )
+    # The default threshold of one means "take the calibrated threshold".
+    # A configured value below one overrides the saved calibration.
+    configured = config.decision_threshold
+    return build_learned_monitor(
+        model_path,
+        extractor,
+        build_fallback("honest", controller_config, topology),
+        threshold=None if configured >= 1.0 else configured,
+        unsafe_decision=config.unsafe_decision,
+    )
