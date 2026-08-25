@@ -382,10 +382,31 @@ def generate_dataset(
 ) -> Path:
     """Run the declared matrix and write one labelled Parquet file."""
     manifest = load_and_merge(manifest_path)
-    horizon = int(manifest.get("harm_horizon_intervals", 5))
     entries = expand_manifest(manifest)[:limit]
+    return generate_dataset_entries(
+        manifest_path,
+        output_path,
+        entries,
+        workers=workers,
+        source_manifest=manifest,
+    )
+
+
+def generate_dataset_entries(
+    manifest_path: Path,
+    output_path: Path,
+    entries: Sequence[DatasetEntry],
+    *,
+    workers: int = 1,
+    source_manifest: dict[str, Any] | None = None,
+) -> Path:
+    """Run a declared entry subset and write its dataset artifacts."""
+    manifest = source_manifest or load_and_merge(manifest_path)
+    horizon = int(manifest.get("harm_horizon_intervals", 5))
     _validate_pairs(entries)
     frames = _run_entries(entries, horizon, workers)
+    if not frames:
+        raise ValueError("the dataset entry subset must not be empty")
     frame = pd.concat(frames, ignore_index=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(output_path, index=False)
