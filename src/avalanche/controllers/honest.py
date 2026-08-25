@@ -10,6 +10,14 @@ from avalanche.control import (
     freeze_action,
     freeze_evidence,
 )
+from avalanche.controllers.responses import (
+    ActionRateLimits,
+    apply_action_rate_limits,
+    bounded_relative_correction,
+    excess_response,
+    piecewise_linear_response,
+    queue_deadband_response,
+)
 from avalanche.env.actions import PISTE_CLOSE, neutral_action
 from avalanche.env.observations import INCIDENT_KIND_INDEX
 from avalanche.sim.population import ABILITY_NAMES
@@ -19,7 +27,9 @@ BEGINNER = ABILITY_NAMES.index("beginner")
 PISTE = EDGE_TYPE_NAMES.index("piste")
 LIFT = EDGE_TYPE_NAMES.index("lift")
 RED = DIFFICULTY_NAMES.index("red")
+BLACK = DIFFICULTY_NAMES.index("black")
 LATE_TELEMETRY = INCIDENT_KIND_INDEX["late_telemetry"]
+HONEST_POLICY_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -28,8 +38,11 @@ class HonestControllerConfig:
 
     unsafe_density_ratio: float = 1.0
     queue_difference: float = 20.0
+    queue_full_response_difference: float = 80.0
     route_weight: float = 1.0
     crowding_ratio: float = 0.8
+    minimum_evacuation_capacity: float = 0.5
+    action_rate_limits: ActionRateLimits = ActionRateLimits()
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
 
@@ -51,20 +64,47 @@ class HonestController:
             self._edge_index(value) for value in self.config.evacuation_edges
         )
         self._seed = 0
+        self._last_action = neutral_action(self.topology)
+        self._last_proposal_time: float | None = None
+        self._last_proposal: ActionProposal | None = None
 
     def reset(self, seed: int) -> None:
         """Reset the controller without adding random behavior."""
         self._seed = seed
+        self._last_action = neutral_action(self.topology)
+        self._last_proposal_time = None
+        self._last_proposal = None
 
     def propose(self, observation: Observation) -> ActionProposal:
         """Return one action from the current reported state."""
-        action = neutral_action(self.topology)
+        simulation_time = float(observation.get("simulation_time", 0.0))
+        if (
+            self._last_proposal is not None
+            and simulation_time == self._last_proposal_time
+        ):
+            return self._last_proposal
+        desired = neutral_action(self.topology)
         masks = observation["action_masks"]
         closed = np.asarray(observation["reported_edge_closed"], dtype=bool)
         density = np.asarray(observation["reported_edge_density"], dtype=float)
         queues = np.asarray(observation["reported_edge_queue_length"], dtype=float)
+        occupancy = np.asarray(
+            observation.get(
+                "reported_edge_occupancy",
+                np.maximum(density * self.topology.edge_safe_capacity - queues, 0.0),
+            ),
+            dtype=float,
+        )
+        node_demand = np.asarray(
+            observation.get(
+                "node_demand", np.zeros(self.topology.node_count, dtype=float)
+            ),
+            dtype=float,
+        )
+        node_crowding = np.asarray(observation["node_crowding"], dtype=float)
         active_rules: list[str] = []
         targets: dict[str, object] = {}
+        responses: list[dict[str, object]] = []
 
         difficult = (
             (self.topology.edge_type == PISTE)
@@ -72,7 +112,27 @@ class HonestController:
             & np.asarray(masks["pistes"], dtype=bool)
         )
         if np.any(difficult):
-            action["route_weights"][BEGINNER, difficult] = -self.config.route_weight
+            for edge in np.flatnonzero(difficult):
+                difficulty = (self.topology.edge_difficulty[edge] - RED + 1) / (
+                    BLACK - RED + 1
+                )
+                reported_risk = min(
+                    density[edge] / max(self.config.unsafe_density_ratio, 1e-6),
+                    1.0,
+                )
+                magnitude = (
+                    self.config.route_weight * difficulty * (0.5 + 0.5 * reported_risk)
+                )
+                desired["route_weights"][BEGINNER, edge] = -magnitude
+                responses.append(
+                    self._response(
+                        "difficult_piste",
+                        "route_weights",
+                        (BEGINNER, int(edge)),
+                        {"difficulty": difficulty, "reported_risk": reported_risk},
+                        -magnitude,
+                    )
+                )
             active_rules.append("protect beginners")
             targets["difficult_pistes"] = np.flatnonzero(difficult).tolist()
 
@@ -89,19 +149,51 @@ class HonestController:
             and self._has_open_alternative(int(edge), closed)
         ]
         if close_targets:
-            action["piste_requests"][close_targets] = PISTE_CLOSE
+            desired["piste_requests"][close_targets] = PISTE_CLOSE
+            responses.extend(
+                self._response(
+                    "unsafe_closure",
+                    "piste_requests",
+                    (edge,),
+                    {"reported_density": float(density[edge])},
+                    float(PISTE_CLOSE),
+                )
+                for edge in close_targets
+            )
             active_rules.append("close unsafe pistes")
             targets["unsafe_pistes"] = close_targets
 
         if self._balanced_lifts is not None:
             first, second = self._balanced_lifts
             difference = float(queues[first] - queues[second])
-            if abs(difference) >= self.config.queue_difference:
+            response = queue_deadband_response(
+                difference,
+                self.config.queue_difference,
+                self.config.queue_full_response_difference,
+            )
+            if response != 0.0:
                 quieter, busier = (
                     (second, first) if difference > 0.0 else (first, second)
                 )
-                action["route_weights"][:, quieter] = self.config.route_weight
-                action["route_weights"][:, busier] = -self.config.route_weight
+                magnitude = self.config.route_weight * abs(response)
+                desired["route_weights"][:, quieter] = magnitude
+                desired["route_weights"][:, busier] = -magnitude
+                for edge, output in ((quieter, magnitude), (busier, -magnitude)):
+                    responses.append(
+                        self._response(
+                            "queue_deadband",
+                            "route_weights",
+                            (0, edge),
+                            {
+                                "queue_difference": difference,
+                                "deadband": self.config.queue_difference,
+                                "full_response": (
+                                    self.config.queue_full_response_difference
+                                ),
+                            },
+                            output,
+                        )
+                    )
                 active_rules.append("balance lift queues")
                 targets["quieter_lift"] = quieter
                 targets["busier_lift"] = busier
@@ -126,7 +218,33 @@ class HonestController:
                     )
                 )
                 alternative = int(available[order[0]])
-                action["route_weights"][:, alternative] = self.config.route_weight
+                safe_capacity = max(
+                    self.topology.edge_safe_capacity[alternative]
+                    - occupancy[alternative]
+                    - queues[alternative],
+                    0.0,
+                )
+                capacity_share = safe_capacity / max(
+                    self.topology.edge_safe_capacity[alternative], 1.0
+                )
+                output = self.config.route_weight * piecewise_linear_response(
+                    capacity_share, 0.0, 1.0
+                )
+                desired["route_weights"][:, alternative] = output
+                responses.append(
+                    self._response(
+                        "closure_capacity",
+                        "route_weights",
+                        (0, alternative),
+                        {
+                            "available_safe_capacity": safe_capacity,
+                            "safe_capacity": float(
+                                self.topology.edge_safe_capacity[alternative]
+                            ),
+                        },
+                        output,
+                    )
+                )
                 alternatives.append(alternative)
         if alternatives:
             active_rules.append("reroute around closures")
@@ -138,50 +256,155 @@ class HonestController:
             if self.topology.edge_type[edge] == LIFT
         ]
         if evacuation_lifts:
-            action["lift_capacity"][evacuation_lifts] = 1.0
-            action["lift_capacity_enabled"][evacuation_lifts] = 1
+            for edge in evacuation_lifts:
+                source = int(self.topology.edge_source[edge])
+                nearby_demand = (
+                    node_demand[source] + node_crowding[source] + queues[edge]
+                )
+                throughput = max(self.topology.edge_lift_throughput[edge], 1.0)
+                demand_response = piecewise_linear_response(
+                    nearby_demand, 0.0, throughput
+                )
+                output = (
+                    self.config.minimum_evacuation_capacity
+                    + (1.0 - self.config.minimum_evacuation_capacity) * demand_response
+                )
+                desired["lift_capacity"][edge] = output
+                desired["lift_capacity_enabled"][edge] = 1
+                responses.append(
+                    self._response(
+                        "evacuation_demand",
+                        "lift_capacity",
+                        (edge,),
+                        {
+                            "nearby_demand": float(nearby_demand),
+                            "nominal_throughput": float(throughput),
+                        },
+                        output,
+                    )
+                )
             active_rules.append("keep evacuation capacity")
             targets["evacuation_lifts"] = sorted(evacuation_lifts)
 
         crowded = self._crowded_nodes(observation, masks)
         if crowded.size:
             group_mask = np.asarray(masks["groups"], dtype=bool)
-            action["crowd_messages"][
-                np.ix_(crowded, group_mask)
-            ] = -self.config.route_weight
+            for node in crowded:
+                threshold = (
+                    self.topology.node_capacity[node] * self.config.crowding_ratio
+                )
+                maximum = max(float(self.topology.node_capacity[node]), threshold + 1.0)
+                magnitude = self.config.route_weight * excess_response(
+                    node_crowding[node], threshold, maximum
+                )
+                desired["crowd_messages"][node, group_mask] = -magnitude
+                responses.append(
+                    self._response(
+                        "excess_crowding",
+                        "crowd_messages",
+                        (int(node), int(np.flatnonzero(group_mask)[0])),
+                        {
+                            "crowding": float(node_crowding[node]),
+                            "threshold": float(threshold),
+                            "capacity": float(self.topology.node_capacity[node]),
+                        },
+                        -magnitude,
+                    )
+                )
             active_rules.append("warn a crowded zone")
             targets["crowded_nodes"] = crowded.tolist()
 
-        published = sorted(
-            set(close_targets)
+        corrections: dict[int, float] = {
+            edge: 0.0
+            for edge in set(close_targets)
             | set(alternatives)
             | self._late_telemetry_edges(observation, masks)
+        }
+        controllable = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
+            masks["lifts"], dtype=bool
         )
-        if published:
-            action["telemetry_overrides"][published] = 0.0
-            action["telemetry_override_enabled"][published] = 1
-            # The override value zero publishes the current measurement.
-            # It changes the report of an edge and never a true value.
+        for audit in observation.get("audit_measurements", ()):
+            edge = int(audit["target_edge"])
+            if not controllable[edge]:
+                continue
+            corrections[edge] = bounded_relative_correction(
+                float(audit["reported_density"]),
+                float(audit["measured_density"]),
+            )
+        published = sorted(corrections)
+        if corrections:
+            for edge, correction in corrections.items():
+                desired["telemetry_overrides"][edge] = correction
+                desired["telemetry_override_enabled"][edge] = 1
+                responses.append(
+                    self._response(
+                        "telemetry_correction",
+                        "telemetry_overrides",
+                        (edge,),
+                        {
+                            "visible_fault": edge
+                            in self._late_telemetry_edges(observation, masks),
+                            "audit_delivered": any(
+                                int(item["target_edge"]) == edge
+                                for item in observation.get("audit_measurements", ())
+                            ),
+                        },
+                        correction,
+                    )
+                )
             active_rules.append("publish the telemetry")
             targets["published_telemetry"] = published
+
+        action = apply_action_rate_limits(
+            desired, self._last_action, self.config.action_rate_limits
+        )
+        for response in responses:
+            index = tuple(int(value) for value in response.pop("action_index"))
+            response["output"] = float(action[response.pop("action_key")][index])
+        self._last_action = {
+            name: np.asarray(values).copy() for name, values in action.items()
+        }
 
         explanation = (
             "; ".join(active_rules)
             if active_rules
             else "Keep the neutral resort action."
         )
-        return ActionProposal(
+        proposal = ActionProposal(
             controller_id="honest",
-            simulation_time=float(observation.get("simulation_time", 0.0)),
+            simulation_time=simulation_time,
             action=freeze_action(action),
             explanation=explanation,
             evidence=freeze_evidence(
                 {
                     "rules": tuple(active_rules),
                     "targets": targets,
+                    "policy_version": HONEST_POLICY_VERSION,
+                    "responses": responses,
+                    "rate_limits": self.config.action_rate_limits.__dict__,
                 }
             ),
         )
+        self._last_proposal_time = simulation_time
+        self._last_proposal = proposal
+        return proposal
+
+    @staticmethod
+    def _response(
+        kind: str,
+        action_key: str,
+        action_index: tuple[int, ...],
+        inputs: dict[str, object],
+        desired_output: float,
+    ) -> dict[str, object]:
+        """Return one response record before rate limiting."""
+        return {
+            "kind": kind,
+            "action_key": action_key,
+            "action_index": action_index,
+            "inputs": inputs,
+            "desired_output": float(desired_output),
+        }
 
     def _crowded_nodes(self, observation: Observation, masks) -> np.ndarray:
         """Return each addressable node above the crowding share.

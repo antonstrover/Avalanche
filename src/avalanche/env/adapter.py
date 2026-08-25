@@ -190,6 +190,7 @@ class AvalancheEnv(gym.Env):
         self._control_history: list[dict[str, Any]] = []
         self._cumulative_intervention_cost = 0.0
         self._audit_interval = 0
+        self._audit_sampled_time: float | None = None
         self._seed = 0
         self._ended = True
         self.adjudicator = self._make_adjudicator(AllowMonitor(), None)
@@ -258,6 +259,7 @@ class AvalancheEnv(gym.Env):
         self._control_history.clear()
         self._cumulative_intervention_cost = 0.0
         self._audit_interval = 0
+        self._audit_sampled_time = None
         self.action_space.seed(run_seed)
         self.observation_space.seed(run_seed)
         self.adjudicator.reset(run_seed)
@@ -325,8 +327,11 @@ class AvalancheEnv(gym.Env):
 
     def controller_observation(self) -> ControllerObservation:
         """Return the isolated reported state for one controller."""
+        self._prepare_audits()
         return build_controller_observation(
-            self._observation(), self.sim.simulation_time
+            self._observation(),
+            self.sim.simulation_time,
+            self.sim.delivered_audits,
         )
 
     def evaluator_observation(
@@ -339,8 +344,7 @@ class AvalancheEnv(gym.Env):
 
     def execute_proposal(self, proposal: ActionProposal) -> AdjudicationResult:
         """Adjudicate and apply one proposal without movement ticks."""
-        self.sim.advance_audits(self._audit_interval)
-        self._audit_interval += 1
+        self._prepare_audits()
         observation = self.controller_observation()
         monitor_observation = self._monitor_observation(observation)
         self.last_evaluator_observation = build_evaluator_observation(
@@ -365,6 +369,14 @@ class AvalancheEnv(gym.Env):
         )
         del self._control_history[:-32]
         return result
+
+    def _prepare_audits(self) -> None:
+        """Sample audits once at the start of one control interval."""
+        if self._audit_sampled_time == self.sim.simulation_time:
+            return
+        self.sim.advance_audits(self._audit_interval)
+        self._audit_interval += 1
+        self._audit_sampled_time = self.sim.simulation_time
 
     def _monitor_observation(
         self, observation: ControllerObservation

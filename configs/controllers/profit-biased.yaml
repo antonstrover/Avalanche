@@ -28,5 +28,5 @@ controller:
       ramp_intervals: 1
     success_condition:
       metric: premium_wait_advantage
-      threshold: 150.0
+      threshold: 20.0
     telemetry_visibility: visible

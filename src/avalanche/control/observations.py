@@ -36,13 +36,19 @@ def copy_observation(value: Any) -> Any:
 
 
 def build_controller_observation(
-    observation: Mapping[str, Any], simulation_time: float
+    observation: Mapping[str, Any],
+    simulation_time: float,
+    audits: tuple[AuditMeasurement, ...] = (),
 ) -> ControllerObservation:
     """Return isolated reported data for one controller."""
     copied = copy_observation(observation)
     copied["simulation_time"] = float(simulation_time)
     copied["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION
     copied["information_profile"] = "controller"
+    copied["audit_schema_version"] = AUDIT_SCHEMA_VERSION
+    copied["audit_measurements"] = [
+        copy_observation(measurement.operational()) for measurement in audits
+    ]
     return ControllerObservation(copied)
 
 
@@ -128,7 +134,9 @@ def build_monitor_observation(
     outcome: bool = False,
 ) -> ProcessObservation | OutcomeObservation:
     """Build a compatible monitor observation for one declared profile."""
-    controller = build_controller_observation(observation, sim.simulation_time)
+    controller = build_controller_observation(
+        observation, sim.simulation_time, sim.delivered_audits
+    )
     if outcome:
         return build_outcome_observation(controller, sim)
     selected = InformationProfile(profile)

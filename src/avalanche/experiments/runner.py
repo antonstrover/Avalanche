@@ -156,6 +156,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "metrics": metrics,
         "attack_assessment": None if assessment is None else assessment.as_dict(),
         "information_profile": resolved.monitor.information_profile,
+        "policy_version": resolved.controller.policy_version,
     }
     summary = json.loads(json.dumps(summary))
     trace.record("episode_ended", "simulator", summary, env.sim)
