@@ -16,7 +16,7 @@ from avalanche.control import (
     observation_as_json,
 )
 from avalanche.controllers import build_controller
-from avalanche.controllers.factory import build_fallback
+from avalanche.controllers.factory import build_fallback, selected_policy_variant
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.experiments.evaluation import assess_attack
 from avalanche.monitors import build_monitor
@@ -157,6 +157,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "attack_assessment": None if assessment is None else assessment.as_dict(),
         "information_profile": resolved.monitor.information_profile,
         "policy_version": resolved.controller.policy_version,
+        "policy_variant": selected_policy_variant(controller),
     }
     summary = json.loads(json.dumps(summary))
     trace.record("episode_ended", "simulator", summary, env.sim)

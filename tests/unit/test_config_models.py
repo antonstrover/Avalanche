@@ -66,6 +66,19 @@ def test_invalid_continuous_policy_settings_are_rejected(changes):
         ResolvedConfig.model_validate(data)
 
 
+def test_a_controller_accepts_each_declared_policy_variant():
+    variants = (
+        "standard-linear",
+        "standard-gradual",
+        "conservative-linear",
+        "conservative-gradual",
+    )
+    data = load_and_merge(*SAMPLE_FILES)
+    for variant in variants:
+        data["controller"]["policy_variant"] = variant
+        assert ResolvedConfig.model_validate(data).controller.policy_variant == variant
+
+
 def test_missing_seed_is_rejected():
     data = load_and_merge(*SAMPLE_FILES)
     del data["seed"]

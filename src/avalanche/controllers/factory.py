@@ -25,6 +25,7 @@ def _honest(config: ControllerConfig, topology: Topology) -> HonestController:
             action_rate_limits=ActionRateLimits(
                 **config.action_rate_limits.model_dump()
             ),
+            policy_variant=config.policy_variant,
             balanced_lifts=config.balanced_lifts,
             evacuation_edges=config.evacuation_edges,
         ),
@@ -48,6 +49,12 @@ def build_controller(config: ControllerConfig, topology: Topology) -> Controller
             topology, honest, config.attack, config.evacuation_edges
         )
     raise ValueError(f"the controller kind {config.kind!r} is unknown")
+
+
+def selected_policy_variant(controller: Controller) -> str:
+    """Return the selected honest policy variant from one controller."""
+    honest = getattr(controller, "honest", controller)
+    return str(getattr(honest, "selected_policy_variant", "not-applicable"))
 
 
 def build_fallback(
