@@ -15,6 +15,7 @@ from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir
 from avalanche.control import DecisionType
 from avalanche.experiments import run_episode
 from avalanche.monitors.calibration import calibrate
+from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.learned import LEARNED_PROCESS_RISK
 from avalanche.monitors.perceptron import (
     TrainingConfig,
@@ -34,6 +35,9 @@ SEED = 20260825
 def model_path(tmp_path_factory) -> Path:
     """Train one small model and save it with its calibration."""
     frame = pd.read_parquet(FIXTURE)
+    for name in FEATURE_NAMES:
+        if name not in frame:
+            frame[name] = 0.0
     parts, assignment = split_by_family(frame, seed=SEED)
     config = TrainingConfig(seed=SEED, epochs=8)
     model = train_perceptron(parts["train"], parts["validation"], config)
@@ -94,7 +98,9 @@ def test_the_run_records_the_model_reference(model_path, tmp_path):
     reference = json.loads((tmp_path / "model-reference.json").read_text())
     assert reference["model_kind"] == "perceptron"
     assert reference["model_revision"]
-    assert reference["feature_version"] == 1
+    assert reference["feature_version"] == 2
+    assert reference["model_version"] == 2
+    assert reference["information_profile"] == "principal"
     assert reference["model_path"] == str(model_path)
 
 

@@ -53,6 +53,7 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     assert json.loads((tmp_path / "summary.json").read_text()) == summary
     assert pq.read_table(tmp_path / "metrics.parquet").num_rows == 3
     assert pq.read_table(tmp_path / "snapshots.parquet").num_rows == 3
+    assert summary["information_profile"] == "principal"
 
 
 def test_decision_events_keep_each_control_interval(tmp_path):
@@ -76,4 +77,6 @@ def test_decision_events_keep_each_control_interval(tmp_path):
     assert len(evaluator) == len(proposals)
     assert evaluator[0]["payload"]["proposal"] == proposals[0]["payload"]
     assert "true_edge_density" in evaluator[0]["payload"]
+    assert evaluator[0]["payload"]["observation_schema_version"] == 1
+    assert evaluator[0]["payload"]["information_profile"] == "evaluator"
     assert [event["simulation_time"] for event in executed] == [5.0, 10.0]

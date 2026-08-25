@@ -20,7 +20,7 @@ from avalanche.monitors.dataset import (
     generate_dataset,
     run_entry,
 )
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "configs" / "experiments" / "monitor-training.yaml"
@@ -95,6 +95,8 @@ def test_each_row_holds_every_feature_and_key():
     assert rows["run_id"].nunique() == 1
     assert rows["scenario_family"].iloc[0] == "calm"
     assert list(rows["step"]) == list(range(len(rows)))
+    assert "controller_id" not in rows.columns
+    assert "true_harm_count" not in rows.columns
 
 
 def test_the_matrix_expands_to_one_entry_for_each_run():
@@ -123,6 +125,8 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path):
     assert len(frame) == summary["row_count"]
     assert summary["run_count"] == 2
     assert summary["feature_names"] == list(FEATURE_NAMES)
+    assert summary["feature_version"] == FEATURE_VERSION
+    assert summary["information_profile"] == "principal"
 
 
 def test_the_matrix_carries_one_entry_for_each_attack_strength():

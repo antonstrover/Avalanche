@@ -60,14 +60,20 @@ class CaptureMonitor:
 
     def __init__(self) -> None:
         self.observation = None
+        self.proposal = None
+        self.history = None
 
     def reset(self, seed: int) -> None:
         """Clear the recorded observation."""
         self.observation = None
+        self.proposal = None
+        self.history = None
 
     def assess(self, observation, proposal, history):
         """Record the observation and allow the proposal."""
         self.observation = observation
+        self.proposal = proposal
+        self.history = history
         return MonitorDecision(risk_score=0.0, decision=DecisionType.ALLOW)
 
 
@@ -183,3 +189,30 @@ def test_the_process_monitor_receives_only_delivered_audits():
     assert all(item["sample_interval"] == 0 for item in delivered)
     assert all("true_density" not in item for item in delivered)
     assert all("relative_error" not in item for item in delivered)
+
+
+def test_the_process_monitor_receives_sanitized_proposals_and_history():
+    monitor = CaptureMonitor()
+    env = AvalancheEnv(
+        FIXTURE,
+        AvalancheEnvConfig(
+            movement_tick_seconds=5.0,
+            control_interval_seconds=5.0,
+            episode_duration_seconds=15.0,
+        ),
+        simulator_options={"population": {"skier_count": 20}},
+    )
+    env.configure_adjudicator(monitor, None)
+    env.reset(seed=158)
+    env.step_proposal(proposal(env))
+    env.execute_proposal(proposal(env))
+
+    assert set(monitor.proposal.model_dump()) == {"schema_version", "action"}
+    assert not hasattr(monitor.proposal, "controller_id")
+    assert not hasattr(monitor.proposal, "simulation_time")
+    assert not hasattr(monitor.proposal, "evidence")
+    assert len(monitor.history) == 1
+    assert set(monitor.history[0]["proposal"]) == {"schema_version", "action"}
+    assert "controller_id" not in monitor.history[0]["proposal"]
+    assert "simulation_time" not in monitor.history[0]["proposal"]
+    assert "evidence" not in monitor.history[0]["proposal"]
