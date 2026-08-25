@@ -360,7 +360,10 @@ class AvalancheEnv(gym.Env):
             tuple(self._control_history),
             simulation_time=self.sim.simulation_time,
         )
-        self.sim.metrics.update_decision(result.decision)
+        self.sim.metrics.update_decision(
+            result.decision,
+            harm_count=float(np.sum(self.sim.state.harm_count, dtype=np.int64)),
+        )
         _apply_executed_action(self.sim, result.executed_action)
         self.last_proposal = proposal
         self.last_adjudication = result

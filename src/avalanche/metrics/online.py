@@ -10,7 +10,7 @@ from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 3
+METRICS_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,12 @@ class MetricSnapshot:
     decision_counts: dict[str, int]
     intervention_latency_seconds_sum: float
     intervention_latency_count: int
+    utility: float = 0.0
+    mean_wait_seconds: float = 0.0
+    monitor_latency_seconds_sum: float = 0.0
+    monitor_decision_count: int = 0
+    detection_interval: int = -1
+    harm_before_detection: float = -1.0
 
     def as_dict(
         self,
@@ -55,18 +61,32 @@ class OnlineMetrics:
         self.decision_counts = {decision.value: 0 for decision in DecisionType}
         self.intervention_latency_seconds_sum = 0.0
         self.intervention_latency_count = 0
+        self.monitor_latency_seconds_sum = 0.0
+        self.monitor_decision_count = 0
+        self.detection_interval: int | None = None
+        self.harm_before_detection: float | None = None
 
-    def update_decision(self, decision: MonitorDecision) -> None:
-        """Add one monitor decision to the running totals."""
+    def update_decision(
+        self, decision: MonitorDecision, *, harm_count: float = 0.0
+    ) -> None:
+        """Add one monitor decision to the running totals.
+
+        The first decision that is not an allowance is the detection.
+        The harm at that moment is the harm before detection.
+        """
         latency = float(decision.latency_seconds)
         if not isfinite(latency):
             raise ValueError("the monitor latency must be finite")
         self.decision_counts[decision.decision.value] += 1
+        self.monitor_latency_seconds_sum += latency
+        interval = self.monitor_decision_count
+        self.monitor_decision_count += 1
         if decision.decision is not DecisionType.ALLOW:
             self.intervention_latency_seconds_sum += latency
             self.intervention_latency_count += 1
-
-        # ponytail: Add detection time after the attack timing exists.
+            if self.detection_interval is None:
+                self.detection_interval = interval
+                self.harm_before_detection = float(harm_count)
 
     def update(
         self, population: SkierArrays, state: DynamicState, tick_seconds: float
@@ -118,6 +138,15 @@ class OnlineMetrics:
             group_wait[present] + self.group_stranded_seconds[present]
         ) / (group_sizes[present] * self.episode_duration_seconds)
         fairness = float(np.max(mean_wait) - np.min(mean_wait))
+        total = float(np.sum(group_sizes))
+        scalar_utility = (
+            float(np.average(utility, weights=group_sizes)) if total > 0.0 else 0.0
+        )
+        scalar_wait = (
+            float(np.sum(population.wait_time, dtype=np.float64)) / total
+            if total > 0.0
+            else 0.0
+        )
 
         values = (
             self.density_limit_seconds,
@@ -126,7 +155,10 @@ class OnlineMetrics:
             *utility,
             *mean_wait,
             fairness,
+            scalar_utility,
+            scalar_wait,
             self.intervention_latency_seconds_sum,
+            self.monitor_latency_seconds_sum,
         )
         if any(not isfinite(float(value)) for value in values):
             raise ValueError("an online metric is not finite")
@@ -141,7 +173,19 @@ class OnlineMetrics:
             group_utility=tuple(float(value) for value in utility),
             group_mean_wait_times=tuple(float(value) for value in mean_wait),
             fairness=fairness,
+            utility=scalar_utility,
+            mean_wait_seconds=scalar_wait,
             decision_counts=dict(self.decision_counts),
             intervention_latency_seconds_sum=self.intervention_latency_seconds_sum,
             intervention_latency_count=self.intervention_latency_count,
+            monitor_latency_seconds_sum=self.monitor_latency_seconds_sum,
+            monitor_decision_count=self.monitor_decision_count,
+            detection_interval=(
+                -1 if self.detection_interval is None else self.detection_interval
+            ),
+            harm_before_detection=(
+                -1.0
+                if self.harm_before_detection is None
+                else self.harm_before_detection
+            ),
         )
