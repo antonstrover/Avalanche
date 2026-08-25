@@ -44,6 +44,7 @@ KEY_COLUMNS = (
     "controller_kind",
     "controller_id",
     "mountain",
+    "attack_strength",
     "seed",
     "step",
     "simulation_time",
@@ -94,6 +95,7 @@ class DatasetEntry:
     controller_kind: str
     seed: int
     config_paths: tuple[str, ...]
+    attack_strength: float | None = None
 
 
 def label_future_harm(rows: pd.DataFrame, horizon: int) -> pd.DataFrame:
@@ -152,8 +154,9 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
     frame.insert(1, "scenario_family", entry.scenario_family)
     frame.insert(2, "controller_kind", entry.controller_kind)
     frame.insert(3, "mountain", entry.mountain)
-    frame.insert(4, "seed", entry.seed)
-    frame.insert(5, "step", np.arange(len(frame)))
+    frame.insert(4, "attack_strength", entry.attack_strength or 0.0)
+    frame.insert(5, "seed", entry.seed)
+    frame.insert(6, "step", np.arange(len(frame)))
     return label_future_harm(frame, horizon)
 
 
@@ -174,30 +177,40 @@ def resolve_entry(entry: DatasetEntry) -> ResolvedConfig:
     """Resolve one matrix entry into an immutable run configuration."""
     merged = load_and_merge(*(REPO_ROOT / path for path in entry.config_paths))
     merged["seed"] = entry.seed
+    if entry.attack_strength is not None:
+        attack = merged["controller"]["attack"]
+        attack["action_budget"]["strength"] = entry.attack_strength
     return ResolvedConfig.model_validate(merged)
 
 
 def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     """Expand the declared axes into one entry for each run."""
+    strengths = [float(value) for value in manifest.get("attack_strengths", ())]
     entries = []
     for mountain in manifest["mountains"]:
         for family in manifest["families"]:
             for controller in mountain["controllers"]:
-                for seed in manifest["seeds"]:
-                    entries.append(
-                        DatasetEntry(
-                            scenario_family=family["id"],
-                            mountain=mountain["id"],
-                            controller_kind=controller["id"],
-                            seed=int(seed),
-                            config_paths=(
-                                mountain["config"],
-                                family["config"],
-                                controller["config"],
-                                manifest["monitor"],
-                            ),
+                # An honest controller has no attack, so it takes one entry.
+                choices: list[float | None] = (
+                    list(strengths) if controller.get("attack", False) else [None]
+                )
+                for strength in choices:
+                    for seed in manifest["seeds"]:
+                        entries.append(
+                            DatasetEntry(
+                                scenario_family=family["id"],
+                                mountain=mountain["id"],
+                                controller_kind=controller["id"],
+                                seed=int(seed),
+                                config_paths=(
+                                    mountain["config"],
+                                    family["config"],
+                                    controller["config"],
+                                    manifest["monitor"],
+                                ),
+                                attack_strength=strength,
+                            )
                         )
-                    )
     return entries
 
 
@@ -243,6 +256,9 @@ def _write_manifest_summary(
         "mountains": sorted({entry.mountain for entry in entries}),
         "controllers": sorted({entry.controller_kind for entry in entries}),
         "seeds": sorted({entry.seed for entry in entries}),
+        "attack_strengths": sorted(
+            {entry.attack_strength for entry in entries if entry.attack_strength}
+        ),
         "attack_rate": float(frame[ATTACK_LABEL].mean()),
         "harm_rate": float(frame.loc[frame[HARM_MASK] == 1, HARM_LABEL].mean()),
     }

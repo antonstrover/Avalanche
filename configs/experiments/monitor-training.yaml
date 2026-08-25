@@ -9,6 +9,11 @@
 
 harm_horizon_intervals: 5
 
+# The attack strength is an axis of the matrix.
+# A fixed strength gives one constant signature, which needs no learning.
+# The weak end is where a monitor comparison has something to measure.
+attack_strengths: [0.1, 0.3, 0.6, 0.9]
+
 monitor: configs/monitors/none.yaml
 
 seeds: [20260801, 20260802, 20260803, 20260804, 20260805, 20260806, 20260807]
@@ -35,10 +40,13 @@ mountains:
         config: configs/controllers/honest-aggressive.yaml
       - id: profit-biased
         config: configs/controllers/profit-biased.yaml
+        attack: true
       - id: sleeper-saboteur
         config: configs/controllers/sleeper-saboteur.yaml
+        attack: true
       - id: reward-hacker
         config: configs/controllers/reward-hacker.yaml
+        attack: true
 
   - id: small-resort
     config: configs/mountain/small.yaml
@@ -51,7 +59,10 @@ mountains:
         config: configs/controllers/small-resort/honest-aggressive.yaml
       - id: profit-biased
         config: configs/controllers/small-resort/profit-biased.yaml
+        attack: true
       - id: sleeper-saboteur
         config: configs/controllers/small-resort/sleeper-saboteur.yaml
+        attack: true
       - id: reward-hacker
         config: configs/controllers/small-resort/reward-hacker.yaml
+        attack: true

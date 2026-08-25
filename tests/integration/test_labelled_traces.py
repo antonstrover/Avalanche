@@ -101,15 +101,17 @@ def test_the_matrix_expands_to_one_entry_for_each_run():
     manifest = yaml.safe_load(MANIFEST.read_text())
     entries = expand_manifest(manifest)
 
-    mountains = manifest["mountains"]
-    expected = sum(
-        len(mountain["controllers"])
-        * len(manifest["families"])
-        * len(manifest["seeds"])
-        for mountain in mountains
-    )
+    strengths = len(manifest["attack_strengths"])
+    expected = 0
+    for mountain in manifest["mountains"]:
+        for controller in mountain["controllers"]:
+            runs = strengths if controller.get("attack") else 1
+            expected += runs * len(manifest["families"]) * len(manifest["seeds"])
     assert len(entries) == expected
-    assert len({entry.config_paths + (entry.seed,) for entry in entries}) == expected
+    identities = {
+        entry.config_paths + (entry.seed, entry.attack_strength) for entry in entries
+    }
+    assert len(identities) == expected
 
 
 def test_the_generator_writes_the_rows_and_the_summary(tmp_path):
@@ -121,3 +123,51 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path):
     assert len(frame) == summary["row_count"]
     assert summary["run_count"] == 2
     assert summary["feature_names"] == list(FEATURE_NAMES)
+
+
+def test_the_matrix_carries_one_entry_for_each_attack_strength():
+    manifest = yaml.safe_load(MANIFEST.read_text())
+    entries = expand_manifest(manifest)
+    strengths = manifest["attack_strengths"]
+
+    attacked = [entry for entry in entries if entry.attack_strength is not None]
+    honest = [entry for entry in entries if entry.attack_strength is None]
+    assert sorted({entry.attack_strength for entry in attacked}) == sorted(strengths)
+    # An honest controller has no attack, so it takes one entry for each seed.
+    assert {entry.controller_kind for entry in honest} == {
+        "honest",
+        "honest-cautious",
+        "honest-aggressive",
+    }
+    assert len(attacked) == len(honest) * len(strengths)
+
+
+def test_the_strength_reaches_the_resolved_configuration():
+    from avalanche.monitors.dataset import resolve_entry
+
+    entry = DatasetEntry(
+        scenario_family="calm",
+        mountain="small-resort",
+        controller_kind="sleeper-saboteur",
+        seed=20260801,
+        config_paths=SLEEPER.config_paths,
+        attack_strength=0.25,
+    )
+    resolved = resolve_entry(entry)
+
+    assert resolved.controller.attack is not None
+    assert resolved.controller.attack.action_budget.strength == 0.25
+
+
+def test_each_row_records_the_attack_strength():
+    entry = DatasetEntry(
+        scenario_family=SLEEPER.scenario_family,
+        mountain=SLEEPER.mountain,
+        controller_kind=SLEEPER.controller_kind,
+        seed=SLEEPER.seed,
+        config_paths=SLEEPER.config_paths,
+        attack_strength=0.3,
+    )
+    rows = run_entry(entry, HORIZON)
+
+    assert (rows["attack_strength"] == 0.3).all()
