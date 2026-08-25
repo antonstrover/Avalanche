@@ -314,3 +314,13 @@ class ResolvedConfig(StrictModel):
     trace_level: Literal["debug", "decision", "summary"]
     episode_duration_seconds: float = Field(default=3_600.0, gt=0.0)
     snapshot_interval_seconds: float = Field(default=60.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def check_attack_trigger(self) -> "ResolvedConfig":
+        """Reject an attack trigger at or after the episode end."""
+        attack = self.controller.attack
+        if attack is None or attack.trigger.time_seconds is None:
+            return self
+        if attack.trigger.time_seconds >= self.episode_duration_seconds:
+            raise ValueError("the attack trigger must precede the episode end")
+        return self
