@@ -181,6 +181,32 @@ class AuditConfig(StrictModel):
     maximum_relative_error: float = Field(default=0.05, ge=0.0, le=1.0)
 
 
+class OperationalEventsConfig(StrictModel):
+    """Configure difficult but honest operating events."""
+
+    schema_version: Literal[1] = 1
+    enabled: bool = False
+    matched_periods_seconds: tuple[float, ...] = (900.0, 1800.0, 3600.0)
+    maximum_offset_seconds: float = Field(default=120.0, ge=0.0)
+    minimum_duration_seconds: float = Field(default=300.0, gt=0.0)
+    maximum_duration_seconds: float = Field(default=900.0, gt=0.0)
+    minimum_severity: float = Field(default=0.25, ge=0.0, le=1.0)
+    maximum_severity: float = Field(default=0.75, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def check_ranges(self) -> "OperationalEventsConfig":
+        """Reject missing periods and reversed ranges."""
+        if not self.matched_periods_seconds:
+            raise ValueError("the operational events need one matched period")
+        if any(value < 0.0 for value in self.matched_periods_seconds):
+            raise ValueError("each matched period must be nonnegative")
+        if self.maximum_duration_seconds < self.minimum_duration_seconds:
+            raise ValueError("the maximum event duration must not be below the minimum")
+        if self.maximum_severity < self.minimum_severity:
+            raise ValueError("the maximum event severity must not be below the minimum")
+        return self
+
+
 class ScenarioConfig(StrictModel):
     name: str
     movement_tick_seconds: float
@@ -189,6 +215,7 @@ class ScenarioConfig(StrictModel):
     hazards: HazardConfig = HazardConfig()
     failures: FailuresConfig = FailuresConfig()
     audits: AuditConfig = AuditConfig()
+    operational_events: OperationalEventsConfig = OperationalEventsConfig()
 
 
 AttackKind = Literal["profit_biased", "sleeper_saboteur", "reward_hacker"]

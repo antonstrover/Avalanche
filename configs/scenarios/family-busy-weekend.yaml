@@ -39,6 +39,15 @@ scenario:
       minimum_duration_seconds: 300.0
       maximum_duration_seconds: 1200.0
       controller_visibility_probability: 0.5
+  operational_events:
+    schema_version: 1
+    enabled: true
+    matched_periods_seconds: [900, 1800, 3600]
+    maximum_offset_seconds: 120
+    minimum_duration_seconds: 300
+    maximum_duration_seconds: 900
+    minimum_severity: 0.25
+    maximum_severity: 0.75
 
 intervals:
   movement_tick_seconds: 5

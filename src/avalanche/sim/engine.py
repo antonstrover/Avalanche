@@ -15,6 +15,7 @@ from avalanche.config.models import (
     AuditConfig,
     FailuresConfig,
     HazardConfig,
+    OperationalEventsConfig,
     PopulationConfig,
     WeatherConfig,
 )
@@ -26,6 +27,12 @@ from avalanche.scenarios.failures import (
     apply_failures,
     refresh_reported_telemetry,
     resolve_failure_schedule,
+)
+from avalanche.scenarios.operational_events import (
+    EVENT_STREAM_NAMES,
+    OperationalEvent,
+    OperationalEventSchedule,
+    resolve_operational_event_schedule,
 )
 from avalanche.scenarios.weather import (
     Weather,
@@ -65,6 +72,7 @@ STREAM_NAMES = (
     "monitor",
     "audit",
     "policy",
+    *EVENT_STREAM_NAMES,
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
@@ -98,6 +106,8 @@ class MountainSim:
         self.audit_config = AuditConfig()
         self.audit_channel: AuditChannel | None = None
         self.delivered_audits: tuple[AuditMeasurement, ...] = ()
+        self.operational_event_schedule: OperationalEventSchedule | None = None
+        self.active_operational_events: tuple[OperationalEvent, ...] = ()
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), DEFAULT_EPISODE_SECONDS)
 
     def reset(
@@ -158,6 +168,13 @@ class MountainSim:
         self.audit_config = audits
         self.audit_channel = AuditChannel(audits, self.streams["audit"])
         self.delivered_audits = ()
+        operational_events = options.get("operational_events", {})
+        self.operational_event_schedule = resolve_operational_event_schedule(
+            OperationalEventsConfig.model_validate(operational_events),
+            self.topology,
+            self.streams,
+        )
+        self.active_operational_events = self.operational_event_schedule.active(0.0)
 
         hazards = options.get("hazards", HazardConfig())
         if not isinstance(hazards, HazardConfig):
@@ -176,6 +193,7 @@ class MountainSim:
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), episode_seconds)
         self._update_weather()
         self._update_failures()
+        self._update_operational_events()
         refresh_reported_telemetry(self.state, self.topology)
 
         # 6. Build the first observation.
@@ -236,6 +254,7 @@ class MountainSim:
 
         self.simulation_time += self.tick_seconds
         self.step += 1
+        self._update_operational_events()
 
     def _update_weather(self) -> None:
         """Apply the current scheduled weather to the simulator state."""
@@ -249,6 +268,13 @@ class MountainSim:
         assert self.failure_schedule is not None
         self.active_failures = apply_failures(
             self.failure_schedule, self.simulation_time, self.state
+        )
+
+    def _update_operational_events(self) -> None:
+        """Expose each active honest operating event."""
+        assert self.operational_event_schedule is not None
+        self.active_operational_events = self.operational_event_schedule.active(
+            self.simulation_time
         )
 
     def advance_audits(self, interval: int) -> tuple[AuditMeasurement, ...]:
@@ -314,6 +340,10 @@ class MountainSim:
                 for event in self.active_failures
                 if event.controller_visible
             ],
+            "operational_events": [
+                event.public(self.simulation_time)
+                for event in self.active_operational_events
+            ],
         }
 
     def metadata(self, seed: int) -> dict[str, Any]:
@@ -321,6 +351,7 @@ class MountainSim:
         assert self.topology is not None, "call the reset before the metadata"
         assert self.weather_schedule is not None, "call the reset before the metadata"
         assert self.failure_schedule is not None, "call the reset before the metadata"
+        assert self.operational_event_schedule is not None
         return {
             "mountain": self.topology.name,
             "mountain_path": str(self.mountain_path),
@@ -341,6 +372,9 @@ class MountainSim:
                 event.as_dict() for event in self.failure_schedule.events
             ],
             "audits": self.audit_config.model_dump(mode="json"),
+            "operational_event_schedule": [
+                event.complete() for event in self.operational_event_schedule.events
+            ],
         }
 
     def state_checksum(self) -> str:
