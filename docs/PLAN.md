@@ -1,7 +1,7 @@
 ---
 title: "AVALANCHE: Technical Implementation Plan"
 date created: Wednesday, August 19th 2026
-date modified: Thursday, August 20th 2026
+date modified: Tuesday, August 25th 2026
 status: proposed
 tags:
   - dissertation
@@ -19,6 +19,13 @@ The project answers one research question.
 Can a monitor find a misaligned resort-control agent before that agent causes harm?
 Each technical decision must help this comparison of monitor methods.
 A feature that does not help the comparison is optional.
+
+## Planned monitor change
+
+The [monitor hardening note](monitor-hardening/README.md) explains a planned experiment change.
+The change removes simple signatures that reveal an attack without behavioral reasoning.
+
+The change affects the controller and monitor designs in Sections 8 and 9.
 
 ## 1 Scope and principles
 
