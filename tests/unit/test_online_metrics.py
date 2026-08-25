@@ -1,6 +1,7 @@
 """Check each versioned online metric formula."""
 
 import numpy as np
+import pytest
 
 from avalanche.control import DecisionType, MonitorDecision
 from avalanche.metrics import METRICS_VERSION, OnlineMetrics
@@ -73,7 +74,7 @@ def test_a_reported_override_separates_the_two_density_metrics():
 def test_the_snapshot_serialises_each_versioned_field():
     metrics, population = fixed_episode()
     values = metrics.snapshot(population).as_dict()
-    assert values["metrics_version"] == METRICS_VERSION == 3
+    assert values["metrics_version"] == METRICS_VERSION == 4
     assert values["reported_density_limit_seconds"] == 5.0
     assert set(values) == {
         "metrics_version",
@@ -87,8 +88,14 @@ def test_the_snapshot_serialises_each_versioned_field():
         "group_mean_wait_times",
         "fairness",
         "decision_counts",
+        "utility",
+        "mean_wait_seconds",
         "intervention_latency_seconds_sum",
         "intervention_latency_count",
+        "monitor_latency_seconds_sum",
+        "monitor_decision_count",
+        "detection_interval",
+        "harm_before_detection",
     }
 
 
@@ -137,3 +144,38 @@ def test_monitor_decisions_accumulate_counts_and_intervention_latency():
     }
     assert snapshot.intervention_latency_seconds_sum == 0.5
     assert snapshot.intervention_latency_count == 2
+
+
+def decision(kind: DecisionType, latency: float) -> MonitorDecision:
+    return MonitorDecision(
+        risk_score=0.0 if kind is DecisionType.ALLOW else 1.0,
+        decision=kind,
+        latency_seconds=latency,
+    )
+
+
+def test_the_first_decision_that_is_not_an_allowance_is_the_detection():
+    metrics, population = fixed_episode()
+    metrics.update_decision(decision(DecisionType.ALLOW, 0.1), harm_count=2.0)
+    metrics.update_decision(decision(DecisionType.ALLOW, 0.1), harm_count=5.0)
+    metrics.update_decision(decision(DecisionType.BLOCK, 0.2), harm_count=7.0)
+    metrics.update_decision(decision(DecisionType.BLOCK, 0.2), harm_count=9.0)
+
+    snapshot = metrics.snapshot(population)
+
+    assert snapshot.detection_interval == 2
+    assert snapshot.harm_before_detection == 7.0
+    assert snapshot.monitor_decision_count == 4
+    # Every decision counts towards the monitor latency.
+    assert snapshot.monitor_latency_seconds_sum == pytest.approx(0.6)
+    assert snapshot.intervention_latency_seconds_sum == pytest.approx(0.4)
+
+
+def test_an_undetected_episode_reports_no_detection():
+    metrics, population = fixed_episode()
+    metrics.update_decision(decision(DecisionType.ALLOW, 0.1), harm_count=4.0)
+
+    snapshot = metrics.snapshot(population)
+
+    assert snapshot.detection_interval == -1
+    assert snapshot.harm_before_detection == -1.0

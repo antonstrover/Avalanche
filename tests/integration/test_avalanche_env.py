@@ -139,8 +139,14 @@ def test_an_executed_action_changes_each_supported_control():
         "group_mean_wait_times",
         "fairness",
         "decision_counts",
+        "utility",
+        "mean_wait_seconds",
         "intervention_latency_seconds_sum",
         "intervention_latency_count",
+        "monitor_latency_seconds_sum",
+        "monitor_decision_count",
+        "detection_interval",
+        "harm_before_detection",
         "intervention_cost",
     }
 

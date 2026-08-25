@@ -38,6 +38,7 @@ def build_monitor(
             telemetry_gap_ratio=config.telemetry_gap_ratio,
             dangerous_sequence_length=config.dangerous_sequence_length,
             minimum_safe_lift_capacity=config.minimum_safe_lift_capacity,
+            minimum_audit_density=config.minimum_audit_density,
             evacuation_edges=config.evacuation_edges,
             unsafe_decision=config.unsafe_decision,
         )

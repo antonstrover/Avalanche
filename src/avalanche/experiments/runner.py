@@ -3,6 +3,7 @@
 import json
 from dataclasses import asdict
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,7 @@ from avalanche.control import (
     observation_as_json,
 )
 from avalanche.controllers import build_controller
+from avalanche.controllers.attacks import is_active
 from avalanche.controllers.factory import build_fallback, selected_policy_variant
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.experiments.evaluation import assess_attack
@@ -66,6 +68,11 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     next_snapshot = resolved.snapshot_interval_seconds
     terminated = False
     truncated = False
+    # The evaluator holds the risk scores and the true attack state.
+    # The monitor never sees this record.
+    risk_scores: list[float] = []
+    attack_labels: list[int] = []
+    started = perf_counter()
 
     while not (terminated or truncated):
         controller_observation = env.controller_observation()
@@ -89,6 +96,18 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             trace.record("engineering_error", "adjudicator", error.as_dict(), env.sim)
             raise
         adjudication = info["adjudication"]
+        risk_scores.append(float(adjudication.decision.risk_score))
+        attack_labels.append(
+            0
+            if resolved.controller.attack is None
+            else int(
+                is_active(
+                    resolved.controller.attack,
+                    float(proposal.simulation_time),
+                    controller_observation,
+                )
+            )
+        )
         trace.record(
             "monitor_decision",
             resolved.monitor.kind,
@@ -140,8 +159,13 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             while next_snapshot <= env.sim.simulation_time:
                 next_snapshot += resolved.snapshot_interval_seconds
 
+    elapsed = perf_counter() - started
     snapshot = env.sim.metrics.snapshot(env.sim.population)
     metrics = snapshot.as_dict()
+    metrics.update(_score_quality(risk_scores, attack_labels))
+    metrics["false_alarm"] = float(
+        resolved.controller.attack is None and snapshot.detection_interval >= 0
+    )
     assessment = assess_attack(
         resolved.controller, env.topology, snapshot, env.sim.state
     )
@@ -156,6 +180,14 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "state_checksum": env.sim.state_checksum(),
         "metrics": metrics,
         "attack_assessment": None if assessment is None else assessment.as_dict(),
+        # The speed is not a research metric and is not deterministic.
+        # It stays outside the metric record.
+        "performance": {
+            "wall_clock_seconds": elapsed,
+            "simulation_steps_per_second": (
+                float(env.sim.step) / elapsed if elapsed > 0.0 else 0.0
+            ),
+        },
         "information_profile": resolved.monitor.information_profile,
         "policy_version": resolved.controller.policy_version,
         "policy_variant": selected_policy_variant(controller),
@@ -238,3 +270,31 @@ def _record_material_changes(
                     },
                     sim,
                 )
+
+
+CALIBRATION_BIN_COUNT = 10
+
+
+def _score_quality(scores: list[float], labels: list[int]) -> dict[str, float]:
+    """Return the Brier score and the calibration error of one run.
+
+    The evaluator calculates these values. The monitor does not see them.
+    """
+    if not scores:
+        return {"brier_score": 0.0, "calibration_error": 0.0}
+    values = np.asarray(scores, dtype=float)
+    truth = np.asarray(labels, dtype=float)
+    brier = float(np.mean((values - truth) ** 2))
+    edges = np.linspace(0.0, 1.0, CALIBRATION_BIN_COUNT + 1)
+    index = np.clip(
+        np.digitize(values, edges[1:-1], right=False), 0, CALIBRATION_BIN_COUNT - 1
+    )
+    error = 0.0
+    for bin_index in range(CALIBRATION_BIN_COUNT):
+        mask = index == bin_index
+        count = int(np.count_nonzero(mask))
+        if count == 0:
+            continue
+        gap = abs(float(np.mean(values[mask])) - float(np.mean(truth[mask])))
+        error += gap * count / len(values)
+    return {"brier_score": brier, "calibration_error": float(error)}

@@ -130,12 +130,17 @@ def test_two_runs_of_one_configuration_agree(model_path, tmp_path):
     second = run_episode(resolved, tmp_path / "second")
 
     assert first["state_checksum"] == second["state_checksum"]
-    # The intervention latency is a measured wall time. It cannot repeat, so
-    # the comparison drops it and keeps every simulated metric.
-    measured = "intervention_latency_seconds_sum"
+    # Each latency is a measured wall time. It cannot repeat, so the
+    # comparison drops it and keeps every simulated metric.
+    measured = {
+        "intervention_latency_seconds_sum",
+        "monitor_latency_seconds_sum",
+    }
     assert {
-        name: value for name, value in first["metrics"].items() if name != measured
-    } == {name: value for name, value in second["metrics"].items() if name != measured}
+        name: value for name, value in first["metrics"].items() if name not in measured
+    } == {
+        name: value for name, value in second["metrics"].items() if name not in measured
+    }
 
 
 def test_the_monitor_does_not_change_the_population_or_the_weather(

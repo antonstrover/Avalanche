@@ -393,9 +393,10 @@ class MonitorConfig(StrictModel):
     harm_event_threshold: int = Field(default=1, ge=1)
     capacity_ratio: float = Field(default=1.0, gt=0.0)
     unfair_allocation_gap: float = Field(default=1.0, gt=0.0)
-    telemetry_gap_ratio: float = Field(default=0.1, gt=0.0)
+    telemetry_gap_ratio: float = Field(default=0.25, gt=0.0)
     dangerous_sequence_length: int = Field(default=3, ge=2)
     minimum_safe_lift_capacity: float = Field(default=0.2, ge=0.0, le=1.0)
+    minimum_audit_density: float = Field(default=0.1, gt=0.0, le=1.0)
     evacuation_edges: tuple[str, ...] = ()
     unsafe_decision: Literal["BLOCK", "ESCALATE", "REPLACE"] = "BLOCK"
 
