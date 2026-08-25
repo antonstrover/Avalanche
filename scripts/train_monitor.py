@@ -1,80 +1,60 @@
-"""Train the learned process monitor on the labelled traces.
-
-The script splits the rows by scenario family, trains the perceptron, and
-saves the weights and the metadata under `outputs/models/`.
-
-The training part and the validation part are the only parts it reads.
-The test part stays for the final evaluation.
+"""Train, calibrate, gate, and lock the principal process monitor.
 
 Usage:
-    python scripts/train_monitor.py outputs/datasets/monitor-training.parquet
+    python scripts/train_monitor.py outputs/datasets/monitor-training.parquet \
+        outputs/audit/shortcut-audit.json
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import hashlib
 from pathlib import Path
 
 import pandas as pd
 
 from avalanche.config.run_identity import REPO_ROOT
-from avalanche.monitors.calibration import calibrate
-from avalanche.monitors.perceptron import (
-    TrainingConfig,
-    feature_matrix,
-    save_model,
-    train_perceptron,
-)
-from avalanche.monitors.splits import split_by_family
+from avalanche.monitors.perceptron import TrainingConfig
+from avalanche.monitors.training import train_locked_monitor
 
-DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "models" / "monitor-perceptron.pt"
+DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "models" / "monitor-principal"
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the locked training command arguments."""
     parser = argparse.ArgumentParser(prog="train_monitor")
     parser.add_argument("rows", type=Path)
+    parser.add_argument("shortcut_report", type=Path)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--seed", type=int, default=20260825)
     parser.add_argument("--epochs", type=int, default=40)
-    parser.add_argument("--false-alarm-budget", type=float, default=0.05)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Train the locked principal monitor from fixed dataset splits."""
     args = build_parser().parse_args(argv)
     frame = pd.read_parquet(args.rows)
-    parts, assignment = split_by_family(frame, seed=args.seed)
-    model = train_perceptron(
-        parts["train"],
-        parts["validation"],
-        TrainingConfig(seed=args.seed, epochs=args.epochs),
+    train = frame[frame["split"] == "train"].reset_index(drop=True)
+    validation = frame[frame["split"] == "validation"].reset_index(drop=True)
+    if train.empty or validation.empty:
+        raise ValueError("the monitor dataset needs training and validation rows")
+    result = train_locked_monitor(
+        train,
+        validation,
+        args.shortcut_report,
+        args.output,
+        config=TrainingConfig(seed=args.seed, epochs=args.epochs),
+        dataset_checksums={"dataset_sha256": _checksum(args.rows)},
     )
-    model.metadata["split"] = assignment.as_dict()
-    validation = parts["validation"]
-    calibration = calibrate(
-        model.logits(feature_matrix(validation)),
-        validation[model.config.label].to_numpy(dtype=float),
-        false_alarm_budget=args.false_alarm_budget,
-    )
-    model.metadata["calibration"] = calibration.as_dict()
-    path = save_model(model, args.output)
-    print(f"Wrote the model to {path}")
-    print(json.dumps(model.metadata["validation_scores"], indent=2, sort_keys=True))
-    print(json.dumps(model.metadata["constant_baseline"], indent=2, sort_keys=True))
-    print(
-        json.dumps(
-            {
-                "temperature": calibration.temperature,
-                "threshold": calibration.threshold,
-                "false_alarm_rate": calibration.false_alarm_rate,
-                "brier_score": calibration.brier_score,
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    print(f"Wrote the locked monitor to {args.output}")
+    print(f"Selected the {result['metadata']['model_kind']} model.")
     return 0
+
+
+def _checksum(path: Path) -> str:
+    """Return one full SHA-256 checksum."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 if __name__ == "__main__":

@@ -9,7 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from avalanche.control import InformationProfile
+from avalanche.control import OBSERVATION_SCHEMA_VERSION, InformationProfile
+from avalanche.controllers.policies import POLICY_VERSION
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION
@@ -154,6 +155,8 @@ def evaluate_final_records(
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
         "model_version": MODEL_VERSION,
+        "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
+        "policy_version": POLICY_VERSION,
         "bootstrap_seed": BOOTSTRAP_SEED,
         "bootstrap_resamples": bootstrap_resamples,
         "required_root_seeds": required_root_seeds,
@@ -202,9 +205,12 @@ def write_final_evaluation(
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
         "model_version": MODEL_VERSION,
+        "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
+        "policy_version": POLICY_VERSION,
         "information_profile": "principal",
         "bootstrap_seed": BOOTSTRAP_SEED,
         "bootstrap_resamples": bootstrap_resamples,
+        "required_root_seeds": required_root_seeds,
         "locked_model": before,
         "checksums": {
             "records_sha256": _checksum(records_path),

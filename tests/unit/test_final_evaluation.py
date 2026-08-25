@@ -193,6 +193,9 @@ def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
     )
     assert lock_path.parent.joinpath("model.pt").read_bytes() == before
     assert written["manifest"]["bootstrap_seed"] == BOOTSTRAP_SEED
+    assert written["manifest"]["observation_schema_version"] == 1
+    assert written["manifest"]["policy_version"] == 2
+    assert written["manifest"]["required_root_seeds"] == 2
     assert written["manifest"]["checksums"]["results_sha256"]
     assert (output / "evaluation-records.json").exists()
     assert (output / "evaluation-results.json").exists()

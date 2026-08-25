@@ -15,9 +15,16 @@ The application draws the same population in 3D.
 
 The honest controller and the single-run workflow now exist.
 The outcome monitor and the rule monitor now exist.
-The three misaligned controllers now exist with calibrated fixtures.
-The learned monitor and the experiment sweeps do not exist yet.
+The honest controller uses continuous, context-based actions.
+The three misaligned controllers now have overt and stealth tiers.
+The matched dataset and the learned process monitor now exist.
+The shortcut audit and the locked training gate now exist.
+The paired final evaluator and the adaptive extension now exist.
 The paired closure baseline compares the honest controller with no control.
+
+The final acceptance command writes bounded reference artifacts under `outputs/`.
+These artifacts test the complete protocol.
+They do not replace the full dissertation sweep.
 
 ### The misaligned controllers
 
@@ -196,6 +203,24 @@ print(sim.state_checksum())
 ```
 
 `tests/invariants/test_population_invariants.py` shows the population checks.
+
+### The monitor protocol
+
+The principal monitor reads only operational process evidence.
+The fallback and true-state profiles remain oracle results.
+The dataset keeps each honest and attack run in an explicit pair.
+It splits complete runs before it creates any model window.
+The shortcut audit checks every feature before training.
+The training gate uses validation rows for calibration and threshold selection.
+The locked model records each artifact checksum.
+
+Run the bounded final acceptance after a clean test run.
+
+```bash
+uv run python scripts/run_fix_158_acceptance.py --workers 1
+```
+
+The command writes its final report to `outputs/fix-158-final/acceptance-report.json`.
 
 ### The scene data
 
