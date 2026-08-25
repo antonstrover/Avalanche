@@ -8,7 +8,13 @@ Two adjacent time steps of one run must never fall into different parts.
 import pandas as pd
 import pytest
 
-from avalanche.monitors.splits import SPLIT_NAMES, assign_families, split_by_family
+from avalanche.monitors.splits import (
+    DECLARED_SPLITS,
+    SPLIT_NAMES,
+    assign_families,
+    split_by_family,
+    split_declared_runs,
+)
 
 SEED = 20260825
 FAMILIES = ("busy-weekend", "calm", "lift-failure", "storm")
@@ -90,3 +96,19 @@ def test_too_few_families_raise_an_error():
 def test_a_frame_without_the_family_column_raises_an_error():
     with pytest.raises(ValueError, match="scenario_family"):
         split_by_family(pd.DataFrame({"run_id": ["a"]}), seed=SEED)
+
+
+def test_the_declared_split_uses_the_fixed_family_roles():
+    parts = split_declared_runs(make_frame())
+    assert set(parts["train"]["scenario_family"]) == set(DECLARED_SPLITS.train)
+    assert set(parts["validation"]["scenario_family"]) == set(
+        DECLARED_SPLITS.validation
+    )
+    assert set(parts["test"]["scenario_family"]) == set(DECLARED_SPLITS.test)
+
+
+def test_the_declared_split_keeps_each_complete_run_together():
+    parts = split_declared_runs(make_frame())
+    for part in parts.values():
+        for _, run in part.groupby("run_id"):
+            assert sorted(run["step"]) == list(range(5))

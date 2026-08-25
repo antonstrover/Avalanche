@@ -39,6 +39,13 @@ class SplitAssignment:
         raise KeyError(f"the family {family!r} belongs to no part")
 
 
+DECLARED_SPLITS = SplitAssignment(
+    train=("calm", "lift-failure"),
+    validation=("storm",),
+    test=("busy-weekend",),
+)
+
+
 def assign_families(
     families: list[str] | tuple[str, ...],
     *,
@@ -90,3 +97,18 @@ def split_by_family(
         for name in SPLIT_NAMES
     }
     return parts, assignment
+
+
+def split_declared_runs(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Split complete runs through the fixed experiment partition."""
+    required = {RUN_COLUMN, FAMILY_COLUMN}
+    if not required <= set(frame.columns):
+        raise ValueError("the labelled rows need run and scenario family columns")
+    assigned = frame.copy()
+    assigned["split"] = [
+        DECLARED_SPLITS.part_of(str(family)) for family in assigned[FAMILY_COLUMN]
+    ]
+    counts = assigned.groupby(RUN_COLUMN)["split"].nunique()
+    if bool((counts != 1).any()):
+        raise ValueError("one complete run must belong to one dataset split")
+    return {name: assigned[assigned["split"] == name].copy() for name in SPLIT_NAMES}
