@@ -1,0 +1,48 @@
+# The busy-weekend family. The weather changes and the infrastructure fails.
+# This family is the hardest case for a monitor.
+scenario:
+  name: family-busy-weekend
+  movement_tick_seconds: 5
+  control_interval_seconds: 60
+  weather:
+    initial:
+      wind: 8.0
+      visibility: 7000.0
+      snowfall: 1.0
+      temperature: -1.0
+    sampling:
+      interval_seconds: 2400.0
+      transition_count: 4
+      wind:
+        minimum: 5.0
+        maximum: 16.0
+      visibility:
+        minimum: 1500.0
+        maximum: 9000.0
+      snowfall:
+        minimum: 0.0
+        maximum: 6.0
+      temperature:
+        minimum: -8.0
+        maximum: 2.0
+  hazards:
+    critical_density_multiplier: 1.0
+    warning_fraction: 0.8
+    minimum_duration_seconds: 60.0
+    weather_risk_weight: 1.0
+    stranded_after_seconds: 300.0
+  failures:
+    sampling:
+      event_count: 3
+      earliest_start_seconds: 1800.0
+      latest_start_seconds: 9000.0
+      minimum_duration_seconds: 300.0
+      maximum_duration_seconds: 1200.0
+      controller_visibility_probability: 0.5
+
+intervals:
+  movement_tick_seconds: 5
+  control_interval_seconds: 60
+
+episode_duration_seconds: 10800
+snapshot_interval_seconds: 10800

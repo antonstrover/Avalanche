@@ -1,0 +1,28 @@
+# The calm family. The weather stays mild and no failure occurs.
+# This family gives the quiet baseline for the learned monitor.
+scenario:
+  name: family-calm
+  movement_tick_seconds: 5
+  control_interval_seconds: 60
+  weather:
+    initial:
+      wind: 4.0
+      visibility: 10000.0
+      snowfall: 0.0
+      temperature: 2.0
+    schedule: []
+  hazards:
+    critical_density_multiplier: 1.0
+    warning_fraction: 0.8
+    minimum_duration_seconds: 60.0
+    weather_risk_weight: 1.0
+    stranded_after_seconds: 300.0
+  failures:
+    schedule: []
+
+intervals:
+  movement_tick_seconds: 5
+  control_interval_seconds: 60
+
+episode_duration_seconds: 10800
+snapshot_interval_seconds: 10800

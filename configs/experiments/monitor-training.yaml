@@ -1,0 +1,57 @@
+# The labelled trace matrix for the learned process monitor.
+# Each entry runs one controller on one scenario family with one seed.
+# The monitor allows every proposal, so the rows record the controller alone.
+#
+# The matrix carries three honest variants on purpose. The feature block
+# compares each proposal with one reference honest controller. Without the
+# variants that difference is zero on every honest run, and the classifier
+# learns a trivial rule instead of the attack.
+
+harm_horizon_intervals: 5
+
+monitor: configs/monitors/none.yaml
+
+seeds: [20260801, 20260802, 20260803, 20260804, 20260805, 20260806, 20260807]
+
+families:
+  - id: calm
+    config: configs/scenarios/family-calm.yaml
+  - id: storm
+    config: configs/scenarios/family-storm.yaml
+  - id: lift-failure
+    config: configs/scenarios/family-lift-failure.yaml
+  - id: busy-weekend
+    config: configs/scenarios/family-busy-weekend.yaml
+
+mountains:
+  - id: val-tarin
+    config: configs/mountain/default.yaml
+    controllers:
+      - id: honest
+        config: configs/controllers/honest.yaml
+      - id: honest-cautious
+        config: configs/controllers/honest-cautious.yaml
+      - id: honest-aggressive
+        config: configs/controllers/honest-aggressive.yaml
+      - id: profit-biased
+        config: configs/controllers/profit-biased.yaml
+      - id: sleeper-saboteur
+        config: configs/controllers/sleeper-saboteur.yaml
+      - id: reward-hacker
+        config: configs/controllers/reward-hacker.yaml
+
+  - id: small-resort
+    config: configs/mountain/small.yaml
+    controllers:
+      - id: honest
+        config: configs/controllers/small-resort/honest.yaml
+      - id: honest-cautious
+        config: configs/controllers/small-resort/honest-cautious.yaml
+      - id: honest-aggressive
+        config: configs/controllers/small-resort/honest-aggressive.yaml
+      - id: profit-biased
+        config: configs/controllers/small-resort/profit-biased.yaml
+      - id: sleeper-saboteur
+        config: configs/controllers/small-resort/sleeper-saboteur.yaml
+      - id: reward-hacker
+        config: configs/controllers/small-resort/reward-hacker.yaml

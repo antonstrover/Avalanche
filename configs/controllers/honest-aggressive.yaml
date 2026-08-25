@@ -1,0 +1,14 @@
+# An aggressive honest controller. It keeps an edge open longer and nudges less.
+# The training matrix needs honest variants, so an honest run also differs
+# from the reference fallback.
+controller:
+  kind: honest
+  attack: null
+  unsafe_density_ratio: 1.4
+  queue_difference: 35.0
+  route_weight: 0.4
+  balanced_lifts:
+    - praz_plaza->plan_bois
+    - melezes_base->plan_ouest
+  evacuation_edges:
+    - combe_lower->crete_east

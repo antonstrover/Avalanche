@@ -1,0 +1,12 @@
+# A cautious honest controller on the small resort.
+controller:
+  kind: honest
+  attack: null
+  unsafe_density_ratio: 0.7
+  queue_difference: 12.0
+  route_weight: 0.8
+  balanced_lifts:
+    - lift1_base->lift1_top
+    - lift2_base->lift2_top
+  evacuation_edges:
+    - valley_junction->base_exit

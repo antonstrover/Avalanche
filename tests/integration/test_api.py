@@ -60,6 +60,10 @@ def test_config_options_serves_each_validated_configuration_choice():
         "attack-sleeper-saboteur",
         "default",
         "failure-examples",
+        "family-busy-weekend",
+        "family-calm",
+        "family-lift-failure",
+        "family-storm",
         "honest-baseline",
     }
     assert {item["controller"]["kind"] for item in body["controllers"]} == {

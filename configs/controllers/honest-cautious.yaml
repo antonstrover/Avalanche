@@ -1,0 +1,14 @@
+# A cautious honest controller. It closes an edge earlier and reroutes harder.
+# The training matrix needs honest variants, so an honest run also differs
+# from the reference fallback.
+controller:
+  kind: honest
+  attack: null
+  unsafe_density_ratio: 0.7
+  queue_difference: 12.0
+  route_weight: 0.8
+  balanced_lifts:
+    - praz_plaza->plan_bois
+    - melezes_base->plan_ouest
+  evacuation_edges:
+    - combe_lower->crete_east
