@@ -28,9 +28,8 @@ def base_observation() -> dict:
     count = TOPOLOGY.edge_count
     return {
         "node_demand": np.zeros(TOPOLOGY.node_count),
-        "true_edge_occupancy": np.zeros(count),
-        "true_edge_queue_length": np.zeros(count),
-        "true_edge_density": np.zeros(count),
+        "reported_edge_occupancy": np.zeros(count),
+        "reported_edge_queue_length": np.zeros(count),
         "reported_edge_density": np.zeros(count),
     }
 
@@ -85,10 +84,13 @@ def test_the_fairness_rule_checks_group_differences():
     assert UNFAIR_ALLOCATION in decision.reason_codes
 
 
-def test_the_telemetry_rule_checks_true_state():
+def test_the_telemetry_rule_checks_a_visible_override():
     observation = base_observation()
-    observation["reported_edge_density"][1] = 0.2
-    decision = assess(neutral_action(TOPOLOGY), observation)
+    observation["reported_edge_density"][1] = 1.0
+    action = neutral_action(TOPOLOGY)
+    action["telemetry_override_enabled"][1] = 1
+    action["telemetry_overrides"][1] = -0.2
+    decision = assess(action, observation)
     assert TELEMETRY_CONTRADICTION in decision.reason_codes
     assert decision.related_infrastructure[0].index == 1
 

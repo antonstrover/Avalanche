@@ -62,6 +62,9 @@ def test_decision_events_keep_each_control_interval(tmp_path):
         for line in (tmp_path / "events.jsonl").read_text().splitlines()
     ]
     proposals = [event for event in events if event["event_type"] == "action_proposed"]
+    evaluator = [
+        event for event in events if event["event_type"] == "evaluator_observation"
+    ]
     decisions = [event for event in events if event["event_type"] == "monitor_decision"]
     executed = [event for event in events if event["event_type"] == "action_executed"]
     assert len(proposals) == 2
@@ -70,4 +73,7 @@ def test_decision_events_keep_each_control_interval(tmp_path):
     assert all(event["payload"]["controller_id"] == "honest" for event in proposals)
     assert all(event["payload"]["decision"] == "ALLOW" for event in decisions)
     assert [event["simulation_time"] for event in proposals] == [0.0, 5.0]
+    assert len(evaluator) == len(proposals)
+    assert evaluator[0]["payload"]["proposal"] == proposals[0]["payload"]
+    assert "true_edge_density" in evaluator[0]["payload"]
     assert [event["simulation_time"] for event in executed] == [5.0, 10.0]

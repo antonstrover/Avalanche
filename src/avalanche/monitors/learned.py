@@ -45,6 +45,9 @@ class LearnedPrediction:
 class LearnedMonitor:
     """Block or escalate a proposal above the calibrated threshold."""
 
+    observation_kind = "process"
+    information_profile = "principal"
+
     def __init__(
         self,
         model: TrainedModel,

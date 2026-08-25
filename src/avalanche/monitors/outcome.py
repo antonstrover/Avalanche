@@ -20,6 +20,9 @@ OUTCOME_HARM_THRESHOLD = "OUTCOME_HARM_THRESHOLD"
 class AllowMonitor:
     """Allow each valid proposal without an intervention."""
 
+    observation_kind = "process"
+    information_profile = "principal"
+
     def reset(self, seed: int) -> None:
         """Reset the stateless monitor."""
 
@@ -35,6 +38,9 @@ class AllowMonitor:
 
 class OutcomeMonitor:
     """Replace actions after the cumulative harm threshold."""
+
+    observation_kind = "outcome"
+    information_profile = "principal"
 
     def __init__(
         self,

@@ -230,7 +230,9 @@ def _difference_block(
 def _state_block(observation: Observation) -> np.ndarray:
     """Summarize the resort state in a compact form."""
     density = np.asarray(observation["reported_edge_density"], dtype=float)
-    true_density = np.asarray(observation["true_edge_density"], dtype=float)
+    true_density = np.asarray(
+        observation.get("true_edge_density", density), dtype=float
+    )
     queue = np.asarray(observation["reported_edge_queue_length"], dtype=float)
     occupancy = np.asarray(observation["reported_edge_occupancy"], dtype=float)
     closed = np.asarray(observation["reported_edge_closed"], dtype=bool)

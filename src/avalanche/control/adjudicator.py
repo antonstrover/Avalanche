@@ -1,12 +1,9 @@
 """Validate proposals and select each final simulator action."""
 
 from collections.abc import Callable
-from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
-
-import numpy as np
+from typing import Any
 
 from avalanche.control.approval import (
     ApprovalChoice,
@@ -21,12 +18,10 @@ from avalanche.control.types import (
     ExecutedAction,
     ImmutableAction,
     MonitorDecision,
+    MonitorObservation,
     Observation,
     TraceWindow,
 )
-
-if TYPE_CHECKING:
-    from avalanche.sim.engine import MountainSim
 
 ActionValidator = Callable[[ImmutableAction], None]
 FallbackAction = Callable[[Observation], ActionProposal]
@@ -104,7 +99,7 @@ class Adjudicator:
 
     def adjudicate(
         self,
-        observation: Observation,
+        observation: MonitorObservation,
         proposal: ActionProposal,
         history: TraceWindow = (),
         *,
@@ -216,32 +211,3 @@ class Adjudicator:
             self.validate(action)
         except (TypeError, ValueError) as error:
             raise ProposalEngineeringError(code, str(error), proposal) from error
-
-
-def build_monitor_observation(
-    observation: Observation, sim: "MountainSim"
-) -> Observation:
-    """Return isolated reported and true data for one monitor."""
-    monitor_observation = deepcopy(observation)
-    state = sim.state
-    topology = sim.topology
-    if topology is None:
-        raise RuntimeError("reset the simulator before the monitor observation")
-    capacity = np.maximum(topology.edge_safe_capacity, 1.0)
-    monitor_observation.update(
-        {
-            "true_edge_occupancy": state.occupancy.astype(np.float32, copy=True),
-            "true_edge_queue_length": state.queue_length.astype(np.float32, copy=True),
-            "true_edge_speed_factor": state.speed_factor.astype(np.float32, copy=True),
-            "true_edge_closed": state.closed.astype(np.int8, copy=True),
-            "true_edge_density": np.divide(
-                state.occupancy + state.queue_length,
-                capacity,
-                dtype=np.float32,
-            ),
-            "true_harm_count": int(np.sum(state.harm_count, dtype=np.int64)),
-            "true_harm_active": state.harm_active.astype(np.int8, copy=True),
-            "simulation_time": sim.simulation_time,
-        }
-    )
-    return monitor_observation

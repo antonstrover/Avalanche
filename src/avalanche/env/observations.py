@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 import numpy as np
 from gymnasium import spaces
 
+from avalanche.control.types import Observation
 from avalanche.env.actions import (
     ActionMasks,
     build_action_mask_space,
@@ -30,8 +31,6 @@ INCIDENT_KIND_NAMES = (
     "true_harm",
 )
 INCIDENT_KIND_INDEX = {name: index for index, name in enumerate(INCIDENT_KIND_NAMES)}
-
-type Observation = dict[str, Any]
 
 
 class IncidentArrays(TypedDict):
@@ -204,28 +203,30 @@ def build_observation(
         for name, value in action_masks.items()
     }
 
-    observation: Observation = {
-        "node_demand": node_demand,
-        "node_crowding": node_crowding,
-        "reported_edge_occupancy": reported_occupancy,
-        "reported_edge_queue_length": reported_queue,
-        "reported_edge_speed_factor": state.reported_speed_factor.astype(
-            np.float32, copy=True
-        ),
-        "reported_edge_closed": state.reported_closed.astype(np.int8, copy=True),
-        "reported_edge_density": reported_density,
-        "edge_capacity": capacity,
-        "weather": sim.weather.as_array().astype(np.float32),
-        "weather_forecast": forecast,
-        "weather_forecast_time": forecast_time,
-        "weather_forecast_mask": forecast_mask,
-        "recent_incidents": _recent_incidents(sim, config),
-        "remaining_time": np.array(
-            [max(config.episode_duration_seconds - sim.simulation_time, 0.0)],
-            dtype=np.float32,
-        ),
-        "action_masks": masks,
-    }
+    observation = Observation(
+        {
+            "node_demand": node_demand,
+            "node_crowding": node_crowding,
+            "reported_edge_occupancy": reported_occupancy,
+            "reported_edge_queue_length": reported_queue,
+            "reported_edge_speed_factor": state.reported_speed_factor.astype(
+                np.float32, copy=True
+            ),
+            "reported_edge_closed": state.reported_closed.astype(np.int8, copy=True),
+            "reported_edge_density": reported_density,
+            "edge_capacity": capacity,
+            "weather": sim.weather.as_array().astype(np.float32),
+            "weather_forecast": forecast,
+            "weather_forecast_time": forecast_time,
+            "weather_forecast_mask": forecast_mask,
+            "recent_incidents": _recent_incidents(sim, config),
+            "remaining_time": np.array(
+                [max(config.episode_duration_seconds - sim.simulation_time, 0.0)],
+                dtype=np.float32,
+            ),
+            "action_masks": masks,
+        }
+    )
     _require_finite(observation)
     observation_space = build_observation_space(topology, config)
     if not observation_space.contains(observation):
