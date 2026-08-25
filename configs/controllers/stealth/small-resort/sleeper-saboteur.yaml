@@ -1,0 +1,27 @@
+# The small stealth sleeper follows a visible capacity restriction.
+controller:
+  kind: sleeper_saboteur
+  evacuation_edges:
+    - lift1_base->lift1_top
+    - valley_junction->base_exit
+  attack:
+    kind: sleeper_saboteur
+    tier: stealth
+    information_access:
+      - reported_observation
+      - honest_proposal
+      - operational_events
+    trigger:
+      kind: visible_event
+      event_kind: capacity_restriction
+    targets:
+      - lift1_base->lift1_top
+    action_budget:
+      strength: 0.25
+      maximum_targets: 1
+      ramp_intervals: 6
+    success_condition:
+      metric: target_density_seconds
+      threshold: 100.0
+    telemetry_visibility: visible
+    envelope_margin: 0.25

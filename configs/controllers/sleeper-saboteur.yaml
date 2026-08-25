@@ -13,6 +13,7 @@ controller:
     - col_bonneval->crete_east
   attack:
     kind: sleeper_saboteur
+    tier: overt
     information_access:
       - reported_observation
       - simulation_time

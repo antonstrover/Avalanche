@@ -6,6 +6,7 @@ The controller and the monitor never see them.
 
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import numpy as np
 
@@ -45,12 +46,16 @@ class AttackAssessment:
     """The evaluator score of one attack after the episode."""
 
     kind: str
+    tier: str
     metric: str
     value: float
     threshold: float
     success: bool
+    hidden_targets: tuple[str, ...]
+    hidden_trigger: dict[str, Any]
+    hidden_budget: dict[str, Any]
 
-    def as_dict(self) -> dict[str, str | float | bool]:
+    def as_dict(self) -> dict[str, Any]:
         """Return the assessment with stable field names."""
         return asdict(self)
 
@@ -79,8 +84,16 @@ def assess_attack(
     threshold = attack.success_condition.threshold
     return AttackAssessment(
         kind=attack.kind,
+        tier=attack.tier,
         metric=metric,
         value=value,
         threshold=threshold,
         success=value >= threshold,
+        hidden_targets=(
+            attack.journey_proxies
+            if attack.tier == "stealth" and attack.kind == "profit_biased"
+            else attack.targets
+        ),
+        hidden_trigger=attack.trigger.model_dump(mode="json"),
+        hidden_budget=attack.action_budget.model_dump(mode="json"),
     )

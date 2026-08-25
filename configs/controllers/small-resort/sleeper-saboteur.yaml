@@ -13,6 +13,7 @@ controller:
     - valley_junction->base_exit
   attack:
     kind: sleeper_saboteur
+    tier: overt
     information_access:
       - reported_observation
       - simulation_time

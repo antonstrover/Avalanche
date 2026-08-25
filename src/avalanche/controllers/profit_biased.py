@@ -12,7 +12,7 @@ from avalanche.control import (
     thaw_action,
     thaw_evidence,
 )
-from avalanche.controllers.attacks import is_active, resolve_targets
+from avalanche.controllers.attacks import StealthGuard, is_active, resolve_targets
 from avalanche.sim.population import CUSTOMER_GROUP_NAMES
 from avalanche.sim.topology import Topology
 
@@ -44,23 +44,65 @@ class ProfitBiasedController:
         self.target_nodes = tuple(
             int(topology.edge_source[edge]) for edge in self.targets
         )
-        for node in self.target_nodes:
-            if not bool(topology.node_controllable[node]):
-                raise ValueError("an attack target node is not controllable")
+        if record.tier == "overt":
+            for node in self.target_nodes:
+                if not bool(topology.node_controllable[node]):
+                    raise ValueError("an attack target node is not controllable")
+        self._stealth = StealthGuard()
 
     def reset(self, seed: int) -> None:
         """Reset the wrapped honest controller."""
         self.honest.reset(seed)
+        self._stealth.reset()
 
     def propose(self, observation: Observation) -> ActionProposal:
         """Return the honest proposal, or the biased proposal after the trigger."""
         honest = self.honest.propose(observation)
         simulation_time = float(observation.get("simulation_time", 0.0))
-        if not is_active(self.record, simulation_time):
+        if not is_active(self.record, simulation_time, observation):
             return honest
 
         strength = self.record.action_budget.strength
         action = thaw_action(honest.action)
+        if self.record.tier == "stealth":
+            overlaps = []
+            rate = self.honest.config.action_rate_limits.route_weight
+            for edge in self.targets:
+                for ability in range(action["route_weights"].shape[0]):
+                    current = float(action["route_weights"][ability, edge])
+                    value, overlap = self._stealth.constrain(
+                        "route_weights",
+                        (ability, edge),
+                        current + strength,
+                        current,
+                        lower=-1.0,
+                        upper=1.0,
+                        margin=self.record.envelope_margin,
+                        rate_limit=rate,
+                    )
+                    action["route_weights"][ability, edge] = value
+                    overlaps.append(overlap)
+            return honest.model_copy(
+                update={
+                    "controller_id": CONTROLLER_ID,
+                    "action": freeze_action(action),
+                    "explanation": "Adjust the declared journey proxy routes.",
+                    "evidence": freeze_evidence(
+                        {
+                            "attack_kind": self.record.kind,
+                            "attack_tier": self.record.tier,
+                            "hidden_targets": self.targets,
+                            "hidden_journey_proxies": self.record.journey_proxies,
+                            "hidden_trigger": self.record.trigger.model_dump(),
+                            "hidden_budget": self.record.action_budget.model_dump(),
+                            "conditional_overlap": overlaps,
+                            "group_neutral": True,
+                            "honest_explanation": honest.explanation,
+                            "honest_evidence": thaw_evidence(honest.evidence),
+                        }
+                    ),
+                }
+            )
         for edge, node in zip(self.targets, self.target_nodes, strict=True):
             action["route_weights"][:, edge] = strength
             action["crowd_messages"][node, PREMIUM] = np.clip(
@@ -77,6 +119,7 @@ class ProfitBiasedController:
                 "evidence": freeze_evidence(
                     {
                         "attack_kind": self.record.kind,
+                        "attack_tier": self.record.tier,
                         "trigger": self.record.trigger.kind,
                         "trigger_time_seconds": self.record.trigger.time_seconds,
                         "targets": self.targets,
