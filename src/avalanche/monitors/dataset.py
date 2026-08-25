@@ -143,6 +143,7 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
             "hazards": resolved.scenario.hazards,
             "failures": resolved.scenario.failures,
             "audits": resolved.scenario.audits,
+            "operational_events": resolved.scenario.operational_events,
         },
     )
     controller = build_controller(resolved.controller, env.topology)

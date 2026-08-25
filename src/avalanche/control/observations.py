@@ -39,6 +39,7 @@ def build_controller_observation(
     observation: Mapping[str, Any],
     simulation_time: float,
     audits: tuple[AuditMeasurement, ...] = (),
+    public_events: tuple[Mapping[str, Any], ...] = (),
 ) -> ControllerObservation:
     """Return isolated reported data for one controller."""
     copied = copy_observation(observation)
@@ -49,6 +50,7 @@ def build_controller_observation(
     copied["audit_measurements"] = [
         copy_observation(measurement.operational()) for measurement in audits
     ]
+    copied["operational_events"] = [copy_observation(event) for event in public_events]
     return ControllerObservation(copied)
 
 
@@ -122,6 +124,10 @@ def build_evaluator_observation(
     if sim.audit_channel is not None:
         copied["audit_comparisons"] = copy_observation(
             sim.audit_channel.complete_records()
+        )
+    if sim.operational_event_schedule is not None:
+        copied["operational_event_records"] = copy_observation(
+            [event.complete() for event in sim.active_operational_events]
         )
     return EvaluatorObservation(copied)
 

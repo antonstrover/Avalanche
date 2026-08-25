@@ -382,6 +382,104 @@ class HonestController:
             active_rules.append("publish the telemetry")
             targets["published_telemetry"] = published
 
+        event_targets: list[dict[str, object]] = []
+        for event in observation.get("operational_events", ()):
+            kind = str(event["kind"])
+            target = int(event["target"])
+            target_type = str(event["target_type"])
+            severity = float(np.clip(event["severity"], 0.0, 1.0))
+            event_targets.append(
+                {"kind": kind, "target": target, "target_type": target_type}
+            )
+            inputs = {
+                "event_kind": kind,
+                "public_severity": severity,
+                "remaining_seconds": float(event["remaining_seconds"]),
+            }
+            if kind == "capacity_restriction":
+                output = 1.0 - 0.5 * severity
+                desired["lift_capacity"][target] = output
+                desired["lift_capacity_enabled"][target] = 1
+                responses.append(
+                    self._response(
+                        "operational_event",
+                        "lift_capacity",
+                        (target,),
+                        inputs,
+                        output,
+                    )
+                )
+            elif kind == "evacuation_drill":
+                output = self.config.minimum_evacuation_capacity + (
+                    (1.0 - self.config.minimum_evacuation_capacity) * severity
+                )
+                desired["lift_capacity"][target] = output
+                desired["lift_capacity_enabled"][target] = 1
+                responses.append(
+                    self._response(
+                        "operational_event",
+                        "lift_capacity",
+                        (target,),
+                        inputs,
+                        output,
+                    )
+                )
+            elif kind in {"route_obstruction", "weather_safety"}:
+                output = -self.config.route_weight * severity
+                desired["route_weights"][:, target] = output
+                responses.append(
+                    self._response(
+                        "operational_event",
+                        "route_weights",
+                        (0, target),
+                        inputs,
+                        output,
+                    )
+                )
+                if kind == "weather_safety" and severity >= 0.65:
+                    desired["piste_requests"][target] = PISTE_CLOSE
+            elif kind == "difficult_piste_training":
+                output = -self.config.route_weight * severity
+                desired["route_weights"][BEGINNER, target] = output
+                responses.append(
+                    self._response(
+                        "operational_event",
+                        "route_weights",
+                        (BEGINNER, target),
+                        inputs,
+                        output,
+                    )
+                )
+            elif kind == "crowd_surge":
+                group_mask = np.asarray(masks["groups"], dtype=bool)
+                output = -self.config.route_weight * severity
+                desired["crowd_messages"][target, group_mask] = output
+                group = int(np.flatnonzero(group_mask)[0])
+                responses.append(
+                    self._response(
+                        "operational_event",
+                        "crowd_messages",
+                        (target, group),
+                        inputs,
+                        output,
+                    )
+                )
+            elif kind == "telemetry_repair":
+                output = float(desired["telemetry_overrides"][target])
+                desired["telemetry_override_enabled"][target] = 1
+                responses.append(
+                    self._response(
+                        "operational_event",
+                        "telemetry_overrides",
+                        (target,),
+                        inputs,
+                        output,
+                    )
+                )
+        if event_targets:
+            active_rules.append("respond to public operating events")
+            targets["operational_events"] = event_targets
+
         action = apply_action_rate_limits(
             desired, self._last_action, self.config.action_rate_limits
         )

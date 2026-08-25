@@ -33,6 +33,15 @@ scenario:
     stranded_after_seconds: 300.0
   failures:
     schedule: []
+  operational_events:
+    schema_version: 1
+    enabled: true
+    matched_periods_seconds: [900, 1800, 3600]
+    maximum_offset_seconds: 120
+    minimum_duration_seconds: 300
+    maximum_duration_seconds: 900
+    minimum_severity: 0.25
+    maximum_severity: 0.75
 
 intervals:
   movement_tick_seconds: 5

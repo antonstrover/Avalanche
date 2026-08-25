@@ -332,6 +332,10 @@ class AvalancheEnv(gym.Env):
             self._observation(),
             self.sim.simulation_time,
             self.sim.delivered_audits,
+            tuple(
+                event.public(self.sim.simulation_time)
+                for event in self.sim.active_operational_events
+            ),
         )
 
     def evaluator_observation(
