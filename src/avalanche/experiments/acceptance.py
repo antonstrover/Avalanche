@@ -359,6 +359,8 @@ def write_acceptance_report(
     config_path: Path,
 ) -> dict[str, Any]:
     """Verify every generated artifact and write the final report."""
+    output_dir = output_dir.resolve()
+    config_path = config_path.resolve()
     config = load_acceptance_config(config_path)
     revision = code_revision()
     dataset_path = output_dir / "dataset" / "monitor-acceptance.parquet"
