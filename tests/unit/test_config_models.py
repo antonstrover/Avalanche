@@ -51,6 +51,23 @@ def test_an_unknown_information_profile_is_rejected():
 
 
 @pytest.mark.parametrize(
+    "events",
+    [
+        {"matched_periods_seconds": []},
+        {"matched_periods_seconds": [-1.0]},
+        {"minimum_duration_seconds": 20.0, "maximum_duration_seconds": 10.0},
+        {"minimum_severity": 0.8, "maximum_severity": 0.2},
+        {"schema_version": 2},
+    ],
+)
+def test_invalid_operational_event_settings_are_rejected(events):
+    data = load_and_merge(*SAMPLE_FILES)
+    data["scenario"]["operational_events"] = events
+    with pytest.raises(ValidationError):
+        ResolvedConfig.model_validate(data)
+
+
+@pytest.mark.parametrize(
     "changes",
     [
         {"policy_version": 1},
