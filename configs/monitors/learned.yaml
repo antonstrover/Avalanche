@@ -3,6 +3,7 @@
 # A value below one overrides the saved calibration.
 monitor:
   kind: learned
+  information_profile: principal
   model_path: outputs/models/monitor-perceptron.pt
   decision_threshold: 1.0
   false_alarm_budget: 0.05

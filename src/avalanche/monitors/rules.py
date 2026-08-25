@@ -8,10 +8,10 @@ from typing import Any
 import numpy as np
 
 from avalanche.control import (
-    ActionProposal,
     DecisionType,
     InfrastructureReference,
     MonitorDecision,
+    MonitorProposal,
     Observation,
     TraceWindow,
     thaw_action,
@@ -80,7 +80,7 @@ class RuleMonitor:
     def assess(
         self,
         observation: Observation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
         """Return all rules that reach the decision threshold."""
@@ -113,7 +113,7 @@ class RuleMonitor:
     def predict(
         self,
         observation: Observation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> RulePrediction:
         """Return the one-step result each deterministic rule predicts."""

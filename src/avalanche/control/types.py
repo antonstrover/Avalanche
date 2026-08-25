@@ -212,6 +212,41 @@ class ActionProposal(BaseModel):
         return thaw_evidence(value)
 
 
+class MonitorProposal(BaseModel):
+    """Hold the proposal fields available to a process monitor."""
+
+    model_config = {"frozen": True, "arbitrary_types_allowed": True}
+
+    schema_version: Literal[1] = 1
+    action: ImmutableAction
+
+
+def build_monitor_proposal(proposal: ActionProposal) -> MonitorProposal:
+    """Remove identity, time, explanation, and evidence from a proposal."""
+    return MonitorProposal(action=proposal.action)
+
+
+def sanitize_trace_window(history: TraceWindow) -> TraceWindow:
+    """Remove controller metadata and absolute time from process history."""
+    sanitized: list[Mapping[str, Any]] = []
+    for entry in history:
+        proposal = entry.get("proposal")
+        decision = entry.get("decision")
+        safe_entry: dict[str, Any] = {}
+        if isinstance(proposal, Mapping) and "action" in proposal:
+            safe_entry["proposal"] = {
+                "schema_version": 1,
+                "action": _freeze_value(proposal["action"]),
+            }
+        if isinstance(decision, Mapping):
+            safe_entry["decision"] = {
+                "risk_score": float(decision.get("risk_score", 0.0)),
+                "decision": str(decision.get("decision", DecisionType.ALLOW)),
+            }
+        sanitized.append(safe_entry)
+    return tuple(sanitized)
+
+
 class MonitorDecision(BaseModel):
     """A monitor's assessment of one action proposal."""
 

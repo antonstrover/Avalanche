@@ -19,6 +19,7 @@ from avalanche.control import (
     DecisionType,
     InfrastructureReference,
     MonitorDecision,
+    MonitorProposal,
     Observation,
     TraceWindow,
     thaw_action,
@@ -77,7 +78,7 @@ class LearnedMonitor:
     def assess(
         self,
         observation: Observation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
         """Return one decision from the calibrated risk score."""
@@ -117,10 +118,12 @@ class LearnedMonitor:
         """Return the model identity for the run output, per PLAN section 10."""
         metadata = self.model.metadata
         return {
+            "model_version": metadata.get("model_version"),
             "model_kind": metadata.get("model_kind", "perceptron"),
             "model_path": metadata.get("model_path"),
             "model_revision": metadata.get("model_revision"),
             "feature_version": metadata.get("feature_version"),
+            "information_profile": metadata.get("information_profile"),
             "threshold": self.threshold,
             "temperature": self.temperature,
         }
@@ -137,7 +140,10 @@ def build_learned_monitor(
     """Load one saved model and its calibration."""
     from avalanche.monitors.perceptron import load_model
 
-    model = load_model(model_path)
+    model = load_model(
+        model_path,
+        expected_information_profile=extractor.profile,
+    )
     calibration = model.metadata.get("calibration", {})
     if threshold is None:
         threshold = float(calibration.get("threshold", 0.5))
@@ -151,7 +157,7 @@ def build_learned_monitor(
     )
 
 
-def _action_distance(proposal: ActionProposal, fallback: ActionProposal) -> float:
+def _action_distance(proposal: MonitorProposal, fallback: ActionProposal) -> float:
     """Return the total absolute difference from the fallback action."""
     first = thaw_action(proposal.action)
     second = thaw_action(fallback.action)
@@ -164,7 +170,7 @@ def _action_distance(proposal: ActionProposal, fallback: ActionProposal) -> floa
 
 
 def _changed_edges(
-    proposal: ActionProposal, fallback: ActionProposal
+    proposal: MonitorProposal, fallback: ActionProposal
 ) -> tuple[InfrastructureReference, ...]:
     """Return each edge the proposal changes against the fallback."""
     first = thaw_action(proposal.action)

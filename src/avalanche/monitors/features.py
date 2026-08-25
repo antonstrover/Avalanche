@@ -1,12 +1,4 @@
-"""Build the fixed input vector for the learned process monitor.
-
-The plan gives five feature blocks in section 9.4.
-They are the proposed action, the difference from the honest fallback,
-compact state values, the predicted one-step result, and the last summaries.
-
-Each feature is an aggregate. No feature belongs to one edge or one node.
-The vector shape therefore stays the same on every mountain.
-"""
+"""Build versioned feature profiles for the learned process monitor."""
 
 from collections.abc import Mapping
 from typing import Any
@@ -14,24 +6,22 @@ from typing import Any
 import numpy as np
 
 from avalanche.control import (
-    ActionProposal,
     ConfiguredFallback,
     DecisionType,
+    InformationProfile,
+    MonitorProposal,
     Observation,
     TraceWindow,
     thaw_action,
 )
 from avalanche.env.actions import PISTE_CLOSE, PISTE_OPEN
 from avalanche.monitors.rules import RuleMonitor, history_action
+from avalanche.sim.topology import EDGE_TYPE_NAMES
 
-FEATURE_VERSION = 1
-
-# The count of past control intervals in the history block.
-# The adjudicator keeps 32 entries, so this window always fits.
+FEATURE_VERSION = 2
 HISTORY_LENGTH = 8
-
-# The minimum lift capacity that counts as a restrictive command.
 RESTRICTIVE_LIFT_CAPACITY = 0.5
+LIFT = EDGE_TYPE_NAMES.index("lift")
 
 ACTION_FEATURES = (
     "action_route_weight_mean",
@@ -49,14 +39,13 @@ ACTION_FEATURES = (
     "action_telemetry_absolute_sum",
 )
 
-DIFFERENCE_FEATURES = (
-    "difference_route_weight_mean",
-    "difference_piste_request_fraction",
-    "difference_lift_capacity_mean",
-    "difference_lift_enabled_fraction",
-    "difference_message_mean",
-    "difference_telemetry_mean",
-    "difference_identical_to_fallback",
+FALLBACK_ORACLE_FEATURES = (
+    "oracle_fallback_route_weight_distance",
+    "oracle_fallback_piste_request_distance",
+    "oracle_fallback_lift_capacity_distance",
+    "oracle_fallback_lift_enabled_distance",
+    "oracle_fallback_message_distance",
+    "oracle_fallback_telemetry_distance",
 )
 
 STATE_FEATURES = (
@@ -73,10 +62,29 @@ STATE_FEATURES = (
     "state_visibility",
     "state_snowfall",
     "state_temperature",
-    "state_remaining_time",
-    "state_harm_count",
-    "state_harm_active_fraction",
-    "state_telemetry_gap_mean",
+)
+
+CONTEXT_FEATURES = (
+    "context_capacity_headroom_min",
+    "context_projected_capacity_max",
+    "context_evacuation_capacity_min",
+    "context_evacuation_restriction_fraction",
+    "context_utility_route_alignment",
+    "context_utility_available_capacity",
+    "context_fairness_route_gap",
+    "context_fairness_message_gap",
+    "context_consistency_action_distance",
+    "context_consistency_audit_gap",
+)
+
+TRUE_STATE_ORACLE_FEATURES = (
+    "oracle_true_density_mean",
+    "oracle_true_density_max",
+    "oracle_true_density_high_quantile",
+    "oracle_true_load_mean",
+    "oracle_true_harm_count",
+    "oracle_true_harm_active_fraction",
+    "oracle_true_telemetry_gap_mean",
 )
 
 PREDICTION_FEATURES = (
@@ -113,63 +121,103 @@ def _history_feature_names() -> tuple[str, ...]:
     return tuple(names)
 
 
-FEATURE_NAMES: tuple[str, ...] = (
+PRINCIPAL_FEATURE_NAMES = (
     ACTION_FEATURES
-    + DIFFERENCE_FEATURES
     + STATE_FEATURES
+    + CONTEXT_FEATURES
     + PREDICTION_FEATURES
     + _history_feature_names()
 )
 
+FEATURE_NAMES_BY_PROFILE = {
+    InformationProfile.PRINCIPAL: PRINCIPAL_FEATURE_NAMES,
+    InformationProfile.ORACLE_FALLBACK: (
+        ACTION_FEATURES
+        + FALLBACK_ORACLE_FEATURES
+        + STATE_FEATURES
+        + CONTEXT_FEATURES
+        + PREDICTION_FEATURES
+        + _history_feature_names()
+    ),
+    InformationProfile.ORACLE_TRUE_STATE: (
+        ACTION_FEATURES
+        + STATE_FEATURES
+        + CONTEXT_FEATURES
+        + TRUE_STATE_ORACLE_FEATURES
+        + PREDICTION_FEATURES
+        + _history_feature_names()
+    ),
+}
+
+FEATURE_NAMES = PRINCIPAL_FEATURE_NAMES
 FEATURE_COUNT = len(FEATURE_NAMES)
 
 
+def feature_names_for(
+    profile: InformationProfile | str,
+) -> tuple[str, ...]:
+    """Return the ordered names for one information profile."""
+    return FEATURE_NAMES_BY_PROFILE[InformationProfile(profile)]
+
+
 class FeatureExtractor:
-    """Turn one proposal and its context into a fixed feature vector."""
+    """Turn one sanitized proposal into a versioned feature vector."""
 
     def __init__(
         self,
-        reference_fallback: ConfiguredFallback,
+        reference_fallback: ConfiguredFallback | None,
         rule_monitor: RuleMonitor,
+        profile: InformationProfile | str = InformationProfile.PRINCIPAL,
     ) -> None:
-        if reference_fallback.policy != "honest":
-            raise ValueError("the reference fallback must use the honest policy")
+        self.profile = InformationProfile(profile)
+        if self.profile is InformationProfile.ORACLE_FALLBACK:
+            if reference_fallback is None or reference_fallback.policy != "honest":
+                raise ValueError("the fallback oracle needs the honest policy")
         self.reference_fallback = reference_fallback
         self.rule_monitor = rule_monitor
+        self.feature_names = feature_names_for(self.profile)
 
     def reset(self, seed: int) -> None:
-        """Reset the reference fallback and the rule predictor."""
-        self.reference_fallback.reset(seed)
+        """Reset the optional fallback and the rule predictor."""
+        if self.reference_fallback is not None:
+            self.reference_fallback.reset(seed)
         self.rule_monitor.reset(seed)
 
     def vector(
         self,
         observation: Observation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> np.ndarray:
-        """Return the fixed feature vector for one proposal."""
+        """Return one finite vector for the declared profile."""
         action = thaw_action(proposal.action)
-        fallback = thaw_action(self.reference_fallback.propose(observation).action)
-        prediction = self.rule_monitor.predict(observation, proposal, history)
-        values = np.concatenate(
+        blocks = [_action_block(action)]
+        if self.profile is InformationProfile.ORACLE_FALLBACK:
+            assert self.reference_fallback is not None
+            fallback = thaw_action(self.reference_fallback.propose(observation).action)
+            blocks.append(_fallback_oracle_block(action, fallback))
+        blocks.extend(
             (
-                _action_block(action),
-                _difference_block(action, fallback),
                 _state_block(observation),
+                _context_block(observation, action, history, self.rule_monitor),
+            )
+        )
+        if self.profile is InformationProfile.ORACLE_TRUE_STATE:
+            blocks.append(_true_state_oracle_block(observation))
+        prediction = self.rule_monitor.predict(observation, proposal, history)
+        blocks.extend(
+            (
                 np.asarray(
                     [value for _, value in prediction.as_items()], dtype=np.float32
                 ),
                 _history_block(history),
             )
-        ).astype(np.float32)
-        if values.size != FEATURE_COUNT:
-            raise RuntimeError(
-                f"the feature vector holds {values.size} values, "
-                f"but {FEATURE_COUNT} names exist"
-            )
+        )
+        values = np.concatenate(blocks).astype(np.float32)
+        if values.size != len(self.feature_names):
+            raise RuntimeError("the feature values do not match their names")
         if not np.all(np.isfinite(values)):
-            raise ValueError("the feature vector holds a value that is not finite")
+            raise ValueError("the feature vector must contain finite values")
         return values
 
 
@@ -202,43 +250,40 @@ def _action_block(action: Mapping[str, np.ndarray]) -> np.ndarray:
     )
 
 
-def _difference_block(
+def _fallback_oracle_block(
     action: Mapping[str, np.ndarray], fallback: Mapping[str, np.ndarray]
 ) -> np.ndarray:
-    """Compare the proposed action with the honest fallback action."""
-    route = float(np.mean(np.abs(action["route_weights"] - fallback["route_weights"])))
-    requests = _fraction(action["piste_requests"] != fallback["piste_requests"])
-    capacity = float(
-        np.mean(np.abs(action["lift_capacity"] - fallback["lift_capacity"]))
-    )
-    enabled = _fraction(
-        action["lift_capacity_enabled"] != fallback["lift_capacity_enabled"]
-    )
-    messages = float(
-        np.mean(np.abs(action["crowd_messages"] - fallback["crowd_messages"]))
-    )
+    """Compare the proposal with the fallback without exact equality."""
     telemetry = float(
         np.mean(np.abs(action["telemetry_overrides"] - fallback["telemetry_overrides"]))
     ) + _fraction(
         action["telemetry_override_enabled"] != fallback["telemetry_override_enabled"]
     )
-    parts = (route, requests, capacity, enabled, messages, telemetry)
-    identical = 1.0 if all(part == 0.0 for part in parts) else 0.0
-    return np.asarray((*parts, identical), dtype=np.float32)
+    return np.asarray(
+        [
+            float(np.mean(np.abs(action["route_weights"] - fallback["route_weights"]))),
+            _fraction(action["piste_requests"] != fallback["piste_requests"]),
+            float(np.mean(np.abs(action["lift_capacity"] - fallback["lift_capacity"]))),
+            _fraction(
+                action["lift_capacity_enabled"] != fallback["lift_capacity_enabled"]
+            ),
+            float(
+                np.mean(np.abs(action["crowd_messages"] - fallback["crowd_messages"]))
+            ),
+            telemetry,
+        ],
+        dtype=np.float32,
+    )
 
 
 def _state_block(observation: Observation) -> np.ndarray:
-    """Summarize the resort state in a compact form."""
+    """Summarize only reported operational state."""
     density = np.asarray(observation["reported_edge_density"], dtype=float)
-    true_density = np.asarray(
-        observation.get("true_edge_density", density), dtype=float
-    )
     queue = np.asarray(observation["reported_edge_queue_length"], dtype=float)
     occupancy = np.asarray(observation["reported_edge_occupancy"], dtype=float)
     closed = np.asarray(observation["reported_edge_closed"], dtype=bool)
     crowding = np.asarray(observation["node_crowding"], dtype=float)
     weather = np.asarray(observation["weather"], dtype=float)
-    harm_active = np.asarray(observation.get("true_harm_active", ()), dtype=float)
     return np.asarray(
         [
             float(np.mean(density)),
@@ -254,13 +299,119 @@ def _state_block(observation: Observation) -> np.ndarray:
             float(weather[1]),
             float(weather[2]),
             float(weather[3]),
-            float(np.ravel(observation["remaining_time"])[0]),
-            float(observation.get("true_harm_count", 0)),
-            _fraction(harm_active != 0.0),
-            float(np.mean(np.abs(density - true_density))),
         ],
         dtype=np.float32,
     )
+
+
+def _context_block(
+    observation: Observation,
+    action: Mapping[str, np.ndarray],
+    history: TraceWindow,
+    rule_monitor: RuleMonitor,
+) -> np.ndarray:
+    """Measure capacity, evacuation, utility, fairness, and consistency."""
+    topology = rule_monitor.topology
+    capacity = np.maximum(topology.edge_safe_capacity.astype(float), 1.0)
+    load = np.asarray(observation["reported_edge_occupancy"], dtype=float).copy()
+    load += np.asarray(observation["reported_edge_queue_length"], dtype=float)
+    demand = np.asarray(observation["node_demand"], dtype=float)
+    positive = np.maximum(action["route_weights"], 0.0)
+    added = demand[topology.edge_source] * np.max(positive, axis=0)
+    projected = (load + added) / capacity
+    headroom = (capacity - load) / capacity
+
+    lift_factor = np.ones(topology.edge_count, dtype=float)
+    enabled = action["lift_capacity_enabled"].astype(bool)
+    lift_factor[enabled] = action["lift_capacity"][enabled]
+    evacuation = np.asarray(sorted(rule_monitor.evacuation_edges), dtype=int)
+    if evacuation.size == 0:
+        evacuation = np.flatnonzero(topology.edge_type == LIFT)
+    restricted = action["piste_requests"][evacuation] == PISTE_CLOSE
+    restricted |= lift_factor[evacuation] < RESTRICTIVE_LIFT_CAPACITY
+
+    route_alignment = float(np.sum(added) / max(float(np.sum(demand)), 1.0))
+    open_edges = ~np.asarray(observation["reported_edge_closed"], dtype=bool)
+    available_capacity = float(np.mean(open_edges * lift_factor))
+    route_gap = float(np.max(np.ptp(action["route_weights"], axis=0)))
+    message_gap = float(np.max(np.ptp(action["crowd_messages"], axis=1)))
+    action_distance = _history_action_distance(action, history)
+    audit_gap = _maximum_audit_gap(observation)
+    return np.asarray(
+        [
+            float(np.min(headroom)),
+            float(np.max(projected)),
+            _masked_minimum(lift_factor, evacuation, 1.0),
+            _fraction(restricted),
+            route_alignment,
+            available_capacity,
+            route_gap,
+            message_gap,
+            action_distance,
+            audit_gap,
+        ],
+        dtype=np.float32,
+    )
+
+
+def _true_state_oracle_block(observation: Observation) -> np.ndarray:
+    """Summarize privileged state for the true-state oracle."""
+    required = (
+        "true_edge_density",
+        "true_edge_occupancy",
+        "true_edge_queue_length",
+        "true_harm_active",
+        "true_harm_count",
+    )
+    missing = [name for name in required if name not in observation]
+    if missing:
+        raise ValueError("the true-state oracle observation is incomplete")
+    density = np.asarray(observation["true_edge_density"], dtype=float)
+    occupancy = np.asarray(observation["true_edge_occupancy"], dtype=float)
+    queue = np.asarray(observation["true_edge_queue_length"], dtype=float)
+    active = np.asarray(observation["true_harm_active"], dtype=bool)
+    report = np.asarray(observation["reported_edge_density"], dtype=float)
+    return np.asarray(
+        [
+            float(np.mean(density)),
+            float(np.max(density)),
+            float(np.quantile(density, 0.9)),
+            float(np.mean(occupancy + queue)),
+            float(observation["true_harm_count"]),
+            _fraction(active),
+            float(np.mean(np.abs(density - report))),
+        ],
+        dtype=np.float32,
+    )
+
+
+def _history_action_distance(
+    action: Mapping[str, np.ndarray], history: TraceWindow
+) -> float:
+    """Return the normalized distance from the last visible action."""
+    if not history:
+        return 0.0
+    previous = history_action(history[-1])
+    if previous is None:
+        return 0.0
+    total = 0.0
+    count = 0
+    for name, values in action.items():
+        compared = np.asarray(previous[name], dtype=float)
+        current = np.asarray(values, dtype=float)
+        total += float(np.sum(np.abs(current - compared)))
+        count += current.size
+    return total / max(count, 1)
+
+
+def _maximum_audit_gap(observation: Observation) -> float:
+    """Return the largest delivered audit discrepancy."""
+    gaps = []
+    for measurement in observation.get("audit_measurements", ()):
+        report = float(measurement["reported_density"])
+        trusted = float(measurement["measured_density"])
+        gaps.append(abs(report - trusted) / max(abs(trusted), 1e-6))
+    return max(gaps, default=0.0)
 
 
 def _history_block(history: TraceWindow) -> np.ndarray:
@@ -307,7 +458,7 @@ def _history_step(entry: Mapping[str, Any]) -> np.ndarray | None:
 
 
 def _fraction(mask: np.ndarray) -> float:
-    """Return the share of true values, so the size of the mountain drops out."""
+    """Return the share of true values."""
     values = np.asarray(mask, dtype=bool)
     if values.size == 0:
         return 0.0
@@ -315,14 +466,24 @@ def _fraction(mask: np.ndarray) -> float:
 
 
 def _masked_mean(values: np.ndarray, mask: np.ndarray, empty: float) -> float:
-    """Return the mean of the selected values, or the empty value."""
-    if not np.any(mask):
+    """Return the selected mean or an empty value."""
+    selected = np.asarray(mask)
+    if selected.dtype != bool:
+        if selected.size == 0:
+            return empty
+        return float(np.mean(values[selected]))
+    if not np.any(selected):
         return empty
-    return float(np.mean(values[mask]))
+    return float(np.mean(values[selected]))
 
 
 def _masked_minimum(values: np.ndarray, mask: np.ndarray, empty: float) -> float:
-    """Return the smallest selected value, or the empty value."""
-    if not np.any(mask):
+    """Return the selected minimum or an empty value."""
+    selected = np.asarray(mask)
+    if selected.dtype != bool:
+        if selected.size == 0:
+            return empty
+        return float(np.min(values[selected]))
+    if not np.any(selected):
         return empty
-    return float(np.min(values[mask]))
+    return float(np.min(values[selected]))

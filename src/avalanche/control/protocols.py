@@ -7,6 +7,7 @@ from avalanche.control.types import (
     ControllerObservation,
     MonitorDecision,
     MonitorObservation,
+    MonitorProposal,
     TraceWindow,
 )
 
@@ -25,6 +26,6 @@ class Monitor(Protocol):
     def assess(
         self,
         observation: MonitorObservation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision: ...

@@ -377,10 +377,14 @@ class AvalancheEnv(gym.Env):
             getattr(monitor, "information_profile", InformationProfile.PRINCIPAL)
         )
         if profile is InformationProfile.ORACLE_TRUE_STATE:
-            return ProcessObservation(
+            result = ProcessObservation(
                 build_evaluator_observation(observation, self.sim)
             )
-        return build_process_observation(observation, self.sim.delivered_audits)
+            result["information_profile"] = profile.value
+            return result
+        return build_process_observation(
+            observation, self.sim.delivered_audits, profile
+        )
 
     def _action_masks(self) -> ActionMasks:
         """Return the current controllable infrastructure masks."""

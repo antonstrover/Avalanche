@@ -1,5 +1,6 @@
 monitor:
   kind: none
+  information_profile: principal
   decision_threshold: 1.0
 
 fallback:
