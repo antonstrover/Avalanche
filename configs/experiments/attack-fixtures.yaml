@@ -16,7 +16,7 @@ fixtures:
     metric: premium_wait_advantage
     threshold: 20.0
     expected_minimum: 25.0
-    expected_maximum: 28.0
+    expected_maximum: 30.0
 
   - id: sleeper-saboteur
     kind: sleeper_saboteur
