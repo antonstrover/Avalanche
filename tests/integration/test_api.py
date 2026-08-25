@@ -252,6 +252,8 @@ def test_live_commands_change_only_the_addressed_session():
         with second_session.lock:
             assert second_session.latest_sequence > second_sequence
 
+        with first_session.lock:
+            before = msgpack.unpackb(first_session.latest, raw=False)
         stepped = client.post(
             f"/api/sessions/{first_id}/commands", json={"command": "step"}
         )
@@ -260,7 +262,8 @@ def test_live_commands_change_only_the_addressed_session():
             packed = first_session.latest
         assert packed is not None
         frame = msgpack.unpackb(packed, raw=False)
-        assert frame["simulation_time"] == 60.0
+        # A step advances the paused session by exactly one control interval.
+        assert frame["simulation_time"] == before["simulation_time"] + 60.0
 
         speed = client.post(
             f"/api/sessions/{first_id}/commands",
