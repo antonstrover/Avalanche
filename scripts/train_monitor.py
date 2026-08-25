@@ -19,7 +19,13 @@ from pathlib import Path
 import pandas as pd
 
 from avalanche.config.run_identity import REPO_ROOT
-from avalanche.monitors.perceptron import TrainingConfig, save_model, train_perceptron
+from avalanche.monitors.calibration import calibrate
+from avalanche.monitors.perceptron import (
+    TrainingConfig,
+    feature_matrix,
+    save_model,
+    train_perceptron,
+)
 from avalanche.monitors.splits import split_by_family
 
 DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "models" / "monitor-perceptron.pt"
@@ -31,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--seed", type=int, default=20260825)
     parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument("--false-alarm-budget", type=float, default=0.05)
     return parser
 
 
@@ -44,10 +51,29 @@ def main(argv: list[str] | None = None) -> int:
         TrainingConfig(seed=args.seed, epochs=args.epochs),
     )
     model.metadata["split"] = assignment.as_dict()
+    validation = parts["validation"]
+    calibration = calibrate(
+        model.logits(feature_matrix(validation)),
+        validation[model.config.label].to_numpy(dtype=float),
+        false_alarm_budget=args.false_alarm_budget,
+    )
+    model.metadata["calibration"] = calibration.as_dict()
     path = save_model(model, args.output)
     print(f"Wrote the model to {path}")
     print(json.dumps(model.metadata["validation_scores"], indent=2, sort_keys=True))
     print(json.dumps(model.metadata["constant_baseline"], indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "temperature": calibration.temperature,
+                "threshold": calibration.threshold,
+                "false_alarm_rate": calibration.false_alarm_rate,
+                "brier_score": calibration.brier_score,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
