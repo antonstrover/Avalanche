@@ -16,8 +16,8 @@ from avalanche.experiments.acceptance import (
     acceptance_evaluation_records,
     file_checksum,
     load_acceptance_config,
+    load_shortcut_justifications,
     select_acceptance_entries,
-    shortcut_justifications,
     weakest_attack_result,
     write_acceptance_report,
     write_json_immutable,
@@ -35,9 +35,6 @@ from avalanche.monitors.dataset import generate_dataset_entries
 from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.perceptron import TrainingConfig
 from avalanche.monitors.shortcut_audit import (
-    SHORTCUT_GATE,
-    fit_logistic_audit,
-    fit_stumps,
     run_shortcut_audit,
 )
 from avalanche.monitors.training import (
@@ -47,6 +44,7 @@ from avalanche.monitors.training import (
 
 DEFAULT_CONFIG = REPO_ROOT / "configs/experiments/fix-158-acceptance.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "outputs/fix-158-final"
+DEFAULT_JUSTIFICATIONS = REPO_ROOT / "configs/experiments/shortcut-justifications.yaml"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--justifications", type=Path, default=DEFAULT_JUSTIFICATIONS)
     return parser
 
 
@@ -85,17 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     print("Run the shortcut audits.", flush=True)
-    stumps = fit_stumps(train, validation, FEATURE_NAMES)
-    logistic = fit_logistic_audit(train, validation, FEATURE_NAMES)
-    strong = [
-        result.feature
-        for result in stumps
-        if result.validation_balanced_accuracy > SHORTCUT_GATE
-    ]
-    justifications = shortcut_justifications(
-        strong,
-        strong_logistic=logistic.validation_balanced_accuracy > SHORTCUT_GATE,
-    )
+    justifications, reviewed = load_shortcut_justifications(args.justifications)
     audit_dir = args.output / "audit"
     audit = run_shortcut_audit(
         train,
@@ -103,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         audit_dir,
         feature_names=FEATURE_NAMES,
         accepted_justifications=justifications,
+        reviewed_perfect_separation=reviewed,
         dataset_checksums=dataset_checksums,
     )
     if not audit["approved"]:
@@ -193,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print("Verify the final acceptance manifest.", flush=True)
-    report = write_acceptance_report(args.output, args.config)
+    report = write_acceptance_report(args.output, args.config, args.justifications)
     print(json.dumps({"status": report["status"], "output": str(args.output)}))
     return 0
 

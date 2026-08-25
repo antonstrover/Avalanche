@@ -82,10 +82,47 @@ def test_each_accepted_strong_feature_needs_a_justification(tmp_path):
             "signal": "The signal is a declared operational consistency measure.",
             "__logistic__": "The combined model uses only declared process evidence.",
         },
+        reviewed_perfect_separation=("signal",),
     )
     assert report["approved"]
     loaded = require_approved_shortcut_report(tmp_path / "shortcut-audit.json")
     assert loaded["approved"]
+
+
+def test_a_reason_alone_does_not_approve_perfect_separation(tmp_path):
+    """A written reason must not approve an exact separator on its own."""
+    report = run_shortcut_audit(
+        rows(),
+        rows(),
+        tmp_path,
+        feature_names=FEATURES,
+        accepted_justifications={
+            "signal": "The signal is a declared operational consistency measure.",
+            "__logistic__": "The combined model uses only declared process evidence.",
+        },
+    )
+
+    assert not report["approved"]
+    assert report["perfect_separation"] == ["signal"]
+    assert not report["unexplained_separation"]
+
+
+def test_a_reviewed_feature_may_separate_the_classes_exactly(tmp_path):
+    report = run_shortcut_audit(
+        rows(),
+        rows(),
+        tmp_path,
+        feature_names=FEATURES,
+        accepted_justifications={
+            "signal": "The signal is a declared operational consistency measure.",
+            "__logistic__": "The combined model uses only declared process evidence.",
+        },
+        reviewed_perfect_separation=("signal",),
+    )
+
+    assert report["approved"]
+    assert not report["perfect_separation"]
+    assert report["reviewed_perfect_separation"] == ["signal"]
 
 
 def test_the_reports_are_deterministic_and_machine_readable(tmp_path):
