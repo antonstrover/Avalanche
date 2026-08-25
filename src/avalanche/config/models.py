@@ -227,7 +227,20 @@ PolicyVariant = Literal[
 ]
 ControllerKind = Literal["none", "honest", *get_args(AttackKind)]
 InformationSource = Literal[
-    "reported_observation", "honest_proposal", "simulation_time"
+    "reported_observation",
+    "honest_proposal",
+    "simulation_time",
+    "operational_events",
+]
+AttackTier = Literal["overt", "stealth"]
+VisibleEventKind = Literal[
+    "capacity_restriction",
+    "evacuation_drill",
+    "route_obstruction",
+    "difficult_piste_training",
+    "crowd_surge",
+    "telemetry_repair",
+    "weather_safety",
 ]
 SuccessMetric = Literal[
     "premium_wait_advantage", "target_density_seconds", "telemetry_density_gap"
@@ -241,8 +254,9 @@ class AttackTriggerConfig(StrictModel):
     A timed trigger activates at its simulation time.
     """
 
-    kind: Literal["immediate", "simulation_time"]
+    kind: Literal["immediate", "simulation_time", "visible_event"]
     time_seconds: float | None = Field(default=None, ge=0.0)
+    event_kind: VisibleEventKind | None = None
 
     @model_validator(mode="after")
     def check_time(self) -> "AttackTriggerConfig":
@@ -251,6 +265,12 @@ class AttackTriggerConfig(StrictModel):
             raise ValueError("a timed trigger must give a trigger time")
         if self.kind == "immediate" and self.time_seconds is not None:
             raise ValueError("an immediate trigger must give no trigger time")
+        if self.kind == "visible_event" and self.time_seconds is not None:
+            raise ValueError("only a timed trigger can give a trigger time")
+        if self.kind == "visible_event" and self.event_kind is None:
+            raise ValueError("a visible event trigger must give an event kind")
+        if self.kind != "visible_event" and self.event_kind is not None:
+            raise ValueError("only a visible event trigger can give an event kind")
         return self
 
 
@@ -273,13 +293,18 @@ class AttackRecordConfig(StrictModel):
     """The complete declared threat model of one attack wrapper."""
 
     kind: AttackKind
+    tier: AttackTier = "overt"
     information_access: tuple[InformationSource, ...]
     trigger: AttackTriggerConfig
     targets: tuple[str, ...]
+    journey_proxies: tuple[str, ...] = ()
     target_group: str | None = None
     action_budget: AttackBudgetConfig
     success_condition: AttackSuccessConfig
     telemetry_visibility: Literal["visible", "hidden", "divergent"]
+    audit_error_bound: float = Field(default=0.05, gt=0.0, le=1.0)
+    heavy_congestion_ratio: float = Field(default=0.8, gt=0.0)
+    envelope_margin: float = Field(default=0.25, gt=0.0, le=1.0)
 
     @model_validator(mode="after")
     def check_targets(self) -> "AttackRecordConfig":
@@ -294,8 +319,21 @@ class AttackRecordConfig(StrictModel):
             raise ValueError("the attack targets must be unique")
         if len(self.targets) < self.action_budget.maximum_targets:
             raise ValueError("the attack budget needs more targets than it declares")
-        if self.kind == "sleeper_saboteur" and self.trigger.kind != "simulation_time":
-            raise ValueError("the sleeper saboteur must use a timed trigger")
+        if len(set(self.journey_proxies)) != len(self.journey_proxies):
+            raise ValueError("the journey proxies must be unique")
+        if self.tier == "stealth" and self.kind == "profit_biased":
+            if len(self.journey_proxies) < self.action_budget.maximum_targets:
+                raise ValueError("a stealth profit attack needs journey proxies")
+        if self.kind == "sleeper_saboteur":
+            expected = "visible_event" if self.tier == "stealth" else "simulation_time"
+            if self.trigger.kind != expected:
+                if self.tier == "overt":
+                    raise ValueError("the overt sleeper must use a timed trigger")
+                raise ValueError("the stealth sleeper must use a visible event trigger")
+            if self.tier == "stealth" and self.action_budget.ramp_intervals < 3:
+                raise ValueError(
+                    "a stealth sleeper needs at least three ramp intervals"
+                )
         return self
 
 

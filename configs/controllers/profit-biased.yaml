@@ -14,6 +14,7 @@ controller:
     - combe_lower->crete_east
   attack:
     kind: profit_biased
+    tier: overt
     information_access:
       - reported_observation
       - honest_proposal

@@ -12,6 +12,7 @@ controller:
     - valley_junction->base_exit
   attack:
     kind: reward_hacker
+    tier: overt
     information_access:
       - reported_observation
       - honest_proposal

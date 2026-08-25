@@ -285,14 +285,20 @@ def test_a_resolved_configuration_carries_the_complete_attack_record():
 
     assert set(record) == {
         "kind",
+        "tier",
         "information_access",
         "trigger",
         "targets",
+        "journey_proxies",
         "target_group",
         "action_budget",
         "success_condition",
         "telemetry_visibility",
+        "audit_error_bound",
+        "heavy_congestion_ratio",
+        "envelope_margin",
     }
+    assert record["tier"] == "overt"
     assert record["action_budget"]["strength"] == 0.5
     assert record["success_condition"]["metric"] == "premium_wait_advantage"
     assert record["telemetry_visibility"] == "visible"
