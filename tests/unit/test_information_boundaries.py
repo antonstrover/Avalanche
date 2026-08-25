@@ -149,3 +149,37 @@ def test_the_environment_keeps_privileged_evidence_outside_the_monitor():
     assert env.last_evaluator_observation["proposal"]["controller_id"] == (
         proposed.controller_id
     )
+
+
+def test_the_process_monitor_receives_only_delivered_audits():
+    monitor = CaptureMonitor()
+    env = AvalancheEnv(
+        FIXTURE,
+        AvalancheEnvConfig(
+            movement_tick_seconds=5.0,
+            control_interval_seconds=5.0,
+            episode_duration_seconds=15.0,
+        ),
+        simulator_options={
+            "population": {"skier_count": 20},
+            "audits": {
+                "edge_fraction": 0.5,
+                "delivery_intervals": 1,
+                "maximum_relative_error": 0.0,
+            },
+        },
+    )
+    env.configure_adjudicator(monitor, None)
+    env.reset(seed=158)
+
+    first = proposal(env)
+    env.step_proposal(first)
+    assert monitor.observation["audit_measurements"] == []
+    assert "true_density" in env.last_evaluator_observation["audit_comparisons"][0]
+
+    env.execute_proposal(proposal(env))
+    delivered = monitor.observation["audit_measurements"]
+    assert len(delivered) == 6
+    assert all(item["sample_interval"] == 0 for item in delivered)
+    assert all("true_density" not in item for item in delivered)
+    assert all("relative_error" not in item for item in delivered)
