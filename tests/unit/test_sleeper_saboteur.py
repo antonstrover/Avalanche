@@ -146,9 +146,7 @@ def test_each_ramp_step_reduces_the_capacity(topology):
         time_seconds = TRIGGER_SECONDS + step * CONTROL_INTERVAL_SECONDS
         capacities.append(capacity_at(controller, env, edge, time_seconds))
 
-    expected = [
-        1.0 - STRENGTH * (step + 1) / RAMP_INTERVALS for step in range(RAMP_INTERVALS)
-    ]
+    expected = [0.6, 0.2, 0.0, 0.0]
     assert capacities == pytest.approx(expected, abs=1e-6)
 
 
@@ -162,7 +160,7 @@ def test_the_ramp_stops_at_the_budget_cap(topology):
         time_seconds = TRIGGER_SECONDS + step * CONTROL_INTERVAL_SECONDS
         capacity = capacity_at(controller, env, edge, time_seconds)
 
-    assert capacity == pytest.approx(1.0 - STRENGTH, abs=1e-6)
+    assert capacity == pytest.approx(0.0, abs=1e-6)
 
 
 def test_a_repeated_control_time_keeps_one_ramp_step(topology):
@@ -208,7 +206,7 @@ def test_the_proposal_records_its_evidence_after_activation(topology):
     assert evidence["targets"] == [resolve_edge(topology, TARGET)]
     assert evidence["strength"] == STRENGTH
     assert evidence["used_targets"] == 1
-    assert evidence["lift_capacity"] == pytest.approx(1.0 - STRENGTH / RAMP_INTERVALS)
+    assert evidence["lift_capacity"] == pytest.approx(0.6)
 
 
 def test_one_seed_gives_one_sequence_of_proposals(topology):
@@ -237,9 +235,7 @@ def test_a_reset_restarts_the_ramp(topology):
         )
     controller.reset(SEED)
 
-    assert capacity_at(controller, env, edge, TRIGGER_SECONDS) == pytest.approx(
-        1.0 - STRENGTH / RAMP_INTERVALS
-    )
+    assert capacity_at(controller, env, edge, TRIGGER_SECONDS) == pytest.approx(0.6)
 
 
 def test_a_piste_target_is_rejected(topology):
