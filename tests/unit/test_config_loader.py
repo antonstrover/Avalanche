@@ -33,3 +33,21 @@ def test_load_and_merge_resolves_the_sample_configs():
     assert resolved["controller"]["kind"] == "honest"
     assert resolved["monitor"]["kind"] == "none"
     assert resolved["seed"] == 1234
+
+
+def test_a_merge_does_not_change_the_mapping_it_reads():
+    """A caller can reuse one loaded mapping for many merges."""
+    defaults = {"scenario": {"failures": {"schedule": []}}}
+    with_schedule = {
+        "scenario": {"failures": {"schedule": [{"kind": "lift_stoppage"}]}}
+    }
+    with_sampling = {"scenario": {"failures": {"sampling": {"event_count": 2}}}}
+
+    merge_configs(defaults, with_schedule)
+    second = merge_configs(defaults, with_sampling)
+
+    assert defaults == {"scenario": {"failures": {"schedule": []}}}
+    assert second["scenario"]["failures"] == {
+        "schedule": [],
+        "sampling": {"event_count": 2},
+    }

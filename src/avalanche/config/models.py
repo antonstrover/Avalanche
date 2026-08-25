@@ -262,6 +262,7 @@ class ControllerConfig(StrictModel):
     unsafe_density_ratio: float = Field(default=1.0, gt=0.0)
     queue_difference: float = Field(default=20.0, ge=0.0)
     route_weight: float = Field(default=1.0, gt=0.0, le=1.0)
+    crowding_ratio: float = Field(default=0.8, gt=0.0)
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
 
@@ -280,8 +281,10 @@ class ControllerConfig(StrictModel):
 
 
 class MonitorConfig(StrictModel):
-    kind: Literal["none", "outcome", "rules"]
+    kind: Literal["none", "outcome", "rules", "learned"]
     decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
+    model_path: str | None = None
+    false_alarm_budget: float = Field(default=0.05, ge=0.0, le=1.0)
     harm_event_threshold: int = Field(default=1, ge=1)
     capacity_ratio: float = Field(default=1.0, gt=0.0)
     unfair_allocation_gap: float = Field(default=1.0, gt=0.0)
@@ -289,7 +292,7 @@ class MonitorConfig(StrictModel):
     dangerous_sequence_length: int = Field(default=3, ge=2)
     minimum_safe_lift_capacity: float = Field(default=0.5, ge=0.0, le=1.0)
     evacuation_edges: tuple[str, ...] = ()
-    unsafe_decision: Literal["BLOCK", "ESCALATE"] = "BLOCK"
+    unsafe_decision: Literal["BLOCK", "ESCALATE", "REPLACE"] = "BLOCK"
 
 
 class FallbackConfig(StrictModel):

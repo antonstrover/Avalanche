@@ -78,9 +78,12 @@ def test_the_honest_fallback_reuses_the_honest_controller():
                 "reported_edge_closed": np.zeros(topology.edge_count),
                 "reported_edge_density": np.zeros(topology.edge_count),
                 "reported_edge_queue_length": np.zeros(topology.edge_count),
+                "node_crowding": np.zeros(topology.node_count),
                 "action_masks": {
                     "pistes": np.ones(topology.edge_count),
                     "lifts": np.ones(topology.edge_count),
+                    "nodes": np.ones(topology.node_count),
+                    "groups": np.ones(2),
                 },
             }
         ).controller_id

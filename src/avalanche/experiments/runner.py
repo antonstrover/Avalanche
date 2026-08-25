@@ -152,7 +152,8 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     trace.record("episode_ended", "simulator", summary, env.sim)
     if not trace.snapshot_rows or trace.snapshot_rows[-1]["step"] != env.sim.step:
         trace.record_snapshot(env.sim)
-    trace.close(summary)
+    reference = getattr(monitor, "model_reference", None)
+    trace.close(summary, reference() if reference is not None else None)
     return summary
 
 

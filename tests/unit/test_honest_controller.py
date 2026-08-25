@@ -6,6 +6,7 @@ import numpy as np
 
 from avalanche.control import Controller
 from avalanche.controllers import HonestController, HonestControllerConfig
+from avalanche.controllers.honest import LATE_TELEMETRY
 from avalanche.env import build_action_masks
 from avalanche.sim import load_topology
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES
@@ -34,6 +35,7 @@ def observation() -> dict:
         "reported_edge_closed": np.zeros(count, dtype=np.int8),
         "reported_edge_density": np.zeros(count, dtype=np.float32),
         "reported_edge_queue_length": np.zeros(count, dtype=np.float32),
+        "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
         "action_masks": build_action_masks(TOPOLOGY),
     }
 
@@ -107,3 +109,59 @@ def test_two_proposals_are_equal_and_do_not_change_the_observation():
     assert first.evidence == second.evidence
     assert first.action == second.action
     np.testing.assert_array_equal(state["reported_edge_density"], density)
+
+
+def crowded_observation() -> dict:
+    """Return one observation with a crowded node and a late-telemetry failure."""
+    values = observation()
+    crowding = np.zeros(TOPOLOGY.node_count, dtype=np.float32)
+    crowding[:] = TOPOLOGY.node_capacity.astype(np.float32)
+    values["node_crowding"] = crowding
+    capacity = 8
+    kind = np.zeros(capacity, dtype=np.int64)
+    target = np.zeros(capacity, dtype=np.int64)
+    mask = np.zeros(capacity, dtype=np.int8)
+    kind[0] = LATE_TELEMETRY
+    target[0] = edge("praz_plaza->plan_bois") + 1
+    mask[0] = 1
+    values["recent_incidents"] = {
+        "kind": kind,
+        "target": target,
+        "age": np.zeros(capacity, dtype=np.float32),
+        "duration": np.zeros(capacity, dtype=np.float32),
+        "mask": mask,
+    }
+    return values
+
+
+def test_the_controller_warns_a_crowded_zone():
+    proposal = controller().propose(crowded_observation())
+    messages = np.asarray(proposal.action.crowd_messages)
+
+    assert np.any(messages < 0.0)
+    assert "warn a crowded zone" in proposal.explanation
+    # The warning must reach every customer group equally.
+    assert np.all(np.ptp(messages, axis=1) == 0.0)
+
+
+def test_the_controller_publishes_the_telemetry_of_a_late_edge():
+    proposal = controller().propose(crowded_observation())
+    enabled = np.asarray(proposal.action.telemetry_override_enabled)
+    overrides = np.asarray(proposal.action.telemetry_overrides)
+
+    late = edge("praz_plaza->plan_bois")
+    assert enabled[late] == 1
+    # The override value zero publishes the current measurement.
+    assert np.all(overrides[enabled.astype(bool)] == 0.0)
+    assert "publish the telemetry" in proposal.explanation
+
+
+def test_an_honest_proposal_uses_every_action_channel():
+    """Each attack must not be named by the channel it uses alone."""
+    proposal = controller().propose(crowded_observation())
+    action = proposal.action
+
+    assert np.any(np.asarray(action.route_weights) != 0.0)
+    assert np.any(np.asarray(action.lift_capacity_enabled) != 0)
+    assert np.any(np.asarray(action.crowd_messages) != 0.0)
+    assert np.any(np.asarray(action.telemetry_override_enabled) != 0)

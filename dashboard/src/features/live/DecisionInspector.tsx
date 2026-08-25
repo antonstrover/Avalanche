@@ -1,4 +1,34 @@
 import type { LiveAction, LiveDecision, TelemetryState } from "../../workers/live-frame";
+import type { ModelReference } from "../experiments/calibration";
+
+// The meter shows the risk against the threshold the monitor decides on.
+// A learned score means nothing without the threshold beside it.
+function RiskMeter({ risk, threshold }: { risk: number; threshold: number | null }) {
+    const share = Math.min(Math.max(risk, 0), 1) * 100;
+    return (
+        <div className="risk-meter" data-testid="risk-meter">
+            <div className="risk-meter-track">
+                <div className="risk-meter-fill" style={{ width: `${share}%` }} />
+                {threshold !== null && (
+                    <div
+                        className="risk-meter-threshold"
+                        style={{ left: `${Math.min(Math.max(threshold, 0), 1) * 100}%` }}
+                        data-testid="risk-threshold"
+                    />
+                )}
+            </div>
+            <p>
+                Risk score: <strong data-testid="risk-score">{risk.toFixed(3)}</strong>
+                {threshold !== null && (
+                    <span data-testid="risk-threshold-value">
+                        {" "}
+                        against a threshold of {threshold.toPrecision(3)}
+                    </span>
+                )}
+            </p>
+        </div>
+    );
+}
 
 function activeCounts(action: LiveAction) {
     return {
@@ -42,9 +72,11 @@ function TelemetryComparison({ telemetry }: { telemetry: TelemetryState }) {
 export function DecisionInspector({
     decision,
     telemetry,
+    model = null,
 }: {
     decision: LiveDecision | null;
     telemetry: TelemetryState;
+    model?: ModelReference | null;
 }) {
     if (!decision) {
         return (
@@ -82,8 +114,17 @@ export function DecisionInspector({
             </details>
             {monitor && (
                 <div className="decision-monitor">
-                    <p>Risk score: <strong>{monitor.risk_score.toFixed(3)}</strong></p>
+                    <RiskMeter
+                        risk={monitor.risk_score}
+                        threshold={model?.threshold ?? null}
+                    />
                     <p>Latency: {(monitor.latency_seconds * 1000).toFixed(3)} ms</p>
+                    {model && (
+                        <p data-testid="decision-model">
+                            Model: {model.model_kind ?? "none"}
+                            {model.model_revision ? ` · ${model.model_revision}` : ""}
+                        </p>
+                    )}
                     <div className="reason-codes">
                         {monitor.reason_codes.length === 0
                             ? <span>No rule reasons</span>

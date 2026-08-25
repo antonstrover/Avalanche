@@ -113,7 +113,9 @@ class TraceWriter:
             }
         )
 
-    def close(self, summary: dict[str, Any]) -> None:
+    def close(
+        self, summary: dict[str, Any], model_reference: dict[str, Any] | None = None
+    ) -> None:
         """Write each buffered artifact."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         events_path = self.output_dir / "events.jsonl"
@@ -133,7 +135,7 @@ class TraceWriter:
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
         )
-        model_reference = {
+        model_reference = model_reference or {
             "model_kind": None,
             "model_path": None,
             "model_revision": None,
