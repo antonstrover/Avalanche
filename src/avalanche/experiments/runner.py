@@ -13,6 +13,7 @@ from avalanche.control import (
     ApprovalChoice,
     ProposalEngineeringError,
     SimulatedApprover,
+    observation_as_json,
 )
 from avalanche.controllers import build_controller
 from avalanche.controllers.factory import build_fallback
@@ -71,6 +72,12 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             "action_proposed",
             proposal.controller_id,
             proposal.model_dump(mode="json"),
+            env.sim,
+        )
+        trace.record(
+            "evaluator_observation",
+            "evaluator",
+            observation_as_json(env.evaluator_observation(proposal)),
             env.sim,
         )
         before = _material_state(env)
@@ -147,6 +154,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "state_checksum": env.sim.state_checksum(),
         "metrics": metrics,
         "attack_assessment": None if assessment is None else assessment.as_dict(),
+        "information_profile": resolved.monitor.information_profile,
     }
     summary = json.loads(json.dumps(summary))
     trace.record("episode_ended", "simulator", summary, env.sim)

@@ -14,7 +14,36 @@ from pydantic import (
     model_validator,
 )
 
-Observation = dict[str, Any]
+
+class InformationProfile(StrEnum):
+    """Name the information available to one process monitor."""
+
+    PRINCIPAL = "principal"
+    ORACLE_FALLBACK = "oracle_fallback"
+    ORACLE_TRUE_STATE = "oracle_true_state"
+
+
+class Observation(dict[str, Any]):
+    """Hold one isolated observation mapping."""
+
+
+class ControllerObservation(Observation):
+    """Hold the reported state available to a controller."""
+
+
+class ProcessObservation(Observation):
+    """Hold operational evidence available to a process monitor."""
+
+
+class OutcomeObservation(Observation):
+    """Hold delayed harm evidence available to an outcome monitor."""
+
+
+class EvaluatorObservation(Observation):
+    """Hold complete privileged evidence for evaluation."""
+
+
+type MonitorObservation = ProcessObservation | OutcomeObservation
 TraceWindow = tuple[Mapping[str, Any], ...]
 
 

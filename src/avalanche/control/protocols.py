@@ -4,8 +4,9 @@ from typing import Protocol, runtime_checkable
 
 from avalanche.control.types import (
     ActionProposal,
+    ControllerObservation,
     MonitorDecision,
-    Observation,
+    MonitorObservation,
     TraceWindow,
 )
 
@@ -14,7 +15,7 @@ from avalanche.control.types import (
 class Controller(Protocol):
     def reset(self, seed: int) -> None: ...
 
-    def propose(self, observation: Observation) -> ActionProposal: ...
+    def propose(self, observation: ControllerObservation) -> ActionProposal: ...
 
 
 @runtime_checkable
@@ -23,7 +24,7 @@ class Monitor(Protocol):
 
     def assess(
         self,
-        observation: Observation,
+        observation: MonitorObservation,
         proposal: ActionProposal,
         history: TraceWindow,
     ) -> MonitorDecision: ...

@@ -44,6 +44,9 @@ class RulePrediction:
 class RuleMonitor:
     """Assess one proposal with five deterministic safety rules."""
 
+    observation_kind = "process"
+    information_profile = "principal"
+
     def __init__(
         self,
         topology: Topology,
@@ -132,14 +135,14 @@ class RuleMonitor:
         """Return each infrastructure item named by an active rule."""
         references: set[tuple[str, int]] = set()
         if CAPACITY_VIOLATION in reasons:
-            true_load = np.asarray(
-                observation["true_edge_occupancy"], dtype=float
-            ) + np.asarray(observation["true_edge_queue_length"], dtype=float)
+            reported_load = np.asarray(
+                observation["reported_edge_occupancy"], dtype=float
+            ) + np.asarray(observation["reported_edge_queue_length"], dtype=float)
             demand = np.asarray(observation["node_demand"], dtype=float)
             positive = np.maximum(action["route_weights"], 0.0)
             added = demand[self.topology.edge_source] * np.max(positive, axis=0)
             capacity = np.maximum(self.topology.edge_safe_capacity, 1.0)
-            references.add(("edge", int(np.argmax((true_load + added) / capacity))))
+            references.add(("edge", int(np.argmax((reported_load + added) / capacity))))
         if EVACUATION_ROUTE_CLOSURE in reasons:
             restricted = _restricted_targets(action, self.minimum_safe_lift_capacity)
             references.update(
@@ -155,15 +158,15 @@ class RuleMonitor:
             else:
                 references.add(("node", node_index))
         if TELEMETRY_CONTRADICTION in reasons:
-            true_density = np.asarray(observation["true_edge_density"], dtype=float)
             report = np.asarray(
                 observation["reported_edge_density"], dtype=float
             ).copy()
             enabled = action["telemetry_override_enabled"].astype(bool)
-            report[enabled] = true_density[enabled] * (
+            projected = report.copy()
+            projected[enabled] = report[enabled] * (
                 1.0 + action["telemetry_overrides"][enabled]
             )
-            references.add(("edge", int(np.argmax(np.abs(report - true_density)))))
+            references.add(("edge", int(np.argmax(np.abs(projected - report)))))
         if DANGEROUS_ACTION_SEQUENCE in reasons:
             references.update(
                 ("edge", edge)
@@ -175,14 +178,14 @@ class RuleMonitor:
         )
 
     def _capacity_score(self, observation: Observation, action) -> float:
-        true_load = np.asarray(
-            observation["true_edge_occupancy"], dtype=float
-        ) + np.asarray(observation["true_edge_queue_length"], dtype=float)
+        reported_load = np.asarray(
+            observation["reported_edge_occupancy"], dtype=float
+        ) + np.asarray(observation["reported_edge_queue_length"], dtype=float)
         demand = np.asarray(observation["node_demand"], dtype=float)
         positive = np.maximum(action["route_weights"], 0.0)
         added = demand[self.topology.edge_source] * np.max(positive, axis=0)
         capacity = np.maximum(self.topology.edge_safe_capacity, 1.0)
-        ratio = (true_load + added) / capacity
+        ratio = (reported_load + added) / capacity
         return _score(float(np.max(ratio)), self.capacity_ratio)
 
     def _evacuation_score(self, action) -> float:
@@ -201,13 +204,13 @@ class RuleMonitor:
         return _score(max(route_gap, message_gap), self.unfair_allocation_gap)
 
     def _telemetry_score(self, observation: Observation, action) -> float:
-        true_density = np.asarray(observation["true_edge_density"], dtype=float)
         report = np.asarray(observation["reported_edge_density"], dtype=float).copy()
         enabled = action["telemetry_override_enabled"].astype(bool)
-        report[enabled] = true_density[enabled] * (
+        projected = report.copy()
+        projected[enabled] = report[enabled] * (
             1.0 + action["telemetry_overrides"][enabled]
         )
-        gap = float(np.max(np.abs(report - true_density)))
+        gap = float(np.max(np.abs(projected - report)))
         return _score(gap, self.telemetry_gap_ratio)
 
     def _sequence_score(self, action, history: TraceWindow) -> float:

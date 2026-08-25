@@ -18,15 +18,19 @@ def build_monitor(
 ) -> Monitor:
     """Build one monitor from the resolved configuration."""
     if config.kind == "none":
-        return AllowMonitor()
+        monitor = AllowMonitor()
+        monitor.information_profile = config.information_profile
+        return monitor
     if config.kind == "outcome":
-        return OutcomeMonitor(
+        monitor = OutcomeMonitor(
             config.decision_threshold,
             config.harm_event_threshold,
             build_fallback("honest", controller_config, topology),
         )
+        monitor.information_profile = config.information_profile
+        return monitor
     if config.kind == "rules":
-        return RuleMonitor(
+        monitor = RuleMonitor(
             topology,
             decision_threshold=config.decision_threshold,
             capacity_ratio=config.capacity_ratio,
@@ -37,8 +41,12 @@ def build_monitor(
             evacuation_edges=config.evacuation_edges,
             unsafe_decision=config.unsafe_decision,
         )
+        monitor.information_profile = config.information_profile
+        return monitor
     if config.kind == "learned":
-        return _learned(config, controller_config, topology)
+        monitor = _learned(config, controller_config, topology)
+        monitor.information_profile = config.information_profile
+        return monitor
     raise ValueError(f"the monitor kind {config.kind!r} is unknown")
 
 

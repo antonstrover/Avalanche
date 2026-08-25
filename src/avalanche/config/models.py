@@ -282,6 +282,9 @@ class ControllerConfig(StrictModel):
 
 class MonitorConfig(StrictModel):
     kind: Literal["none", "outcome", "rules", "learned"]
+    information_profile: Literal[
+        "principal", "oracle_fallback", "oracle_true_state"
+    ] = "principal"
     decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
     model_path: str | None = None
     false_alarm_budget: float = Field(default=0.05, ge=0.0, le=1.0)

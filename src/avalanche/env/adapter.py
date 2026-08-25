@@ -17,9 +17,17 @@ from avalanche.control import (
     Adjudicator,
     ApprovalHandler,
     ConfiguredFallback,
+    ControllerObservation,
+    EvaluatorObservation,
     ExecutedAction,
+    InformationProfile,
     Monitor,
-    build_monitor_observation,
+    MonitorObservation,
+    ProcessObservation,
+    build_controller_observation,
+    build_evaluator_observation,
+    build_outcome_observation,
+    build_process_observation,
     freeze_action,
     thaw_action,
 )
@@ -178,6 +186,7 @@ class AvalancheEnv(gym.Env):
         self.last_proposal: ActionProposal | None = None
         self.last_adjudication: AdjudicationResult | None = None
         self.last_executed_action: ExecutedAction | None = None
+        self.last_evaluator_observation: EvaluatorObservation | None = None
         self._control_history: list[dict[str, Any]] = []
         self._cumulative_intervention_cost = 0.0
         self._seed = 0
@@ -244,6 +253,7 @@ class AvalancheEnv(gym.Env):
         self.last_proposal = None
         self.last_adjudication = None
         self.last_executed_action = None
+        self.last_evaluator_observation = None
         self._control_history.clear()
         self._cumulative_intervention_cost = 0.0
         self.action_space.seed(run_seed)
@@ -305,21 +315,33 @@ class AvalancheEnv(gym.Env):
                 "monitor_decision": adjudication.decision,
                 "adjudication": adjudication,
                 "executed_action": executed,
+                "evaluator_observation": self.last_evaluator_observation,
                 "current_intervention_cost": intervention_cost,
             }
         )
         return observation, reward_result.scalar, terminated, truncated, info
 
-    def controller_observation(self) -> Observation:
+    def controller_observation(self) -> ControllerObservation:
         """Return the isolated reported state for one controller."""
-        observation = self._observation()
-        observation["simulation_time"] = self.sim.simulation_time
-        return observation
+        return build_controller_observation(
+            self._observation(), self.sim.simulation_time
+        )
+
+    def evaluator_observation(
+        self, proposal: ActionProposal | None = None
+    ) -> EvaluatorObservation:
+        """Return isolated privileged evidence for the evaluator."""
+        return build_evaluator_observation(
+            self.controller_observation(), self.sim, proposal
+        )
 
     def execute_proposal(self, proposal: ActionProposal) -> AdjudicationResult:
         """Adjudicate and apply one proposal without movement ticks."""
-        observation = self._observation()
-        monitor_observation = build_monitor_observation(observation, self.sim)
+        observation = self.controller_observation()
+        monitor_observation = self._monitor_observation(observation)
+        self.last_evaluator_observation = build_evaluator_observation(
+            observation, self.sim, proposal
+        )
         result = self.adjudicator.adjudicate(
             monitor_observation,
             proposal,
@@ -339,6 +361,22 @@ class AvalancheEnv(gym.Env):
         )
         del self._control_history[:-32]
         return result
+
+    def _monitor_observation(
+        self, observation: ControllerObservation
+    ) -> MonitorObservation:
+        """Return evidence for the configured monitor boundary."""
+        monitor = self.adjudicator.monitor
+        if getattr(monitor, "observation_kind", "process") == "outcome":
+            return build_outcome_observation(observation, self.sim)
+        profile = InformationProfile(
+            getattr(monitor, "information_profile", InformationProfile.PRINCIPAL)
+        )
+        if profile is InformationProfile.ORACLE_TRUE_STATE:
+            return ProcessObservation(
+                build_evaluator_observation(observation, self.sim)
+            )
+        return build_process_observation(observation)
 
     def _action_masks(self) -> ActionMasks:
         """Return the current controllable infrastructure masks."""
