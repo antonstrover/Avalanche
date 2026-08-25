@@ -90,9 +90,7 @@ def pack_frame(
         "location_kind": population.location_kind.astype(np.int8, copy=False).tobytes(),
         "location_index": population.location_index.astype("<i4", copy=False).tobytes(),
         "progress": population.progress.astype("<f4", copy=False).tobytes(),
-        "display": display_state(
-            sim, proposal, adjudication, approval, controller
-        ),
+        "display": display_state(sim, proposal, adjudication, approval, controller),
     }
     envelope = {
         "version": STREAM_VERSION,
