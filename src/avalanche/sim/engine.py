@@ -64,6 +64,7 @@ STREAM_NAMES = (
     "controller",
     "monitor",
     "audit",
+    "policy",
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0

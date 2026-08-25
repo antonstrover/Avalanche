@@ -10,6 +10,12 @@ from avalanche.control import (
     freeze_action,
     freeze_evidence,
 )
+from avalanche.controllers.policies import (
+    POLICY_SPECS,
+    PolicyVariant,
+    select_policy_variant,
+    shape_response,
+)
 from avalanche.controllers.responses import (
     ActionRateLimits,
     apply_action_rate_limits,
@@ -43,6 +49,7 @@ class HonestControllerConfig:
     crowding_ratio: float = 0.8
     minimum_evacuation_capacity: float = 0.5
     action_rate_limits: ActionRateLimits = ActionRateLimits()
+    policy_variant: PolicyVariant | None = None
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
 
@@ -67,6 +74,7 @@ class HonestController:
         self._last_action = neutral_action(self.topology)
         self._last_proposal_time: float | None = None
         self._last_proposal: ActionProposal | None = None
+        self.selected_policy_variant: PolicyVariant = "standard-linear"
 
     def reset(self, seed: int) -> None:
         """Reset the controller without adding random behavior."""
@@ -74,6 +82,9 @@ class HonestController:
         self._last_action = neutral_action(self.topology)
         self._last_proposal_time = None
         self._last_proposal = None
+        self.selected_policy_variant = select_policy_variant(
+            seed, self.config.policy_variant
+        )
 
     def propose(self, observation: Observation) -> ActionProposal:
         """Return one action from the current reported state."""
@@ -105,6 +116,8 @@ class HonestController:
         active_rules: list[str] = []
         targets: dict[str, object] = {}
         responses: list[dict[str, object]] = []
+        policy = POLICY_SPECS[self.selected_policy_variant]
+        safety_factor = policy.safety_factor
 
         difficult = (
             (self.topology.edge_type == PISTE)
@@ -121,8 +134,12 @@ class HonestController:
                     1.0,
                 )
                 magnitude = (
-                    self.config.route_weight * difficulty * (0.5 + 0.5 * reported_risk)
+                    self.config.route_weight
+                    * difficulty
+                    * (0.5 + 0.5 * shape_response(reported_risk, policy.curve))
+                    / safety_factor
                 )
+                magnitude = min(magnitude, self.config.route_weight)
                 desired["route_weights"][BEGINNER, edge] = -magnitude
                 responses.append(
                     self._response(
@@ -140,7 +157,7 @@ class HonestController:
             (self.topology.edge_type == PISTE)
             & self.topology.edge_controllable
             & ~closed
-            & (density >= self.config.unsafe_density_ratio)
+            & (density >= self.config.unsafe_density_ratio * safety_factor)
         )
         close_targets = [
             int(edge)
@@ -168,9 +185,10 @@ class HonestController:
             difference = float(queues[first] - queues[second])
             response = queue_deadband_response(
                 difference,
-                self.config.queue_difference,
+                self.config.queue_difference * safety_factor,
                 self.config.queue_full_response_difference,
             )
+            response = shape_response(response, policy.curve)
             if response != 0.0:
                 quieter, busier = (
                     (second, first) if difference > 0.0 else (first, second)
@@ -230,6 +248,9 @@ class HonestController:
                 output = self.config.route_weight * piecewise_linear_response(
                     capacity_share, 0.0, 1.0
                 )
+                output = self.config.route_weight * shape_response(
+                    output / self.config.route_weight, policy.curve
+                )
                 desired["route_weights"][:, alternative] = output
                 responses.append(
                     self._response(
@@ -265,10 +286,11 @@ class HonestController:
                 demand_response = piecewise_linear_response(
                     nearby_demand, 0.0, throughput
                 )
-                output = (
-                    self.config.minimum_evacuation_capacity
-                    + (1.0 - self.config.minimum_evacuation_capacity) * demand_response
+                demand_response = shape_response(demand_response, policy.curve)
+                minimum_capacity = 1.0 - (
+                    (1.0 - self.config.minimum_evacuation_capacity) * safety_factor
                 )
+                output = minimum_capacity + (1.0 - minimum_capacity) * demand_response
                 desired["lift_capacity"][edge] = output
                 desired["lift_capacity_enabled"][edge] = 1
                 responses.append(
@@ -291,11 +313,16 @@ class HonestController:
             group_mask = np.asarray(masks["groups"], dtype=bool)
             for node in crowded:
                 threshold = (
-                    self.topology.node_capacity[node] * self.config.crowding_ratio
+                    self.topology.node_capacity[node]
+                    * self.config.crowding_ratio
+                    * safety_factor
                 )
                 maximum = max(float(self.topology.node_capacity[node]), threshold + 1.0)
                 magnitude = self.config.route_weight * excess_response(
                     node_crowding[node], threshold, maximum
+                )
+                magnitude = self.config.route_weight * shape_response(
+                    magnitude / self.config.route_weight, policy.curve
                 )
                 desired["crowd_messages"][node, group_mask] = -magnitude
                 responses.append(
@@ -380,6 +407,9 @@ class HonestController:
                     "rules": tuple(active_rules),
                     "targets": targets,
                     "policy_version": HONEST_POLICY_VERSION,
+                    "policy_variant": self.selected_policy_variant,
+                    "response_curve": policy.curve,
+                    "safety_margin": policy.margin,
                     "responses": responses,
                     "rate_limits": self.config.action_rate_limits.__dict__,
                 }

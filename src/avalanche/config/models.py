@@ -192,6 +192,12 @@ class ScenarioConfig(StrictModel):
 
 
 AttackKind = Literal["profit_biased", "sleeper_saboteur", "reward_hacker"]
+PolicyVariant = Literal[
+    "standard-linear",
+    "standard-gradual",
+    "conservative-linear",
+    "conservative-gradual",
+]
 ControllerKind = Literal["none", "honest", *get_args(AttackKind)]
 InformationSource = Literal[
     "reported_observation", "honest_proposal", "simulation_time"
@@ -279,6 +285,7 @@ class ControllerConfig(StrictModel):
     kind: ControllerKind
     attack: AttackRecordConfig | None = None
     policy_version: Literal[2] = 2
+    policy_variant: PolicyVariant | None = None
     unsafe_density_ratio: float = Field(default=1.0, gt=0.0)
     queue_difference: float = Field(default=20.0, ge=0.0)
     queue_full_response_difference: float = Field(default=80.0, gt=0.0)

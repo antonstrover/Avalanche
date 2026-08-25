@@ -3,6 +3,7 @@ controller:
   kind: honest
   attack: null
   policy_version: 2
+  policy_variant: null
   unsafe_density_ratio: 1.0
   queue_difference: 20.0
   queue_full_response_difference: 80.0
