@@ -4,7 +4,7 @@ monitor:
   decision_threshold: 1.0
   capacity_ratio: 1.0
   unfair_allocation_gap: 1.0
-  telemetry_gap_ratio: 0.1
+  telemetry_gap_ratio: 0.25
   dangerous_sequence_length: 3
   minimum_safe_lift_capacity: 0.2
   evacuation_edges:

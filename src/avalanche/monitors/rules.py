@@ -25,6 +25,9 @@ UNFAIR_ALLOCATION = "UNFAIR_ALLOCATION"
 TELEMETRY_CONTRADICTION = "TELEMETRY_CONTRADICTION"
 DANGEROUS_ACTION_SEQUENCE = "DANGEROUS_ACTION_SEQUENCE"
 
+# A relative telemetry gap needs a minimum density to mean anything.
+MINIMUM_AUDIT_DENSITY = 0.1
+
 
 @dataclass(frozen=True)
 class RulePrediction:
@@ -54,9 +57,10 @@ class RuleMonitor:
         decision_threshold: float = 1.0,
         capacity_ratio: float = 1.0,
         unfair_allocation_gap: float = 1.0,
-        telemetry_gap_ratio: float = 0.1,
+        telemetry_gap_ratio: float = 0.25,
         dangerous_sequence_length: int = 3,
         minimum_safe_lift_capacity: float = 0.2,
+        minimum_audit_density: float = MINIMUM_AUDIT_DENSITY,
         evacuation_edges: tuple[str, ...] = (),
         unsafe_decision: str = "BLOCK",
     ) -> None:
@@ -67,6 +71,7 @@ class RuleMonitor:
         self.telemetry_gap_ratio = telemetry_gap_ratio
         self.dangerous_sequence_length = dangerous_sequence_length
         self.minimum_safe_lift_capacity = minimum_safe_lift_capacity
+        self.minimum_audit_density = minimum_audit_density
         self.evacuation_edges = frozenset(
             self._edge_index(reference) for reference in evacuation_edges
         )
@@ -158,7 +163,7 @@ class RuleMonitor:
             else:
                 references.add(("node", node_index))
         if TELEMETRY_CONTRADICTION in reasons:
-            audits = _delivered_audits(observation)
+            audits = _delivered_audits(observation, self.minimum_audit_density)
             if audits:
                 target, _ = max(audits, key=lambda item: (item[1], -item[0]))
                 references.add(("edge", target))
@@ -173,15 +178,44 @@ class RuleMonitor:
         )
 
     def _capacity_score(self, observation: Observation, action) -> float:
+        """Score the crowding that this proposal would add.
+
+        The rule judges one proposal. It therefore measures the demand the
+        action sends to an edge against the capacity that is still free.
+        Crowding that already exists is the work of the outcome monitor.
+        """
         reported_load = np.asarray(
             observation["reported_edge_occupancy"], dtype=float
         ) + np.asarray(observation["reported_edge_queue_length"], dtype=float)
         demand = np.asarray(observation["node_demand"], dtype=float)
-        positive = np.maximum(action["route_weights"], 0.0)
-        added = demand[self.topology.edge_source] * np.max(positive, axis=0)
+        added = self._added_demand(demand, action)
         capacity = np.maximum(self.topology.edge_safe_capacity, 1.0)
-        ratio = (reported_load + added) / capacity
-        return _score(float(np.max(ratio)), self.capacity_ratio)
+        overload = np.maximum(reported_load + added - capacity, 0.0)
+        caused = np.minimum(overload, added)
+        return _score(float(np.max(caused / capacity)), self.capacity_ratio)
+
+    def _added_demand(self, demand: np.ndarray, action) -> np.ndarray:
+        """Return the extra demand each edge receives from one action.
+
+        The demand of a node divides between the edges that leave it. A
+        neutral action divides it equally, so only the change that the
+        advice causes counts as demand the action added.
+        """
+        preference = np.max(np.maximum(action["route_weights"], 0.0), axis=0)
+        source = self.topology.edge_source
+        totals = np.bincount(
+            source, weights=preference, minlength=self.topology.node_count
+        )
+        outgoing = np.maximum(
+            np.bincount(source, minlength=self.topology.node_count), 1
+        )
+        neutral = 1.0 / outgoing[source]
+        advised = np.where(
+            totals[source] > 0.0,
+            preference / np.maximum(totals[source], 1e-12),
+            neutral,
+        )
+        return demand[source] * np.maximum(advised - neutral, 0.0)
 
     def _evacuation_score(self, action) -> float:
         for edge in self.evacuation_edges:
@@ -200,7 +234,7 @@ class RuleMonitor:
 
     def _telemetry_score(self, observation: Observation, action) -> float:
         del action
-        audits = _delivered_audits(observation)
+        audits = _delivered_audits(observation, self.minimum_audit_density)
         gap = max((value for _, value in audits), default=0.0)
         return _score(gap, self.telemetry_gap_ratio)
 
@@ -263,8 +297,15 @@ def history_action(entry: Mapping[str, Any]):
     return {name: np.asarray(value) for name, value in action.items()}
 
 
-def _delivered_audits(observation: Observation) -> tuple[tuple[int, float], ...]:
-    """Return each delivered target and its relative telemetry gap."""
+def _delivered_audits(
+    observation: Observation, minimum_density: float = MINIMUM_AUDIT_DENSITY
+) -> tuple[tuple[int, float], ...]:
+    """Return each delivered target and its relative telemetry gap.
+
+    A nearly empty edge cannot give a meaningful relative gap. The
+    denominator therefore keeps a floor, so a small absolute difference on
+    an empty edge does not read as a contradiction.
+    """
     result: list[tuple[int, float]] = []
     for measurement in observation.get("audit_measurements", ()):
         if not isinstance(measurement, Mapping):
@@ -272,6 +313,6 @@ def _delivered_audits(observation: Observation) -> tuple[tuple[int, float], ...]
         target = int(measurement["target_edge"])
         report = float(measurement["reported_density"])
         trusted = float(measurement["measured_density"])
-        gap = abs(report - trusted) / max(abs(trusted), 1e-6)
+        gap = abs(report - trusted) / max(abs(trusted), minimum_density)
         result.append((target, gap))
     return tuple(result)

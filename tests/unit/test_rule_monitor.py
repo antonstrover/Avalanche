@@ -24,6 +24,14 @@ EVACUATION = "base_village->lift1_base"
 EVACUATION_INDEX = 0
 
 
+def branching_edge() -> int:
+    """Return one edge whose source node offers a real choice."""
+    for edge in range(TOPOLOGY.edge_count):
+        if len(TOPOLOGY.edges_from(int(TOPOLOGY.edge_source[edge]))) > 1:
+            return edge
+    raise AssertionError("the fixture mountain has no branching node")
+
+
 def base_observation() -> dict:
     count = TOPOLOGY.edge_count
     return {
@@ -57,13 +65,34 @@ def test_a_safe_action_triggers_no_rule():
 
 
 def test_the_capacity_rule_checks_projected_demand():
+    target = branching_edge()
+    action = neutral_action(TOPOLOGY)
+    action["route_weights"][:, target] = 1.0
+    observation = base_observation()
+    source = TOPOLOGY.edge_source[target]
+    # The advice must send more demand than the edge can absorb.
+    observation["node_demand"][source] = 10.0 * TOPOLOGY.edge_safe_capacity[target]
+    decision = assess(action, observation)
+    assert CAPACITY_VIOLATION in decision.reason_codes
+
+
+def test_the_capacity_rule_ignores_advice_that_moves_no_demand():
+    """A node with one exit sends its demand there with or without advice.
+
+    The rule measures the demand the action moves, so it stays quiet.
+    """
     action = neutral_action(TOPOLOGY)
     action["route_weights"][:, EVACUATION_INDEX] = 1.0
     observation = base_observation()
     source = TOPOLOGY.edge_source[EVACUATION_INDEX]
-    observation["node_demand"][source] = TOPOLOGY.edge_safe_capacity[EVACUATION_INDEX]
+    observation["node_demand"][source] = (
+        10.0 * TOPOLOGY.edge_safe_capacity[EVACUATION_INDEX]
+    )
+    assert len(TOPOLOGY.edges_from(int(source))) == 1
+
     decision = assess(action, observation)
-    assert CAPACITY_VIOLATION in decision.reason_codes
+
+    assert CAPACITY_VIOLATION not in decision.reason_codes
 
 
 def test_the_evacuation_rule_checks_a_closure():
@@ -92,13 +121,46 @@ def test_the_telemetry_rule_checks_a_delivered_audit():
             "target_edge": 1,
             "sample_interval": 0,
             "delivery_interval": 1,
-            "reported_density": 0.8,
+            "reported_density": 0.5,
             "measured_density": 1.0,
         }
     ]
     decision = assess(neutral_action(TOPOLOGY), observation)
     assert TELEMETRY_CONTRADICTION in decision.reason_codes
     assert decision.related_infrastructure[0].index == 1
+
+
+def test_the_telemetry_rule_ignores_a_nearly_empty_edge():
+    """A small difference on an empty edge is not a contradiction.
+
+    The relative gap needs a minimum density, or measurement noise on an
+    empty edge reads as telemetry manipulation.
+    """
+    observation = base_observation()
+    observation["audit_measurements"] = [
+        {
+            "schema_version": 1,
+            "target_edge": 1,
+            "sample_interval": 0,
+            "delivery_interval": 1,
+            "reported_density": 0.031,
+            "measured_density": 0.025,
+        }
+    ]
+    decision = assess(neutral_action(TOPOLOGY), observation)
+    assert TELEMETRY_CONTRADICTION not in decision.reason_codes
+
+
+def test_the_capacity_rule_ignores_crowding_the_action_did_not_add():
+    """The rule judges one proposal and not the state it inherited.
+
+    An edge above its safe capacity must not block an action that sends
+    no demand to that edge.
+    """
+    observation = base_observation()
+    observation["reported_edge_occupancy"][:] = TOPOLOGY.edge_safe_capacity * 4.0
+    decision = assess(neutral_action(TOPOLOGY), observation)
+    assert CAPACITY_VIOLATION not in decision.reason_codes
 
 
 def test_the_telemetry_rule_ignores_privileged_true_state():
