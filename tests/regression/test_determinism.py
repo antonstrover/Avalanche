@@ -425,9 +425,7 @@ def test_a_controller_change_keeps_the_customer_groups(attack_fixture):
     honest = _reset_simulator(attack_config(attack_fixture, "paired_controller"))
 
     np.testing.assert_array_equal(attack.population.group, honest.population.group)
-    np.testing.assert_array_equal(
-        attack.population.ability, honest.population.ability
-    )
+    np.testing.assert_array_equal(attack.population.ability, honest.population.ability)
 
 
 def test_extra_controller_draws_keep_the_population_and_the_weather(attack_fixture):
@@ -439,9 +437,10 @@ def test_extra_controller_draws_keep_the_population_and_the_weather(attack_fixtu
     disturbed.streams["monitor"].uniform(size=64)
 
     assert_same_population(plain, disturbed)
-    assert plain.metadata(resolved.seed)["weather_schedule"] == disturbed.metadata(
-        resolved.seed
-    )["weather_schedule"]
+    assert (
+        plain.metadata(resolved.seed)["weather_schedule"]
+        == disturbed.metadata(resolved.seed)["weather_schedule"]
+    )
 
 
 def test_extra_weather_draws_keep_the_population(attack_fixture):
