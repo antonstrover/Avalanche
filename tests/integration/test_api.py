@@ -12,17 +12,24 @@ from avalanche.api.app import app
 from avalanche.api.sessions import (
     DEMO_FAILURE_TARGET,
     MOUNTAIN_PATH,
+    STREAM_VERSION,
     TIMELINE_LIMIT,
+    attack_state,
     display_state,
     manager,
     run_session,
     topology_version,
 )
+from avalanche.config import load_yaml
+from avalanche.config.models import ControllerConfig
 from avalanche.sim import MountainSim, load_topology
 
 client = TestClient(app)
 CONTRACT_FIXTURE = (
     Path(__file__).resolve().parents[1] / "fixtures" / "live-frame-v3.msgpack.b64"
+)
+CURRENT_CONTRACT_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "live-frame-v5.msgpack.b64"
 )
 SCENE_RESORT = (
     Path(__file__).resolve().parents[2]
@@ -150,7 +157,7 @@ def test_live_session_streams_a_complete_population():
 
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
         first = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        assert first["version"] == 4
+        assert first["version"] == 5
         assert first["type"] == "snapshot"
         assert first["session_id"] == session_id
         assert len(first["payload"]["location_kind"]) == 5000
@@ -164,6 +171,7 @@ def test_live_session_streams_a_complete_population():
             "timeline",
             "decision",
             "telemetry",
+            "attack",
         }
         assert (
             first["payload"]["display"]["decision"]["proposal"]["controller_id"]
@@ -171,7 +179,10 @@ def test_live_session_streams_a_complete_population():
         )
 
         websocket.send_bytes(
-            msgpack.packb({"version": 4, "type": "snapshot_request"}, use_bin_type=True)
+            msgpack.packb(
+                {"version": STREAM_VERSION, "type": "snapshot_request"},
+                use_bin_type=True,
+            )
         )
         recovered = msgpack.unpackb(websocket.receive_bytes(), raw=False)
         assert recovered["type"] == "snapshot"
@@ -450,3 +461,77 @@ def test_the_timeline_window_is_bounded_and_has_unique_identities():
     identities = {event["event_id"] for event in timeline}
     assert len(timeline) == TIMELINE_LIMIT
     assert len(identities) == TIMELINE_LIMIT
+
+
+def test_python_decodes_the_current_stream_contract_fixture():
+    packed = base64.b64decode(CURRENT_CONTRACT_FIXTURE.read_text().strip())
+    frame = msgpack.unpackb(packed, raw=False)
+    attack = frame["payload"]["display"]["attack"]
+
+    assert frame["version"] == STREAM_VERSION == 5
+    assert frame["session_id"] == "fixture-session"
+    assert attack["kind"] == "reward_hacker"
+    assert attack["active"] is True
+    assert attack["targets"]
+    assert attack["divergent_edges"]
+    reported = frame["payload"]["display"]["telemetry"]["reported_density"]
+    true = frame["payload"]["display"]["telemetry"]["true_density"]
+    for edge in attack["divergent_edges"]:
+        assert reported[edge] != true[edge]
+
+
+def reward_hacker_config() -> ControllerConfig:
+    """Return the configured reward-hacker controller."""
+    path = MOUNTAIN_PATH.parents[1] / "controllers" / "reward-hacker.yaml"
+    return ControllerConfig.model_validate(load_yaml(path)["controller"])
+
+
+def test_the_attack_state_reports_no_attack_without_a_controller():
+    sim = MountainSim(MOUNTAIN_PATH)
+    sim.reset(3)
+
+    state = attack_state(sim, None)
+
+    assert state == {
+        "kind": "none",
+        "active": False,
+        "targets": [],
+        "divergent_edges": [],
+    }
+
+
+def test_the_attack_state_reports_the_configured_targets():
+    sim = MountainSim(MOUNTAIN_PATH)
+    sim.reset(3)
+
+    state = attack_state(sim, reward_hacker_config())
+
+    assert state["kind"] == "reward_hacker"
+    assert state["active"] is True
+    assert len(state["targets"]) == 2
+    assert state["divergent_edges"] == []
+
+
+def test_the_attack_state_finds_each_divergent_edge():
+    sim = MountainSim(MOUNTAIN_PATH)
+    sim.reset(3)
+    sim.state.density_ratio[4] = 0.9
+    sim.state.reported_density_ratio[4] = 0.4
+
+    state = attack_state(sim, reward_hacker_config())
+
+    assert state["divergent_edges"] == [4]
+
+
+def test_an_honest_controller_reports_no_divergent_edge():
+    sim = MountainSim(MOUNTAIN_PATH)
+    sim.reset(3)
+    sim.state.density_ratio[4] = 0.9
+    sim.state.reported_density_ratio[4] = 0.4
+    honest = ControllerConfig(kind="honest")
+
+    state = attack_state(sim, honest)
+
+    assert state["kind"] == "honest"
+    assert state["active"] is False
+    assert state["divergent_edges"] == []

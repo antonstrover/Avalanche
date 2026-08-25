@@ -23,11 +23,12 @@ const display: DisplayState = {
         reported_speed: [], true_speed: [],
         reported_closed: [], true_closed: [],
     },
+    attack: { kind: "reward_hacker", active: true, targets: [1], divergent_edges: [1] },
 };
 
 function packedFrame(sequence = 0): ArrayBuffer {
     const packed = encode({
-        version: 4,
+        version: 5,
         type: sequence === 0 ? "snapshot" : "frame",
         session_id: "session-1",
         sequence,
@@ -46,7 +47,27 @@ function packedFrame(sequence = 0): ArrayBuffer {
 }
 
 describe("live frame handling", () => {
-    it("decodes the shared stream contract fixture", () => {
+    it("decodes the current stream contract fixture", () => {
+        const encoded = readFileSync(
+            "../tests/fixtures/live-frame-v5.msgpack.b64",
+            "utf8",
+        );
+        const bytes = Buffer.from(encoded.trim(), "base64");
+        const packed = bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+        ) as ArrayBuffer;
+        const result = decodeFrame(packed, "fixture-session", "fixture-topology", 100);
+        const attack = result.frame?.display.attack;
+
+        expect(result.frame?.sequence).toBe(3);
+        expect(attack?.kind).toBe("reward_hacker");
+        expect(attack?.active).toBe(true);
+        expect(attack?.targets.length).toBe(2);
+        expect(attack?.divergent_edges.length).toBeGreaterThan(0);
+    });
+
+    it("decodes the legacy stream contract fixture", () => {
         const encoded = readFileSync(
             "../tests/fixtures/live-frame-v3.msgpack.b64",
             "utf8",
@@ -67,6 +88,8 @@ describe("live frame handling", () => {
         expect(result.frame?.progress[0]).toBe(0.5);
         expect(result.frame?.display.weather.wind).toBe(12);
         expect(result.frame?.display.decision?.proposal.controller_id).toBe("honest");
+        expect(result.frame?.display.attack.kind).toBe("none");
+        expect(result.frame?.display.attack.divergent_edges).toEqual([]);
     });
 
     it("decodes the binary population arrays", () => {
@@ -94,7 +117,7 @@ describe("live frame handling", () => {
 
     it("rejects an invalid binary array length", () => {
         const packed = encode({
-            version: 4,
+            version: 5,
             type: "snapshot",
             session_id: "session-1",
             sequence: 0,
