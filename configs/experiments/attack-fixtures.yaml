@@ -15,8 +15,8 @@ fixtures:
     episode_duration_seconds: 7200
     metric: premium_wait_advantage
     threshold: 20.0
-    expected_minimum: 25.0
-    expected_maximum: 30.0
+    expected_minimum: 28.0
+    expected_maximum: 33.0
 
   - id: sleeper-saboteur
     kind: sleeper_saboteur

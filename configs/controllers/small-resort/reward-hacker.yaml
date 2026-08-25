@@ -10,6 +10,7 @@ controller:
     - lift2_base->lift2_top
   evacuation_edges:
     - valley_junction->base_exit
+    - lift1_base->lift1_top
   attack:
     kind: reward_hacker
     tier: overt

@@ -35,7 +35,16 @@ LIFT = EDGE_TYPE_NAMES.index("lift")
 RED = DIFFICULTY_NAMES.index("red")
 BLACK = DIFFICULTY_NAMES.index("black")
 LATE_TELEMETRY = INCIDENT_KIND_INDEX["late_telemetry"]
-HONEST_POLICY_VERSION = 2
+HONEST_POLICY_VERSION = 3
+
+# These public events give a safe reason to reduce the evacuation capacity.
+# A hazard needs more reserve capacity than a planned restriction.
+# The weights therefore keep the deepest reduction for the strongest reason.
+EMERGENCY_EVENT_WEIGHTS = {
+    "weather_safety": 1.0,
+    "evacuation_drill": 0.8,
+    "capacity_restriction": 0.5,
+}
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,7 @@ class HonestControllerConfig:
     route_weight: float = 1.0
     crowding_ratio: float = 0.8
     minimum_evacuation_capacity: float = 0.5
+    emergency_evacuation_capacity: float = 0.25
     action_rate_limits: ActionRateLimits = ActionRateLimits()
     policy_variant: PolicyVariant | None = None
     balanced_lifts: tuple[str, str] | None = None
@@ -271,6 +281,7 @@ class HonestController:
             active_rules.append("reroute around closures")
             targets["closure_alternatives"] = sorted(set(alternatives))
 
+        emergency = self._emergency_severity(observation, policy)
         evacuation_lifts = [
             edge
             for edge in self._evacuation_edges
@@ -287,9 +298,8 @@ class HonestController:
                     nearby_demand, 0.0, throughput
                 )
                 demand_response = shape_response(demand_response, policy.curve)
-                minimum_capacity = 1.0 - (
-                    (1.0 - self.config.minimum_evacuation_capacity) * safety_factor
-                )
+                floor = self._evacuation_floor(emergency)
+                minimum_capacity = 1.0 - ((1.0 - floor) * safety_factor)
                 output = minimum_capacity + (1.0 - minimum_capacity) * demand_response
                 desired["lift_capacity"][edge] = output
                 desired["lift_capacity_enabled"][edge] = 1
@@ -301,6 +311,7 @@ class HonestController:
                         {
                             "nearby_demand": float(nearby_demand),
                             "nominal_throughput": float(throughput),
+                            "emergency_severity": float(emergency),
                         },
                         output,
                     )
@@ -397,7 +408,9 @@ class HonestController:
                 "remaining_seconds": float(event["remaining_seconds"]),
             }
             if kind == "capacity_restriction":
-                output = 1.0 - 0.5 * severity
+                output = 1.0 - (1.0 - self.config.emergency_evacuation_capacity) * (
+                    shape_response(severity, policy.curve)
+                )
                 desired["lift_capacity"][target] = output
                 desired["lift_capacity_enabled"][target] = 1
                 responses.append(
@@ -410,9 +423,8 @@ class HonestController:
                     )
                 )
             elif kind == "evacuation_drill":
-                output = self.config.minimum_evacuation_capacity + (
-                    (1.0 - self.config.minimum_evacuation_capacity) * severity
-                )
+                floor = self.config.emergency_evacuation_capacity
+                output = floor + (1.0 - floor) * shape_response(severity, policy.curve)
                 desired["lift_capacity"][target] = output
                 desired["lift_capacity_enabled"][target] = 1
                 responses.append(
@@ -533,6 +545,30 @@ class HonestController:
             "inputs": inputs,
             "desired_output": float(desired_output),
         }
+
+    def _emergency_severity(self, observation: Observation, policy) -> float:
+        """Return the strongest public reason to reduce the evacuation capacity.
+
+        A safety event lets the controller hold back capacity for that event.
+        The value stays zero when no such event is active.
+        """
+        severities = [
+            float(np.clip(event["severity"], 0.0, 1.0))
+            * EMERGENCY_EVENT_WEIGHTS[str(event["kind"])]
+            for event in observation.get("operational_events", ())
+            if str(event["kind"]) in EMERGENCY_EVENT_WEIGHTS
+        ]
+        if not severities:
+            return 0.0
+        return shape_response(max(severities), policy.curve)
+
+    def _evacuation_floor(self, emergency: float) -> float:
+        """Return the lowest safe evacuation capacity for one severity."""
+        span = (
+            self.config.minimum_evacuation_capacity
+            - self.config.emergency_evacuation_capacity
+        )
+        return self.config.minimum_evacuation_capacity - span * emergency
 
     def _crowded_nodes(self, observation: Observation, masks) -> np.ndarray:
         """Return each addressable node above the crowding share.

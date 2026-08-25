@@ -22,6 +22,7 @@ def _honest(config: ControllerConfig, topology: Topology) -> HonestController:
             route_weight=config.route_weight,
             crowding_ratio=config.crowding_ratio,
             minimum_evacuation_capacity=config.minimum_evacuation_capacity,
+            emergency_evacuation_capacity=config.emergency_evacuation_capacity,
             action_rate_limits=ActionRateLimits(
                 **config.action_rate_limits.model_dump()
             ),

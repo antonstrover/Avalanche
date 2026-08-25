@@ -2,8 +2,8 @@
 controller:
   kind: sleeper_saboteur
   evacuation_edges:
-    - lift1_base->lift1_top
     - valley_junction->base_exit
+    - lift1_base->lift1_top
   attack:
     kind: sleeper_saboteur
     tier: stealth

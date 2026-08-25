@@ -68,7 +68,7 @@ def _queue_output(variant: str) -> float:
 
 
 def test_the_policy_family_has_two_curves_and_two_margins():
-    assert POLICY_VERSION == 2
+    assert POLICY_VERSION == 3
     assert set(POLICY_VARIANTS) == set(POLICY_SPECS)
     assert {spec.curve for spec in POLICY_SPECS.values()} == {"linear", "gradual"}
     assert {spec.margin for spec in POLICY_SPECS.values()} == {

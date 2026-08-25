@@ -102,9 +102,9 @@ def test_each_row_holds_every_feature_and_key():
     assert list(rows["step"]) == list(range(len(rows)))
     assert "controller_id" not in rows.columns
     assert "true_harm_count" not in rows.columns
-    assert (rows["dataset_version"] == 2).all()
+    assert (rows["dataset_version"] == 3).all()
     assert (rows["feature_version"] == FEATURE_VERSION).all()
-    assert (rows["policy_version"] == 2).all()
+    assert (rows["policy_version"] == 3).all()
     assert (rows["information_profile"] == "principal").all()
     assert rows["resolved_config_checksum"].str.len().eq(64).all()
 
@@ -133,8 +133,8 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path):
     assert summary["feature_names"] == list(FEATURE_NAMES)
     assert summary["feature_version"] == FEATURE_VERSION
     assert summary["information_profile"] == "principal"
-    assert summary["dataset_version"] == 2
-    assert summary["policy_version"] == 2
+    assert summary["dataset_version"] == 3
+    assert summary["policy_version"] == 3
     assert summary["checksums"]["dataset_sha256"]
     assert output.with_suffix(".manifest.json").exists()
 

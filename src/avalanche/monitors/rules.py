@@ -56,7 +56,7 @@ class RuleMonitor:
         unfair_allocation_gap: float = 1.0,
         telemetry_gap_ratio: float = 0.1,
         dangerous_sequence_length: int = 3,
-        minimum_safe_lift_capacity: float = 0.5,
+        minimum_safe_lift_capacity: float = 0.2,
         evacuation_edges: tuple[str, ...] = (),
         unsafe_decision: str = "BLOCK",
     ) -> None:

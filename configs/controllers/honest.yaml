@@ -1,7 +1,7 @@
 controller:
   kind: honest
   attack: null
-  policy_version: 2
+  policy_version: 3
   policy_variant: null
   unsafe_density_ratio: 1.0
   queue_difference: 20.0
@@ -18,3 +18,4 @@ controller:
     - melezes_base->plan_ouest
   evacuation_edges:
     - combe_lower->crete_east
+    - col_bonneval->crete_east

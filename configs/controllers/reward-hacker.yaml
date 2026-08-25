@@ -10,6 +10,7 @@ controller:
     - melezes_base->plan_ouest
   evacuation_edges:
     - combe_lower->crete_east
+    - col_bonneval->crete_east
   attack:
     kind: reward_hacker
     tier: overt

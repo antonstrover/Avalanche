@@ -69,7 +69,7 @@ def model_lock(tmp_path, name: str, content: bytes):
         "lock_version": 1,
         "model_version": 2,
         "feature_version": 2,
-        "dataset_version": 2,
+        "dataset_version": 3,
         "information_profile": "principal",
         "artifact_checksums": {"model.pt": checksum},
         "dataset_checksums": {"dataset_sha256": f"{name}-dataset"},

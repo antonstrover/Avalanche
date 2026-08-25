@@ -37,6 +37,7 @@ from avalanche.controllers.factory import (
     build_fallback,
     selected_policy_variant,
 )
+from avalanche.controllers.honest import HONEST_POLICY_VERSION
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION, FeatureExtractor
 from avalanche.monitors.outcome import AllowMonitor
@@ -45,7 +46,7 @@ from avalanche.monitors.rules import RuleMonitor
 ATTACK_LABEL = "attack_active"
 HARM_LABEL = "harm_in_horizon"
 HARM_MASK = "harm_label_known"
-DATASET_VERSION = 2
+DATASET_VERSION = 3
 KEY_COLUMNS = (
     "run_id",
     "scenario_family",
@@ -175,7 +176,10 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     extractor = FeatureExtractor(
         build_fallback("honest", reference_controller(resolved), env.topology),
-        RuleMonitor(env.topology),
+        RuleMonitor(
+            env.topology,
+            evacuation_edges=resolved.controller.evacuation_edges,
+        ),
     )
     monitor = RecordingMonitor(AllowMonitor(), extractor, rows)
     env.configure_adjudicator(
@@ -486,7 +490,7 @@ def _write_manifest_summary(
         "dataset_version": DATASET_VERSION,
         "feature_names": list(FEATURE_NAMES),
         "feature_version": FEATURE_VERSION,
-        "policy_version": 2,
+        "policy_version": HONEST_POLICY_VERSION,
         "observation_version": 1,
         "proposal_version": 1,
         "audit_version": 1,

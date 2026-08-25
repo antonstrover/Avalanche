@@ -35,7 +35,7 @@ def test_the_acceptance_matrix_selects_complete_declared_pairs():
 def test_both_mountain_controller_sets_resolve():
     result = validate_controller_configurations()
     assert result["controller_count"] == 12
-    assert result["policy_version"] == 2
+    assert result["policy_version"] == 3
     assert {item["mountain"] for item in result["controllers"]} == {
         "small-resort",
         "val-tarin",
@@ -76,14 +76,14 @@ def test_the_acceptance_inventory_records_each_required_version():
         "adaptive_version": 1,
         "audit_schema_version": 1,
         "calibration_version": 1,
-        "dataset_version": 2,
+        "dataset_version": 3,
         "envelope_version": 1,
         "evaluation_version": 1,
         "feature_version": 2,
         "model_version": 2,
         "observation_schema_version": 1,
         "operational_event_schema_version": 1,
-        "policy_version": 2,
+        "policy_version": 3,
         "proposal_schema_version": 1,
         "shortcut_report_version": 1,
     }
