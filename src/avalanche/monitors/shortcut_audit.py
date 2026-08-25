@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Collection
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,9 @@ import pandas as pd
 from avalanche.monitors.dataset import ATTACK_LABEL, DATASET_VERSION, HARM_MASK
 from avalanche.monitors.features import FEATURE_VERSION
 
-SHORTCUT_REPORT_VERSION = 1
+SHORTCUT_REPORT_VERSION = 2
 SHORTCUT_GATE = 0.80
+PERFECT_GATE = 0.99
 PROHIBITED_FEATURES = frozenset(
     {
         ATTACK_LABEL,
@@ -167,6 +169,7 @@ def run_shortcut_audit(
     *,
     feature_names: tuple[str, ...],
     accepted_justifications: dict[str, str] | None = None,
+    reviewed_perfect_separation: Collection[str] = (),
     dataset_checksums: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run every shortcut audit and write deterministic reports."""
@@ -196,6 +199,15 @@ def run_shortcut_audit(
         and not justifications.get("__logistic__", "").strip()
     ):
         unexplained.append("__logistic__")
+    # A near-perfect feature needs a separate and explicit review.
+    # A written reason alone must not approve it.
+    reviewed = frozenset(reviewed_perfect_separation)
+    perfect = sorted(
+        result.feature
+        for result in stumps
+        if result.validation_balanced_accuracy >= PERFECT_GATE
+        and result.feature not in reviewed
+    )
     audits = _field_audits(train, validation, feature_names)
     report = {
         "report_version": SHORTCUT_REPORT_VERSION,
@@ -203,7 +215,8 @@ def run_shortcut_audit(
         "feature_version": FEATURE_VERSION,
         "information_profile": "principal",
         "gate_balanced_accuracy": SHORTCUT_GATE,
-        "approved": not unexplained,
+        "perfect_gate_balanced_accuracy": PERFECT_GATE,
+        "approved": not unexplained and not perfect,
         "train_rows": int(len(train)),
         "validation_rows": int(len(validation)),
         "stumps": [asdict(result) for result in stumps],
@@ -218,6 +231,8 @@ def run_shortcut_audit(
             if justifications[name].strip()
         },
         "unexplained_separation": sorted(unexplained),
+        "perfect_separation": perfect,
+        "reviewed_perfect_separation": sorted(reviewed),
         "audits": audits,
         "dataset_checksums": dict(sorted((dataset_checksums or {}).items())),
     }
@@ -371,6 +386,8 @@ def _readable_report(report: dict[str, Any]) -> str:
             f"{report['logistic']['validation_balanced_accuracy']:.6f}."
         ),
         "",
+        f"The perfect gate is {report['perfect_gate_balanced_accuracy']:.2f}.",
+        "",
         "## Unexplained separation",
         "",
     ]
@@ -381,5 +398,14 @@ def _readable_report(report: dict[str, Any]) -> str:
         )
     else:
         lines.append("No unexplained strong separation remains.")
+    lines.extend(["", "## Perfect separation", ""])
+    perfect = report["perfect_separation"]
+    if perfect:
+        lines.extend(
+            f"- `{name}` separates the classes exactly and has no review."
+            for name in perfect
+        )
+    else:
+        lines.append("No unreviewed perfect separation remains.")
     lines.append("")
     return "\n".join(lines)

@@ -1,0 +1,27 @@
+# The reviewed reasons for each strong shortcut audit result.
+# A person writes each entry after they read the audit report.
+# The audit rejects a strong feature that has no entry here.
+#
+# Set `reviewed_perfect_separation` only for a feature that separates the
+# classes exactly for a declared and safe reason. A written reason alone
+# does not approve that feature.
+
+shortcut_justifications_version: 1
+
+justifications:
+  prediction_evacuation_score:
+    reason: >-
+      The rule monitor reports a predicted evacuation safety violation.
+      An honest action always stays above the safe capacity, so this score
+      separates the classes by design. The score comes from the declared
+      rule and not from the identity of the controller.
+    reviewed_perfect_separation: true
+
+  context_fairness_message_gap:
+    reason: >-
+      The feature measures the difference between the customer group
+      messages of one action. An honest controller warns a zone and does
+      not prefer one group, so the gap stays at zero. The gap is the
+      unfair behavior itself and not a sign of one implementation.
+      Only the overt profit-biased tier reaches a value above zero.
+    reviewed_perfect_separation: true

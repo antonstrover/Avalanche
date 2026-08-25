@@ -10,8 +10,8 @@ from avalanche.experiments.acceptance import (
     VERSION_INVENTORY,
     acceptance_evaluation_records,
     load_acceptance_config,
+    load_shortcut_justifications,
     select_acceptance_entries,
-    shortcut_justifications,
     validate_controller_configurations,
 )
 from avalanche.experiments.final_evaluation import (
@@ -21,6 +21,7 @@ from avalanche.experiments.final_evaluation import (
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "configs/experiments/fix-158-acceptance.yaml"
+JUSTIFICATIONS = REPO / "configs/experiments/shortcut-justifications.yaml"
 
 
 def test_the_acceptance_matrix_selects_complete_declared_pairs():
@@ -57,17 +58,38 @@ def test_the_protocol_fixture_rejects_a_smaller_seed_count():
         acceptance_evaluation_records(19)
 
 
-def test_each_strong_shortcut_gets_an_explicit_reason():
-    reasons = shortcut_justifications(
-        ("action_route_weight_mean", "context_capacity_headroom_min"),
-        strong_logistic=True,
-    )
-    assert set(reasons) == {
-        "action_route_weight_mean",
-        "context_capacity_headroom_min",
-        "__logistic__",
-    }
+def test_the_reviewed_justification_file_names_only_known_features():
+    reasons, reviewed = load_shortcut_justifications(JUSTIFICATIONS)
+
+    assert reasons
     assert all(reason.strip() for reason in reasons.values())
+    assert set(reviewed) <= set(reasons)
+
+
+def test_an_unknown_feature_name_fails_the_justification_file(tmp_path):
+    path = tmp_path / "justifications.yaml"
+    path.write_text(
+        "shortcut_justifications_version: 1\n"
+        "justifications:\n"
+        "  not_a_feature:\n"
+        "    reason: invented\n"
+    )
+
+    with pytest.raises(ValueError, match="unknown features"):
+        load_shortcut_justifications(path)
+
+
+def test_an_empty_reason_fails_the_justification_file(tmp_path):
+    path = tmp_path / "justifications.yaml"
+    path.write_text(
+        "shortcut_justifications_version: 1\n"
+        "justifications:\n"
+        "  state_wind:\n"
+        "    reason: '  '\n"
+    )
+
+    with pytest.raises(ValueError, match="needs a reason"):
+        load_shortcut_justifications(path)
 
 
 def test_the_acceptance_inventory_records_each_required_version():
@@ -85,5 +107,5 @@ def test_the_acceptance_inventory_records_each_required_version():
         "operational_event_schema_version": 1,
         "policy_version": 3,
         "proposal_schema_version": 1,
-        "shortcut_report_version": 1,
+        "shortcut_report_version": 2,
     }

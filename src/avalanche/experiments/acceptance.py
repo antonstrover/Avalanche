@@ -29,7 +29,7 @@ from avalanche.experiments.final_evaluation import (
     POLICY_VARIANTS,
 )
 from avalanche.monitors.dataset import DATASET_VERSION, DatasetEntry, expand_manifest
-from avalanche.monitors.features import FEATURE_VERSION
+from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.perceptron import (
     MODEL_VERSION,
     TrainingConfig,
@@ -337,31 +337,61 @@ def acceptance_evaluation_records(root_seed_count: int = 20) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def shortcut_justifications(
-    strong_features: Sequence[str],
-    *,
-    strong_logistic: bool,
-) -> dict[str, str]:
-    """Return an explicit operational reason for every strong audit result."""
-    reasons = {}
-    for name in strong_features:
-        block = name.split("_", maxsplit=1)[0]
-        reasons[name] = f"The feature measures declared {block} process evidence."
-    if strong_logistic:
-        reasons["__logistic__"] = (
-            "The audit combines only declared principal process evidence."
+SHORTCUT_JUSTIFICATIONS_VERSION = 1
+DEFAULT_JUSTIFICATIONS_PATH = "configs/experiments/shortcut-justifications.yaml"
+LOGISTIC_AUDIT_KEY = "__logistic__"
+
+
+def load_shortcut_justifications(
+    path: Path,
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Load the reviewed reasons for each strong audit result.
+
+    A person writes this file. The audit rejects any strong feature that
+    has no entry, so a generated reason cannot approve one dataset.
+    """
+    config = load_yaml(path)
+    if config.get("shortcut_justifications_version") != SHORTCUT_JUSTIFICATIONS_VERSION:
+        raise ValueError("the shortcut justification version is incompatible")
+    entries = config.get("justifications") or {}
+    if not isinstance(entries, Mapping):
+        raise ValueError("the shortcut justifications must be one mapping")
+    known = set(FEATURE_NAMES) | {LOGISTIC_AUDIT_KEY}
+    unknown = sorted(set(entries) - known)
+    if unknown:
+        raise ValueError(
+            f"the shortcut justifications name unknown features: {', '.join(unknown)}"
         )
-    return reasons
+    reasons: dict[str, str] = {}
+    reviewed: list[str] = []
+    for name in sorted(entries):
+        entry = entries[name]
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"the justification for {name!r} must be one mapping")
+        reason = str(entry.get("reason", "")).strip()
+        if not reason:
+            raise ValueError(f"the justification for {name!r} needs a reason")
+        reasons[name] = reason
+        if entry.get("reviewed_perfect_separation") is True:
+            reviewed.append(name)
+    return reasons, tuple(reviewed)
 
 
 def write_acceptance_report(
     output_dir: Path,
     config_path: Path,
+    justifications_path: Path | None = None,
 ) -> dict[str, Any]:
     """Verify every generated artifact and write the final report."""
     output_dir = output_dir.resolve()
     config_path = config_path.resolve()
     config = load_acceptance_config(config_path)
+    justifications_path = (
+        justifications_path or REPO_ROOT / DEFAULT_JUSTIFICATIONS_PATH
+    ).resolve()
+    reviewed_reasons, reviewed_perfect = load_shortcut_justifications(
+        justifications_path
+    )
     revision = code_revision()
     dataset_path = output_dir / "dataset" / "monitor-acceptance.parquet"
     dataset_summary_path = dataset_path.with_suffix(".summary.json")
@@ -464,6 +494,12 @@ def write_acceptance_report(
         ),
         "hidden_model_lock": hidden_lock.get("information_profile") == "principal",
         "shortcut_report": shortcut.get("approved") is True,
+        # Every accepted reason must come from the reviewed file.
+        "shortcut_allowlist": (
+            shortcut.get("accepted_justifications") == reviewed_reasons
+            and shortcut.get("reviewed_perfect_separation") == sorted(reviewed_perfect)
+            and not shortcut.get("perfect_separation")
+        ),
         "seed_inventory": dataset_summary.get("seeds")
         == sorted({entry[5] for entry in config["pairs"]}),
         "surrogate_model_lock": surrogate_lock.get("information_profile")
@@ -484,6 +520,8 @@ def write_acceptance_report(
         "code_revision": revision,
         "configuration": str(config_path.relative_to(REPO_ROOT)),
         "configuration_sha256": file_checksum(config_path),
+        "shortcut_justifications": str(justifications_path.relative_to(REPO_ROOT)),
+        "shortcut_justifications_sha256": file_checksum(justifications_path),
         "source_manifest": config["source_manifest"],
         "source_manifest_sha256": file_checksum(REPO_ROOT / config["source_manifest"]),
         "root_seed_count": config["root_seed_count"],

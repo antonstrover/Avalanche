@@ -55,6 +55,7 @@ def approved_report(tmp_path, train: pd.DataFrame, validation: pd.DataFrame):
             SIGNAL: "The feature is declared operational action evidence.",
             "__logistic__": "The model combines only declared process evidence.",
         },
+        reviewed_perfect_separation=(SIGNAL,),
     )
     assert report["approved"]
     return output / "shortcut-audit.json"
