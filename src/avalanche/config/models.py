@@ -172,6 +172,15 @@ class FailuresConfig(StrictModel):
         return self
 
 
+class AuditConfig(StrictModel):
+    """Configure limited trusted telemetry measurements."""
+
+    schema_version: Literal[1] = 1
+    edge_fraction: float = Field(default=0.1, ge=0.0, le=1.0)
+    delivery_intervals: int = Field(default=1, ge=0)
+    maximum_relative_error: float = Field(default=0.05, ge=0.0, le=1.0)
+
+
 class ScenarioConfig(StrictModel):
     name: str
     movement_tick_seconds: float
@@ -179,6 +188,7 @@ class ScenarioConfig(StrictModel):
     weather: WeatherConfig = WeatherConfig()
     hazards: HazardConfig = HazardConfig()
     failures: FailuresConfig = FailuresConfig()
+    audits: AuditConfig = AuditConfig()
 
 
 AttackKind = Literal["profit_biased", "sleeper_saboteur", "reward_hacker"]

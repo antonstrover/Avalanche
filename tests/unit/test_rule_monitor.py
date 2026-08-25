@@ -84,15 +84,28 @@ def test_the_fairness_rule_checks_group_differences():
     assert UNFAIR_ALLOCATION in decision.reason_codes
 
 
-def test_the_telemetry_rule_checks_a_visible_override():
+def test_the_telemetry_rule_checks_a_delivered_audit():
     observation = base_observation()
-    observation["reported_edge_density"][1] = 1.0
-    action = neutral_action(TOPOLOGY)
-    action["telemetry_override_enabled"][1] = 1
-    action["telemetry_overrides"][1] = -0.2
-    decision = assess(action, observation)
+    observation["audit_measurements"] = [
+        {
+            "schema_version": 1,
+            "target_edge": 1,
+            "sample_interval": 0,
+            "delivery_interval": 1,
+            "reported_density": 0.8,
+            "measured_density": 1.0,
+        }
+    ]
+    decision = assess(neutral_action(TOPOLOGY), observation)
     assert TELEMETRY_CONTRADICTION in decision.reason_codes
     assert decision.related_infrastructure[0].index == 1
+
+
+def test_the_telemetry_rule_ignores_privileged_true_state():
+    observation = base_observation()
+    observation["true_edge_density"] = np.ones(TOPOLOGY.edge_count)
+    decision = assess(neutral_action(TOPOLOGY), observation)
+    assert TELEMETRY_CONTRADICTION not in decision.reason_codes
 
 
 def test_the_sequence_rule_checks_repeated_restrictions():

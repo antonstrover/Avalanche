@@ -14,6 +14,7 @@ from avalanche.control.types import (
     OutcomeObservation,
     ProcessObservation,
 )
+from avalanche.scenarios.audits import AUDIT_SCHEMA_VERSION, AuditMeasurement
 
 if TYPE_CHECKING:
     from avalanche.sim.engine import MountainSim
@@ -43,9 +44,15 @@ def build_controller_observation(
 
 def build_process_observation(
     observation: ControllerObservation,
+    audits: tuple[AuditMeasurement, ...] = (),
 ) -> ProcessObservation:
     """Return isolated operational data for one process monitor."""
-    return ProcessObservation(copy_observation(observation))
+    copied = copy_observation(observation)
+    copied["audit_schema_version"] = AUDIT_SCHEMA_VERSION
+    copied["audit_measurements"] = [
+        copy_observation(measurement.operational()) for measurement in audits
+    ]
+    return ProcessObservation(copied)
 
 
 def build_outcome_observation(
@@ -95,6 +102,10 @@ def build_evaluator_observation(
     )
     if proposal is not None:
         copied["proposal"] = copy_observation(proposal.model_dump(mode="json"))
+    if sim.audit_channel is not None:
+        copied["audit_comparisons"] = copy_observation(
+            sim.audit_channel.complete_records()
+        )
     return EvaluatorObservation(copied)
 
 
@@ -112,7 +123,7 @@ def build_monitor_observation(
     selected = InformationProfile(profile)
     if selected is InformationProfile.ORACLE_TRUE_STATE:
         return ProcessObservation(build_evaluator_observation(controller, sim))
-    return build_process_observation(controller)
+    return build_process_observation(controller, sim.delivered_audits)
 
 
 def observation_as_json(observation: Mapping[str, Any]) -> dict[str, Any]:

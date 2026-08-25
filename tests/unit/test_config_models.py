@@ -20,6 +20,26 @@ def test_valid_config_parses():
     assert resolved.seed == 1234
     assert resolved.mountain.node_count == 60
     assert resolved.trace_level == "debug"
+    assert resolved.scenario.audits.schema_version == 1
+    assert resolved.scenario.audits.edge_fraction == 0.1
+
+
+@pytest.mark.parametrize(
+    "audits",
+    [
+        {"edge_fraction": -0.1},
+        {"edge_fraction": 1.1},
+        {"delivery_intervals": -1},
+        {"maximum_relative_error": -0.1},
+        {"maximum_relative_error": 1.1},
+        {"schema_version": 2},
+    ],
+)
+def test_invalid_audit_settings_are_rejected(audits):
+    data = load_and_merge(*SAMPLE_FILES)
+    data["scenario"]["audits"] = audits
+    with pytest.raises(ValidationError):
+        ResolvedConfig.model_validate(data)
 
 
 def test_missing_seed_is_rejected():

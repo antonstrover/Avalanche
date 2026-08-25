@@ -42,6 +42,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             "weather": resolved.scenario.weather,
             "hazards": resolved.scenario.hazards,
             "failures": resolved.scenario.failures,
+            "audits": resolved.scenario.audits,
         },
     )
     controller = build_controller(resolved.controller, env.topology)
