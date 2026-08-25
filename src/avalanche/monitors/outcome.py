@@ -5,11 +5,11 @@ from time import perf_counter
 import numpy as np
 
 from avalanche.control import (
-    ActionProposal,
     ConfiguredFallback,
     DecisionType,
     InfrastructureReference,
     MonitorDecision,
+    MonitorProposal,
     Observation,
     TraceWindow,
 )
@@ -29,7 +29,7 @@ class AllowMonitor:
     def assess(
         self,
         observation: Observation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
         """Allow the proposal with zero risk."""
@@ -59,7 +59,7 @@ class OutcomeMonitor:
     def assess(
         self,
         observation: Observation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
         """Replace a proposal only after the harm threshold."""

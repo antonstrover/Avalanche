@@ -10,14 +10,21 @@ import numpy as np
 import pytest
 
 from avalanche.config.models import ControllerConfig, PopulationConfig
-from avalanche.control import build_monitor_observation
+from avalanche.control import (
+    InformationProfile,
+    build_monitor_observation,
+    build_monitor_proposal,
+    sanitize_trace_window,
+)
 from avalanche.controllers.factory import build_controller, build_fallback
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.monitors.features import (
     FEATURE_COUNT,
     FEATURE_NAMES,
+    FEATURE_VERSION,
     HISTORY_LENGTH,
     FeatureExtractor,
+    feature_names_for,
 )
 from avalanche.monitors.rules import RuleMonitor
 
@@ -34,7 +41,11 @@ POPULATION = PopulationConfig(
 )
 
 
-def make_context(mountain: str, history_entries: int = 0):
+def make_context(
+    mountain: str,
+    history_entries: int = 0,
+    profile: InformationProfile = InformationProfile.PRINCIPAL,
+):
     """Return one real observation, one proposal, and one extractor."""
     env = AvalancheEnv(
         CONFIGS / mountain,
@@ -49,21 +60,25 @@ def make_context(mountain: str, history_entries: int = 0):
     controller_config = ControllerConfig(kind="honest")
     controller = build_controller(controller_config, env.topology)
     controller.reset(SEED)
-    proposal = controller.propose(env.controller_observation())
-    observation = build_monitor_observation(env.controller_observation(), env.sim)
+    complete = controller.propose(env.controller_observation())
+    proposal = build_monitor_proposal(complete)
+    observation = build_monitor_observation(
+        env.controller_observation(), env.sim, profile
+    )
     extractor = FeatureExtractor(
         build_fallback("honest", controller_config, env.topology),
         RuleMonitor(env.topology),
+        profile,
     )
     extractor.reset(SEED)
     history = tuple(
         {
-            "proposal": proposal.model_dump(mode="json"),
+            "proposal": complete.model_dump(mode="json"),
             "decision": {"risk_score": 0.5, "decision": "ALLOW"},
         }
         for _ in range(history_entries)
     )
-    return observation, proposal, extractor, history
+    return observation, proposal, extractor, sanitize_trace_window(history)
 
 
 @pytest.mark.parametrize("mountain", MOUNTAINS)
@@ -109,9 +124,40 @@ def test_a_short_history_pads_and_a_long_history_truncates(entries):
     assert np.count_nonzero(present) == min(entries, HISTORY_LENGTH)
 
 
-def test_an_honest_proposal_matches_the_reference_fallback():
-    observation, proposal, extractor, history = make_context("small-resort.yaml")
-    values = extractor.vector(observation, proposal, history)
-    identical = values[FEATURE_NAMES.index("difference_identical_to_fallback")]
+def test_the_principal_profile_excludes_prohibited_features():
+    prohibited = ("identical", "remaining_time", "true_", "harm", "simulation_time")
 
-    assert identical == 1.0
+    assert FEATURE_VERSION == 2
+    assert all(part not in name for name in FEATURE_NAMES for part in prohibited)
+
+
+def test_the_fallback_oracle_uses_distances_without_exact_equality():
+    observation, proposal, extractor, history = make_context(
+        "small-resort.yaml", profile=InformationProfile.ORACLE_FALLBACK
+    )
+    values = extractor.vector(observation, proposal, history)
+    names = feature_names_for(InformationProfile.ORACLE_FALLBACK)
+    distance_names = [name for name in names if name.startswith("oracle_fallback")]
+
+    assert distance_names
+    assert all(values[names.index(name)] == 0.0 for name in distance_names)
+    assert all("identical" not in name for name in names)
+
+
+@pytest.mark.parametrize("profile", list(InformationProfile))
+def test_each_information_profile_has_one_fixed_schema(profile):
+    observation, proposal, extractor, history = make_context(
+        "small-resort.yaml", profile=profile
+    )
+    values = extractor.vector(observation, proposal, history)
+
+    assert values.shape == (len(feature_names_for(profile)),)
+    assert extractor.feature_names == feature_names_for(profile)
+
+
+def test_the_principal_profile_contains_each_context_measure():
+    dimensions = ("capacity", "evacuation", "utility", "fairness", "consistency")
+    assert all(
+        any(name.startswith(f"context_{dimension}") for name in FEATURE_NAMES)
+        for dimension in dimensions
+    )

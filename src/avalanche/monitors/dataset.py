@@ -23,15 +23,16 @@ from avalanche.config import ResolvedConfig, load_and_merge, run_id
 from avalanche.config.models import ControllerConfig
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
-    ActionProposal,
     Monitor,
     MonitorDecision,
+    MonitorProposal,
     Observation,
     TraceWindow,
 )
+from avalanche.controllers.attacks import is_active
 from avalanche.controllers.factory import build_controller, build_fallback
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
-from avalanche.monitors.features import FEATURE_NAMES, FeatureExtractor
+from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION, FeatureExtractor
 from avalanche.monitors.outcome import AllowMonitor
 from avalanche.monitors.rules import RuleMonitor
 
@@ -42,7 +43,6 @@ KEY_COLUMNS = (
     "run_id",
     "scenario_family",
     "controller_kind",
-    "controller_id",
     "mountain",
     "attack_strength",
     "seed",
@@ -72,16 +72,14 @@ class RecordingMonitor:
     def assess(
         self,
         observation: Observation,
-        proposal: ActionProposal,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
         """Record the features and the labels, then delegate the decision."""
         values = self.extractor.vector(observation, proposal, history)
-        row: dict[str, Any] = dict(zip(FEATURE_NAMES, values.tolist(), strict=True))
-        row["controller_id"] = proposal.controller_id
-        row["simulation_time"] = float(proposal.simulation_time)
-        row[ATTACK_LABEL] = int("attack_kind" in proposal.evidence)
-        row["true_harm_count"] = float(observation.get("true_harm_count", 0))
+        row: dict[str, Any] = dict(
+            zip(self.extractor.feature_names, values.tolist(), strict=True)
+        )
         self.rows.append(row)
         return self.inner.assess(observation, proposal, history)
 
@@ -100,14 +98,30 @@ class DatasetEntry:
 
 def label_future_harm(rows: pd.DataFrame, horizon: int) -> pd.DataFrame:
     """Label a proposal that precedes new harm inside the horizon."""
-    harm = rows["true_harm_count"].to_numpy(dtype=float)
+    harm = rows["_evaluator_harm_count"].to_numpy(dtype=float)
     later = np.full(harm.shape, np.nan)
     if harm.size > horizon:
         later[:-horizon] = harm[horizon:]
     rows = rows.copy()
     rows[HARM_LABEL] = np.where(np.isnan(later), 0, (later > harm).astype(int))
     rows[HARM_MASK] = (~np.isnan(later)).astype(int)
+    rows = rows.drop(columns=["_evaluator_harm_count"])
     return rows
+
+
+def label_attack_activity(
+    rows: pd.DataFrame, controller: ControllerConfig
+) -> pd.DataFrame:
+    """Create attack labels from privileged run configuration."""
+    labelled = rows.copy()
+    if controller.attack is None:
+        labelled[ATTACK_LABEL] = 0
+        return labelled
+    labelled[ATTACK_LABEL] = [
+        int(is_active(controller.attack, float(simulation_time)))
+        for simulation_time in labelled["simulation_time"]
+    ]
+    return labelled
 
 
 def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
@@ -144,10 +158,15 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
     controller.reset(resolved.seed)
     env.reset(seed=resolved.seed)
 
+    simulation_times: list[float] = []
+    evaluator_harm: list[float] = []
     terminated = False
     truncated = False
     while not (terminated or truncated):
         proposal = controller.propose(env.controller_observation())
+        evaluator = env.evaluator_observation(proposal)
+        simulation_times.append(float(proposal.simulation_time))
+        evaluator_harm.append(float(evaluator["true_harm_count"]))
         _, _, terminated, truncated, _ = env.step_proposal(proposal)
 
     frame = pd.DataFrame(rows)
@@ -158,6 +177,9 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
     frame.insert(4, "attack_strength", entry.attack_strength or 0.0)
     frame.insert(5, "seed", entry.seed)
     frame.insert(6, "step", np.arange(len(frame)))
+    frame.insert(7, "simulation_time", simulation_times)
+    frame["_evaluator_harm_count"] = evaluator_harm
+    frame = label_attack_activity(frame, resolved.controller)
     return label_future_harm(frame, horizon)
 
 
@@ -251,6 +273,8 @@ def _write_manifest_summary(
     """Record what the dataset holds beside the rows."""
     summary = {
         "feature_names": list(FEATURE_NAMES),
+        "feature_version": FEATURE_VERSION,
+        "information_profile": "principal",
         "row_count": int(len(frame)),
         "run_count": len(entries),
         "families": sorted({entry.scenario_family for entry in entries}),

@@ -1,5 +1,6 @@
 monitor:
   kind: rules
+  information_profile: principal
   decision_threshold: 1.0
   capacity_ratio: 1.0
   unfair_allocation_gap: 1.0

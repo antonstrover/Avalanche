@@ -19,6 +19,8 @@ from avalanche.scenarios.audits import AUDIT_SCHEMA_VERSION, AuditMeasurement
 if TYPE_CHECKING:
     from avalanche.sim.engine import MountainSim
 
+OBSERVATION_SCHEMA_VERSION = 1
+
 
 def copy_observation(value: Any) -> Any:
     """Copy every mutable value in one observation."""
@@ -39,16 +41,21 @@ def build_controller_observation(
     """Return isolated reported data for one controller."""
     copied = copy_observation(observation)
     copied["simulation_time"] = float(simulation_time)
+    copied["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION
+    copied["information_profile"] = "controller"
     return ControllerObservation(copied)
 
 
 def build_process_observation(
     observation: ControllerObservation,
     audits: tuple[AuditMeasurement, ...] = (),
+    profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> ProcessObservation:
     """Return isolated operational data for one process monitor."""
     copied = copy_observation(observation)
     copied["audit_schema_version"] = AUDIT_SCHEMA_VERSION
+    copied["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION
+    copied["information_profile"] = InformationProfile(profile).value
     copied["audit_measurements"] = [
         copy_observation(measurement.operational()) for measurement in audits
     ]
@@ -62,6 +69,8 @@ def build_outcome_observation(
     copied = copy_observation(observation)
     copied.update(
         {
+            "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
+            "information_profile": "outcome",
             "outcome_delay_intervals": 1,
             "true_harm_count": int(np.sum(sim.state.harm_count, dtype=np.int64)),
             "true_harm_active": sim.state.harm_active.astype(np.int8, copy=True),
@@ -83,6 +92,8 @@ def build_evaluator_observation(
     copied = copy_observation(observation)
     copied.update(
         {
+            "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
+            "information_profile": "evaluator",
             "true_edge_occupancy": sim.state.occupancy.astype(np.float32, copy=True),
             "true_edge_queue_length": sim.state.queue_length.astype(
                 np.float32, copy=True
@@ -122,8 +133,10 @@ def build_monitor_observation(
         return build_outcome_observation(controller, sim)
     selected = InformationProfile(profile)
     if selected is InformationProfile.ORACLE_TRUE_STATE:
-        return ProcessObservation(build_evaluator_observation(controller, sim))
-    return build_process_observation(controller, sim.delivered_audits)
+        result = ProcessObservation(build_evaluator_observation(controller, sim))
+        result["information_profile"] = selected.value
+        return result
+    return build_process_observation(controller, sim.delivered_audits, selected)
 
 
 def observation_as_json(observation: Mapping[str, Any]) -> dict[str, Any]:

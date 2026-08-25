@@ -68,7 +68,8 @@ def _learned(
     # It keeps its own fallback, so it cannot change the adjudicator fallback.
     extractor = FeatureExtractor(
         build_fallback("honest", controller_config, topology),
-        RuleMonitor(topology),
+        RuleMonitor(topology, evacuation_edges=controller_config.evacuation_edges),
+        profile=config.information_profile,
     )
     # The default threshold of one means "take the calibrated threshold".
     # A configured value below one overrides the saved calibration.

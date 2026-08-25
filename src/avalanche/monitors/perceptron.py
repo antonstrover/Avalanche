@@ -23,9 +23,10 @@ import torch
 from torch import nn
 
 from avalanche.config.run_identity import REPO_ROOT
-from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
+from avalanche.control import InformationProfile
+from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 
-MODEL_VERSION = 1
+MODEL_VERSION = 2
 ATTACK_LABEL = "attack_active"
 
 
@@ -39,6 +40,7 @@ class TrainingConfig:
     learning_rate: float = 1e-3
     hidden_sizes: tuple[int, ...] = (64, 32)
     label: str = ATTACK_LABEL
+    information_profile: str = InformationProfile.PRINCIPAL.value
 
 
 @dataclass
@@ -78,12 +80,16 @@ def build_network(feature_count: int, hidden_sizes: tuple[int, ...]) -> nn.Modul
     return nn.Sequential(*layers)
 
 
-def feature_matrix(frame: pd.DataFrame) -> np.ndarray:
+def feature_matrix(
+    frame: pd.DataFrame,
+    feature_names: tuple[str, ...] | None = None,
+) -> np.ndarray:
     """Return the feature columns in the declared order."""
-    missing = [name for name in FEATURE_NAMES if name not in frame.columns]
+    names = feature_names or feature_names_for(InformationProfile.PRINCIPAL)
+    missing = [name for name in names if name not in frame.columns]
     if missing:
         raise ValueError(f"the rows miss {len(missing)} feature columns")
-    return frame.loc[:, list(FEATURE_NAMES)].to_numpy(dtype=np.float32)
+    return frame.loc[:, list(names)].to_numpy(dtype=np.float32)
 
 
 def train_perceptron(
@@ -93,16 +99,18 @@ def train_perceptron(
 ) -> TrainedModel:
     """Train the perceptron on the training split only."""
     config = config or TrainingConfig()
+    profile = InformationProfile(config.information_profile)
+    feature_names = feature_names_for(profile)
     torch.manual_seed(config.seed)
     torch.set_num_threads(1)
 
-    features = feature_matrix(train)
+    features = feature_matrix(train, feature_names)
     labels = train[config.label].to_numpy(dtype=np.float32)
     mean = features.mean(axis=0)
     deviation = np.where(features.std(axis=0) < 1e-8, 1.0, features.std(axis=0))
     standard = ((features - mean) / deviation).astype(np.float32)
 
-    network = build_network(len(FEATURE_NAMES), config.hidden_sizes)
+    network = build_network(len(feature_names), config.hidden_sizes)
     optimiser = torch.optim.Adam(network.parameters(), lr=config.learning_rate)
     loss_function = nn.BCEWithLogitsLoss()
     inputs = torch.from_numpy(standard)
@@ -121,7 +129,7 @@ def train_perceptron(
 
     model = TrainedModel(
         network=network,
-        feature_names=FEATURE_NAMES,
+        feature_names=feature_names,
         feature_mean=mean,
         feature_deviation=deviation,
         config=config,
@@ -130,6 +138,7 @@ def train_perceptron(
         "model_version": MODEL_VERSION,
         "model_kind": "perceptron",
         "feature_version": FEATURE_VERSION,
+        "information_profile": profile.value,
         "label": config.label,
         "train_rows": int(len(train)),
         "validation_rows": int(len(validation)),
@@ -166,7 +175,7 @@ def evaluate(
     model: TrainedModel, frame: pd.DataFrame, label: str = ATTACK_LABEL
 ) -> dict[str, float]:
     """Score one trained model on one split."""
-    scores = model.scores(feature_matrix(frame))
+    scores = model.scores(feature_matrix(frame, model.feature_names))
     truth = frame[label].to_numpy(dtype=float)
     return {
         "brier_score": brier_score(scores, truth),
@@ -233,21 +242,44 @@ def save_model(model: TrainedModel, path: Path) -> Path:
     return path
 
 
-def load_model(path: Path) -> TrainedModel:
-    """Load one saved model and its metadata."""
+def load_model(
+    path: Path,
+    *,
+    expected_information_profile: InformationProfile | str | None = None,
+) -> TrainedModel:
+    """Load one model after all version and profile checks."""
     saved = torch.load(path, weights_only=False)
-    network = build_network(len(saved["feature_names"]), tuple(saved["hidden_sizes"]))
+    metadata_path = path.with_suffix(".json")
+    if not metadata_path.exists():
+        raise ValueError("the model metadata file is missing")
+    metadata = json.loads(metadata_path.read_text())
+    if metadata.get("model_version") != MODEL_VERSION:
+        raise ValueError("the model version is incompatible")
+    if metadata.get("feature_version") != FEATURE_VERSION:
+        raise ValueError("the feature version is incompatible")
+    try:
+        profile = InformationProfile(metadata["information_profile"])
+    except (KeyError, ValueError):
+        raise ValueError("the model information profile is incompatible") from None
+    if expected_information_profile is not None:
+        expected = InformationProfile(expected_information_profile)
+        if profile is not expected:
+            raise ValueError("the model information profile is incompatible")
+    feature_names = tuple(saved["feature_names"])
+    if feature_names != feature_names_for(profile):
+        raise ValueError("the model feature schema is incompatible")
+    network = build_network(len(feature_names), tuple(saved["hidden_sizes"]))
     network.load_state_dict(saved["state_dict"])
     network.eval()
-    metadata_path = path.with_suffix(".json")
-    metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
     return TrainedModel(
         network=network,
-        feature_names=tuple(saved["feature_names"]),
+        feature_names=feature_names,
         feature_mean=np.asarray(saved["feature_mean"], dtype=np.float32),
         feature_deviation=np.asarray(saved["feature_deviation"], dtype=np.float32),
         config=TrainingConfig(
-            hidden_sizes=tuple(saved["hidden_sizes"]), label=saved["label"]
+            hidden_sizes=tuple(saved["hidden_sizes"]),
+            label=saved["label"],
+            information_profile=profile.value,
         ),
         metadata=metadata,
     )

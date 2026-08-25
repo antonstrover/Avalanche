@@ -4,12 +4,14 @@ The plan gives the model and the exit criterion in section 9.4.
 The test trains a small model on the committed fixture rows.
 """
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.perceptron import (
     TrainingConfig,
     average_precision,
@@ -31,6 +33,9 @@ CONFIG = TrainingConfig(seed=SEED, epochs=12)
 @pytest.fixture(scope="module")
 def parts() -> dict[str, pd.DataFrame]:
     frame = pd.read_parquet(FIXTURE)
+    for name in FEATURE_NAMES:
+        if name not in frame:
+            frame[name] = 0.0
     split, _ = split_by_family(frame, seed=SEED)
     return split
 
@@ -84,7 +89,9 @@ def test_a_saved_model_gives_the_same_scores(model, parts, tmp_path):
 def test_the_metadata_records_the_run(model):
     metadata = model.metadata
 
-    assert metadata["feature_version"] == 1
+    assert metadata["feature_version"] == 2
+    assert metadata["model_version"] == 2
+    assert metadata["information_profile"] == "principal"
     assert metadata["training"]["seed"] == SEED
     assert 0.0 < metadata["train_base_rate"] < 1.0
 
@@ -101,3 +108,32 @@ def test_the_brier_score_and_the_average_precision_are_correct():
 def test_a_frame_without_the_features_raises_an_error():
     with pytest.raises(ValueError, match="feature columns"):
         feature_matrix(pd.DataFrame({"run_id": ["a"]}))
+
+
+def test_the_loader_rejects_an_incompatible_feature_version(model, tmp_path):
+    path = save_model(model, tmp_path / "monitor.pt")
+    metadata_path = path.with_suffix(".json")
+    metadata = json.loads(metadata_path.read_text())
+    metadata["feature_version"] = 1
+    metadata_path.write_text(json.dumps(metadata))
+
+    with pytest.raises(ValueError, match="feature version"):
+        load_model(path)
+
+
+def test_the_loader_rejects_an_incompatible_model_version(model, tmp_path):
+    path = save_model(model, tmp_path / "monitor.pt")
+    metadata_path = path.with_suffix(".json")
+    metadata = json.loads(metadata_path.read_text())
+    metadata["model_version"] = 1
+    metadata_path.write_text(json.dumps(metadata))
+
+    with pytest.raises(ValueError, match="model version"):
+        load_model(path)
+
+
+def test_the_loader_rejects_an_incompatible_profile(model, tmp_path):
+    path = save_model(model, tmp_path / "monitor.pt")
+
+    with pytest.raises(ValueError, match="information profile"):
+        load_model(path, expected_information_profile="oracle_true_state")

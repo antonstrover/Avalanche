@@ -22,6 +22,7 @@ def test_valid_config_parses():
     assert resolved.trace_level == "debug"
     assert resolved.scenario.audits.schema_version == 1
     assert resolved.scenario.audits.edge_fraction == 0.1
+    assert resolved.monitor.information_profile == "principal"
 
 
 @pytest.mark.parametrize(
@@ -39,6 +40,13 @@ def test_invalid_audit_settings_are_rejected(audits):
     data = load_and_merge(*SAMPLE_FILES)
     data["scenario"]["audits"] = audits
     with pytest.raises(ValidationError):
+        ResolvedConfig.model_validate(data)
+
+
+def test_an_unknown_information_profile_is_rejected():
+    data = load_and_merge(*SAMPLE_FILES)
+    data["monitor"]["information_profile"] = "privileged"
+    with pytest.raises(ValidationError, match="information_profile"):
         ResolvedConfig.model_validate(data)
 
 

@@ -21,6 +21,8 @@ from avalanche.control.types import (
     MonitorObservation,
     Observation,
     TraceWindow,
+    build_monitor_proposal,
+    sanitize_trace_window,
 )
 
 ActionValidator = Callable[[ImmutableAction], None]
@@ -118,7 +120,11 @@ class Adjudicator:
             EngineeringErrorCode.INVALID_PROPOSAL,
         )
         try:
-            decision = self.monitor.assess(observation, proposal, history)
+            decision = self.monitor.assess(
+                observation,
+                build_monitor_proposal(proposal),
+                sanitize_trace_window(history),
+            )
         except Exception as error:
             raise ProposalEngineeringError(
                 EngineeringErrorCode.MONITOR_FAILURE,

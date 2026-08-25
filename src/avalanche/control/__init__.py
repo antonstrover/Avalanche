@@ -13,6 +13,7 @@ from avalanche.control.approval import (
 )
 from avalanche.control.fallback import ConfiguredFallback
 from avalanche.control.observations import (
+    OBSERVATION_SCHEMA_VERSION,
     build_controller_observation,
     build_evaluator_observation,
     build_monitor_observation,
@@ -34,12 +35,15 @@ from avalanche.control.types import (
     InfrastructureReference,
     MonitorDecision,
     MonitorObservation,
+    MonitorProposal,
     Observation,
     OutcomeObservation,
     ProcessObservation,
     TraceWindow,
+    build_monitor_proposal,
     freeze_action,
     freeze_evidence,
+    sanitize_trace_window,
     thaw_action,
     thaw_evidence,
 )
@@ -66,6 +70,8 @@ __all__ = [
     "Monitor",
     "MonitorDecision",
     "MonitorObservation",
+    "MonitorProposal",
+    "OBSERVATION_SCHEMA_VERSION",
     "Observation",
     "OutcomeObservation",
     "ProcessObservation",
@@ -75,12 +81,14 @@ __all__ = [
     "build_controller_observation",
     "build_evaluator_observation",
     "build_monitor_observation",
+    "build_monitor_proposal",
     "build_outcome_observation",
     "build_process_observation",
     "copy_observation",
     "freeze_action",
     "freeze_evidence",
     "observation_as_json",
+    "sanitize_trace_window",
     "thaw_action",
     "thaw_evidence",
 ]
