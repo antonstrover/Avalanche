@@ -155,7 +155,7 @@ def test_late_telemetry_freezes_only_the_reported_value():
     sim.state.occupancy[target] = 11
 
     apply_failures(sim.failure_schedule, 0.0, sim.state)
-    refresh_reported_telemetry(sim.state)
+    refresh_reported_telemetry(sim.state, sim.topology)
 
     assert sim.state.occupancy[target] == 11
     assert sim.state.reported_occupancy[target] == 3

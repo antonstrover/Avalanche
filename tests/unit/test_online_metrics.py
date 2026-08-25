@@ -19,7 +19,10 @@ def fixed_episode() -> tuple[OnlineMetrics, object]:
         Status.COMPLETE,
     ]
     population.wait_time[:] = [10.0, 20.0, 30.0, 40.0]
-    state = DynamicState(density_ratio=np.array([1.1, 0.9, 1.5]))
+    state = DynamicState(
+        density_ratio=np.array([1.1, 0.9, 1.5]),
+        reported_density_ratio=np.array([1.1, 0.9, 0.4]),
+    )
     metrics = OnlineMetrics(group_count=3, episode_duration_seconds=100.0)
     metrics.update(population, state, tick_seconds=5.0)
     return metrics, population
@@ -32,6 +35,7 @@ def test_each_metric_formula_uses_the_fixed_episode():
     assert snapshot.completed_journeys == 2
     assert snapshot.wait_time_sum == 100.0
     assert snapshot.density_limit_seconds == 10.0
+    assert snapshot.reported_density_limit_seconds == 5.0
     assert snapshot.stranded_skiers == 1
     assert snapshot.stranded_time_seconds == 5.0
     assert snapshot.group_utility == (0.35, 0.125, 0.0)
@@ -49,11 +53,43 @@ def test_each_metric_formula_uses_the_fixed_episode():
 
 def test_updates_accumulate_density_and_stranded_time():
     metrics, population = fixed_episode()
-    state = DynamicState(density_ratio=np.array([1.1, 0.9, 1.5]))
+    state = DynamicState(
+        density_ratio=np.array([1.1, 0.9, 1.5]),
+        reported_density_ratio=np.array([1.1, 0.9, 0.4]),
+    )
     metrics.update(population, state, tick_seconds=5.0)
     snapshot = metrics.snapshot(population)
     assert snapshot.density_limit_seconds == 20.0
+    assert snapshot.reported_density_limit_seconds == 10.0
     assert snapshot.stranded_time_seconds == 10.0
+
+
+def test_a_reported_override_separates_the_two_density_metrics():
+    metrics, population = fixed_episode()
+    snapshot = metrics.snapshot(population)
+    assert snapshot.density_limit_seconds > snapshot.reported_density_limit_seconds
+
+
+def test_the_snapshot_serialises_each_versioned_field():
+    metrics, population = fixed_episode()
+    values = metrics.snapshot(population).as_dict()
+    assert values["metrics_version"] == METRICS_VERSION == 3
+    assert values["reported_density_limit_seconds"] == 5.0
+    assert set(values) == {
+        "metrics_version",
+        "completed_journeys",
+        "wait_time_sum",
+        "density_limit_seconds",
+        "reported_density_limit_seconds",
+        "stranded_skiers",
+        "stranded_time_seconds",
+        "group_utility",
+        "group_mean_wait_times",
+        "fairness",
+        "decision_counts",
+        "intervention_latency_seconds_sum",
+        "intervention_latency_count",
+    }
 
 
 def test_an_empty_group_has_zero_utility():
@@ -66,6 +102,7 @@ def test_a_new_accumulator_resets_each_running_total():
     reset = OnlineMetrics(group_count=3, episode_duration_seconds=100.0)
     snapshot = reset.snapshot(population)
     assert snapshot.density_limit_seconds == 0.0
+    assert snapshot.reported_density_limit_seconds == 0.0
     assert snapshot.stranded_time_seconds == 0.0
 
 

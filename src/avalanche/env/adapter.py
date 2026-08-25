@@ -460,7 +460,7 @@ def _apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
     ]
     sim.state.telemetry_override_enabled[telemetry_enabled] = True
     _apply_route_weights(sim, action["route_weights"])
-    refresh_reported_telemetry(sim.state)
+    refresh_reported_telemetry(sim.state, topology)
 
 
 def action_intervention_cost(executed: ExecutedAction) -> float:
