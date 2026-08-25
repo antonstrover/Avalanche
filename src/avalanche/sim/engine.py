@@ -163,7 +163,7 @@ class MountainSim:
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), episode_seconds)
         self._update_weather()
         self._update_failures()
-        refresh_reported_telemetry(self.state)
+        refresh_reported_telemetry(self.state, self.topology)
 
         # 6. Build the first observation.
         # 7. Return the observation and the run metadata.
@@ -215,7 +215,7 @@ class MountainSim:
                 self.simulation_time + self.tick_seconds,
             )
         )
-        refresh_reported_telemetry(self.state)
+        refresh_reported_telemetry(self.state, self.topology)
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
         accumulate_times(pop, self.tick_seconds)
         self.metrics.update(pop, self.state, self.tick_seconds)
@@ -266,6 +266,7 @@ class MountainSim:
             "reported_edge_closed": self.state.reported_closed.tolist(),
             "edge_weather_risk": self.state.weather_risk.tolist(),
             "edge_density_ratio": self.state.density_ratio.tolist(),
+            "reported_edge_density_ratio": self.state.reported_density_ratio.tolist(),
             "edge_hazard_score": self.state.hazard_score.tolist(),
             "edge_dangerous_duration": self.state.dangerous_duration.tolist(),
             "edge_dangerous_density_seconds": (
@@ -335,6 +336,10 @@ class MountainSim:
             ("speed_factor", self.state.speed_factor),
             ("weather_risk", self.state.weather_risk),
             ("density_ratio", self.state.density_ratio),
+            (
+                "reported_density_ratio",
+                self.state.reported_density_ratio,
+            ),
             ("hazard_score", self.state.hazard_score),
             ("dangerous_duration", self.state.dangerous_duration),
             (

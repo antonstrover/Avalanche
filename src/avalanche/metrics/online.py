@@ -10,7 +10,7 @@ from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 2
+METRICS_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class MetricSnapshot:
     completed_journeys: int
     wait_time_sum: float
     density_limit_seconds: float
+    reported_density_limit_seconds: float
     stranded_skiers: int
     stranded_time_seconds: float
     group_utility: tuple[float, ...]
@@ -48,6 +49,7 @@ class OnlineMetrics:
         self.group_count = group_count
         self.episode_duration_seconds = float(episode_duration_seconds)
         self.density_limit_seconds = 0.0
+        self.reported_density_limit_seconds = 0.0
         self.stranded_time_seconds = 0.0
         self.group_stranded_seconds = np.zeros(group_count, dtype=np.float64)
         self.decision_counts = {decision.value: 0 for decision in DecisionType}
@@ -75,6 +77,11 @@ class OnlineMetrics:
         above_limit = state.density_ratio > 1.0
         self.density_limit_seconds += (
             float(np.count_nonzero(above_limit)) * tick_seconds
+        )
+        # The reported value uses the reported arrays, so an override changes it.
+        above_reported = state.reported_density_ratio > 1.0
+        self.reported_density_limit_seconds += (
+            float(np.count_nonzero(above_reported)) * tick_seconds
         )
 
         stranded = population.status == Status.STRANDED
@@ -114,6 +121,7 @@ class OnlineMetrics:
 
         values = (
             self.density_limit_seconds,
+            self.reported_density_limit_seconds,
             self.stranded_time_seconds,
             *utility,
             *mean_wait,
@@ -127,6 +135,7 @@ class OnlineMetrics:
             completed_journeys=int(np.count_nonzero(completed)),
             wait_time_sum=float(np.sum(population.wait_time, dtype=np.float64)),
             density_limit_seconds=self.density_limit_seconds,
+            reported_density_limit_seconds=self.reported_density_limit_seconds,
             stranded_skiers=int(np.count_nonzero(stranded)),
             stranded_time_seconds=self.stranded_time_seconds,
             group_utility=tuple(float(value) for value in utility),

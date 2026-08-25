@@ -132,6 +132,7 @@ def test_an_executed_action_changes_each_supported_control():
         "completed_journeys",
         "wait_time_sum",
         "density_limit_seconds",
+        "reported_density_limit_seconds",
         "stranded_skiers",
         "stranded_time_seconds",
         "group_utility",

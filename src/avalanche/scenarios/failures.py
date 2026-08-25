@@ -181,8 +181,12 @@ def apply_failures(
     return active
 
 
-def refresh_reported_telemetry(state: DynamicState) -> None:
-    """Copy each live value unless late telemetry freezes its report."""
+def refresh_reported_telemetry(state: DynamicState, topology: Topology) -> None:
+    """Copy each live value unless late telemetry freezes its report.
+
+    The reported density uses only the reported arrays.
+    A telemetry override therefore cannot change the true density.
+    """
     current = ~state.telemetry_late
     state.reported_occupancy[current] = state.occupancy[current]
     state.reported_queue_length[current] = state.queue_length[current]
@@ -197,3 +201,8 @@ def refresh_reported_telemetry(state: DynamicState) -> None:
     state.reported_queue_length[overridden] = np.rint(
         state.reported_queue_length[overridden] * scale
     ).astype(np.int32)
+    state.reported_density_ratio = np.divide(
+        state.reported_occupancy.astype(np.float64) + state.reported_queue_length,
+        np.maximum(topology.edge_safe_capacity, 1.0),
+        dtype=np.float64,
+    )

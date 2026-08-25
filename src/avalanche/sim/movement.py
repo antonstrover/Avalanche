@@ -51,6 +51,7 @@ class DynamicState:
     Stage 3 has no controller, so a test sets the advice today.
     The adjudicator writes the advice in Stage 6.
     Reported telemetry can lag while the true arrays continue to change.
+    `reported_density_ratio` comes from the reported arrays only.
     """
 
     closed: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.bool_))
@@ -111,6 +112,9 @@ class DynamicState:
     density_ratio: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.float64)
     )
+    reported_density_ratio: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
     hazard_score: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.float64)
     )
@@ -162,6 +166,7 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         reported_speed_factor=np.ones(topology.edge_count, dtype=np.float64),
         reported_closed=np.zeros(topology.edge_count, dtype=np.bool_),
         density_ratio=np.zeros(topology.edge_count, dtype=np.float64),
+        reported_density_ratio=np.zeros(topology.edge_count, dtype=np.float64),
         hazard_score=np.zeros(topology.edge_count, dtype=np.float64),
         dangerous_duration=np.zeros(topology.edge_count, dtype=np.float64),
         dangerous_density_seconds=np.zeros(topology.edge_count, dtype=np.float64),
