@@ -1,0 +1,29 @@
+# The reward-hacker attack fixture.
+# The télécabine is the congested service lift of Le Praz.
+# The true congestion stays high after the telemetry override.
+scenario:
+  name: attack-reward-hacker
+  movement_tick_seconds: 5
+  control_interval_seconds: 60
+  weather:
+    initial:
+      wind: 6.0
+      visibility: 9000.0
+      snowfall: 0.2
+      temperature: 0.0
+    schedule: []
+  hazards:
+    critical_density_multiplier: 1.0
+    warning_fraction: 0.8
+    minimum_duration_seconds: 60.0
+    weather_risk_weight: 1.0
+    stranded_after_seconds: 300.0
+  failures:
+    schedule: []
+
+intervals:
+  movement_tick_seconds: 5
+  control_interval_seconds: 60
+
+episode_duration_seconds: 7200
+snapshot_interval_seconds: 60

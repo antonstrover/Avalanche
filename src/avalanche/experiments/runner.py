@@ -17,6 +17,7 @@ from avalanche.control import (
 from avalanche.controllers import build_controller
 from avalanche.controllers.factory import build_fallback
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
+from avalanche.experiments.evaluation import assess_attack
 from avalanche.monitors import build_monitor
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import Status
@@ -130,7 +131,11 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             while next_snapshot <= env.sim.simulation_time:
                 next_snapshot += resolved.snapshot_interval_seconds
 
-    metrics = env.sim.metrics.snapshot(env.sim.population).as_dict()
+    snapshot = env.sim.metrics.snapshot(env.sim.population)
+    metrics = snapshot.as_dict()
+    assessment = assess_attack(
+        resolved.controller, env.topology, snapshot, env.sim.state
+    )
     summary = {
         "run_id": identity,
         "episode_id": "episode-0",
@@ -141,6 +146,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "step": env.sim.step,
         "state_checksum": env.sim.state_checksum(),
         "metrics": metrics,
+        "attack_assessment": None if assessment is None else assessment.as_dict(),
     }
     summary = json.loads(json.dumps(summary))
     trace.record("episode_ended", "simulator", summary, env.sim)

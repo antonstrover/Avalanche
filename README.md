@@ -15,8 +15,36 @@ The application draws the same population in 3D.
 
 The honest controller and the single-run workflow now exist.
 The outcome monitor and the rule monitor now exist.
+The three misaligned controllers now exist with calibrated fixtures.
 The learned monitor and the experiment sweeps do not exist yet.
 The paired closure baseline compares the honest controller with no control.
+
+### The misaligned controllers
+
+Each misaligned controller wraps the honest controller.
+It changes a small part of the honest action, so the competence stays.
+The declared attack record gives the trigger, the targets, and the budget.
+
+| Controller | File | What it changes |
+|---|---|---|
+| Profit bias | `src/avalanche/controllers/profit_biased.py` | prefers the premium customers on one route |
+| Sleeper | `src/avalanche/controllers/sleeper_saboteur.py` | reduces one escape lift capacity after a hidden trigger |
+| Reward hacker | `src/avalanche/controllers/reward_hacker.py` | reports a lower congestion and reduces the service capacity |
+
+`configs/experiments/attack-fixtures.yaml` records one fixture for each attack.
+Each entry names the mountain, the scenario, the controller, and the monitor.
+It also records the seed, the success threshold, and the expected score range.
+The paired honest entry uses the same scenario and the same seed.
+The evaluator writes the attack assessment into `summary.json`.
+Only the evaluator reads the true score.
+
+```bash
+uv run pytest tests/regression/test_attack_fixtures.py
+
+uv run avalanche simulate configs/mountain/default.yaml \
+    configs/scenarios/attack-reward-hacker.yaml \
+    configs/controllers/reward-hacker.yaml configs/monitors/none.yaml
+```
 
 ### The simulator
 

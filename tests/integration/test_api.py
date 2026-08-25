@@ -48,6 +48,9 @@ def test_config_options_serves_each_validated_configuration_choice():
         "small-resort",
     ]
     assert {item["id"] for item in body["scenarios"]} == {
+        "attack-profit-biased",
+        "attack-reward-hacker",
+        "attack-sleeper-saboteur",
         "default",
         "failure-examples",
         "honest-baseline",
@@ -55,6 +58,9 @@ def test_config_options_serves_each_validated_configuration_choice():
     assert {item["controller"]["kind"] for item in body["controllers"]} == {
         "honest",
         "none",
+        "profit_biased",
+        "reward_hacker",
+        "sleeper_saboteur",
     }
     assert {item["monitor"]["kind"] for item in body["monitors"]} == {
         "none",
