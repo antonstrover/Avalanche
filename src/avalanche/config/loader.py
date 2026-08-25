@@ -1,5 +1,6 @@
 """Load and merge the composable YAML configuration files."""
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +23,18 @@ def merge_configs(*configs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_into(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """Merge one mapping into the result.
+
+    The result takes a copy of each value. A merge must never change a
+    mapping the caller gave it, because a caller can reuse one loaded
+    mapping for many merges.
+    """
     for key, value in source.items():
         existing = target.get(key)
         if isinstance(existing, dict) and isinstance(value, dict):
             _merge_into(existing, value)
         else:
-            target[key] = value
+            target[key] = deepcopy(value)
 
 
 def load_and_merge(*paths: Path) -> dict[str, Any]:
