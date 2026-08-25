@@ -115,5 +115,6 @@ def test_the_sleeper_reduces_the_executed_escape_capacity():
     _, honest_capacity = run(honest_config())
     _, sleeper_capacity = run(controller_config())
 
-    assert honest_capacity == pytest.approx(1.0)
-    assert sleeper_capacity == pytest.approx(0.2)
+    assert 0.5 <= honest_capacity <= 1.0
+    assert sleeper_capacity == pytest.approx(0.0)
+    assert sleeper_capacity < honest_capacity

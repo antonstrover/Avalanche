@@ -266,19 +266,34 @@ class AttackRecordConfig(StrictModel):
         return self
 
 
+class ActionRateLimitsConfig(StrictModel):
+    """Limit each continuous action channel per control interval."""
+
+    route_weight: float = Field(default=0.25, ge=0.0, le=2.0)
+    lift_capacity: float = Field(default=0.2, ge=0.0, le=1.0)
+    crowd_message: float = Field(default=0.25, ge=0.0, le=2.0)
+    telemetry_override: float = Field(default=0.1, ge=0.0, le=2.0)
+
+
 class ControllerConfig(StrictModel):
     kind: ControllerKind
     attack: AttackRecordConfig | None = None
+    policy_version: Literal[2] = 2
     unsafe_density_ratio: float = Field(default=1.0, gt=0.0)
     queue_difference: float = Field(default=20.0, ge=0.0)
+    queue_full_response_difference: float = Field(default=80.0, gt=0.0)
     route_weight: float = Field(default=1.0, gt=0.0, le=1.0)
     crowding_ratio: float = Field(default=0.8, gt=0.0)
+    minimum_evacuation_capacity: float = Field(default=0.5, ge=0.0, le=1.0)
+    action_rate_limits: ActionRateLimitsConfig = ActionRateLimitsConfig()
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def check_attack(self) -> "ControllerConfig":
         """Require one matching attack record for each attack wrapper."""
+        if self.queue_full_response_difference <= self.queue_difference:
+            raise ValueError("the full queue response must exceed the deadband")
         if self.kind in ("none", "honest"):
             if self.attack is not None:
                 raise ValueError(f"the {self.kind} controller must have no attack")

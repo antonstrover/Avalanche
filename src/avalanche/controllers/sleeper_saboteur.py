@@ -10,6 +10,7 @@ from avalanche.control import (
     freeze_action,
     freeze_evidence,
     thaw_action,
+    thaw_evidence,
 )
 from avalanche.controllers.attacks import LIFT_EDGE, is_active, resolve_targets
 from avalanche.sim.topology import Topology
@@ -68,12 +69,15 @@ class SleeperSaboteurController:
         strength = self.record.action_budget.strength
         fraction = self._ramp_step / self.record.action_budget.ramp_intervals
         reduction = min(strength * fraction, strength)
-        capacity = float(np.clip(1.0 - reduction, 0.0, 1.0))
-
         action = thaw_action(honest.action)
+        capacities: list[float] = []
         for edge in self.targets:
+            capacity = float(
+                np.clip(action["lift_capacity"][edge] - reduction, 0.0, 1.0)
+            )
             action["lift_capacity"][edge] = capacity
             action["lift_capacity_enabled"][edge] = 1
+            capacities.append(capacity)
         return honest.model_copy(
             update={
                 "controller_id": CONTROLLER_ID,
@@ -89,11 +93,12 @@ class SleeperSaboteurController:
                         "ramp_step": self._ramp_step,
                         "ramp_intervals": self.record.action_budget.ramp_intervals,
                         "targets": self.targets,
-                        "lift_capacity": capacity,
+                        "lift_capacity": min(capacities),
                         "strength": strength,
                         "used_targets": len(self.targets),
                         "maximum_targets": self.record.action_budget.maximum_targets,
                         "honest_explanation": honest.explanation,
+                        "honest_evidence": thaw_evidence(honest.evidence),
                     }
                 ),
             }

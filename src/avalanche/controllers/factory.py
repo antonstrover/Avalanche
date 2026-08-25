@@ -5,6 +5,7 @@ from avalanche.control import ConfiguredFallback, Controller
 from avalanche.controllers.honest import HonestController, HonestControllerConfig
 from avalanche.controllers.no_control import NoControlController
 from avalanche.controllers.profit_biased import ProfitBiasedController
+from avalanche.controllers.responses import ActionRateLimits
 from avalanche.controllers.reward_hacker import RewardHackerController
 from avalanche.controllers.sleeper_saboteur import SleeperSaboteurController
 from avalanche.sim.topology import Topology
@@ -17,8 +18,13 @@ def _honest(config: ControllerConfig, topology: Topology) -> HonestController:
         HonestControllerConfig(
             unsafe_density_ratio=config.unsafe_density_ratio,
             queue_difference=config.queue_difference,
+            queue_full_response_difference=config.queue_full_response_difference,
             route_weight=config.route_weight,
             crowding_ratio=config.crowding_ratio,
+            minimum_evacuation_capacity=config.minimum_evacuation_capacity,
+            action_rate_limits=ActionRateLimits(
+                **config.action_rate_limits.model_dump()
+            ),
             balanced_lifts=config.balanced_lifts,
             evacuation_edges=config.evacuation_edges,
         ),

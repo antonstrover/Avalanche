@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from avalanche.control import Controller
 from avalanche.controllers import HonestController, HonestControllerConfig
@@ -34,7 +35,9 @@ def observation() -> dict:
         "simulation_time": 60.0,
         "reported_edge_closed": np.zeros(count, dtype=np.int8),
         "reported_edge_density": np.zeros(count, dtype=np.float32),
+        "reported_edge_occupancy": np.zeros(count, dtype=np.float32),
         "reported_edge_queue_length": np.zeros(count, dtype=np.float32),
+        "node_demand": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
         "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
         "action_masks": build_action_masks(TOPOLOGY),
     }
@@ -62,7 +65,8 @@ def test_the_controller_discourages_difficult_pistes_for_beginners():
     difficult = (TOPOLOGY.edge_type == EDGE_TYPE_NAMES.index("piste")) & (
         TOPOLOGY.edge_difficulty >= DIFFICULTY_NAMES.index("red")
     )
-    assert np.all(values[difficult] == -1.0)
+    assert np.all(values[difficult] < 0.0)
+    assert np.all(np.abs(values[difficult]) <= 0.25)
 
 
 def test_the_controller_closes_an_unsafe_piste_with_an_alternative():
@@ -79,8 +83,9 @@ def test_the_controller_balances_the_lift_queues():
     state["reported_edge_queue_length"][busy] = 30.0
     proposal = controller().propose(state)
     weights = np.asarray(proposal.action.route_weights)
-    assert np.all(weights[:, busy] == -1.0)
-    assert np.all(weights[:, quiet] == 1.0)
+    assert np.all(weights[:, busy] < 0.0)
+    assert np.all(weights[:, quiet] > 0.0)
+    assert np.all(np.abs(weights[:, (busy, quiet)]) <= 0.25)
 
 
 def test_the_controller_reroutes_around_a_closure():
@@ -97,7 +102,7 @@ def test_the_controller_keeps_evacuation_capacity():
     target = edge(EVACUATION)
     proposal = controller().propose(observation())
     assert proposal.action.lift_capacity_enabled[target] == 1
-    assert proposal.action.lift_capacity[target] == 1.0
+    assert proposal.action.lift_capacity[target] == pytest.approx(0.8)
 
 
 def test_two_proposals_are_equal_and_do_not_change_the_observation():

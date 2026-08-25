@@ -50,6 +50,22 @@ def test_an_unknown_information_profile_is_rejected():
         ResolvedConfig.model_validate(data)
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"policy_version": 1},
+        {"queue_difference": 20.0, "queue_full_response_difference": 20.0},
+        {"action_rate_limits": {"route_weight": -0.1}},
+        {"minimum_evacuation_capacity": 1.1},
+    ],
+)
+def test_invalid_continuous_policy_settings_are_rejected(changes):
+    data = load_and_merge(*SAMPLE_FILES)
+    data["controller"].update(changes)
+    with pytest.raises(ValidationError):
+        ResolvedConfig.model_validate(data)
+
+
 def test_missing_seed_is_rejected():
     data = load_and_merge(*SAMPLE_FILES)
     del data["seed"]

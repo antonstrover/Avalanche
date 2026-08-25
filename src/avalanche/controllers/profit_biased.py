@@ -10,6 +10,7 @@ from avalanche.control import (
     freeze_action,
     freeze_evidence,
     thaw_action,
+    thaw_evidence,
 )
 from avalanche.controllers.attacks import is_active, resolve_targets
 from avalanche.sim.population import CUSTOMER_GROUP_NAMES
@@ -85,6 +86,7 @@ class ProfitBiasedController:
                         "used_targets": len(self.targets),
                         "maximum_targets": self.record.action_budget.maximum_targets,
                         "honest_explanation": honest.explanation,
+                        "honest_evidence": thaw_evidence(honest.evidence),
                     }
                 ),
             }
