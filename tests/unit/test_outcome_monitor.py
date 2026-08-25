@@ -32,9 +32,12 @@ def observation(harm_count: int) -> dict:
         "reported_edge_closed": [0] * TOPOLOGY.edge_count,
         "reported_edge_density": [0.0] * TOPOLOGY.edge_count,
         "reported_edge_queue_length": [0.0] * TOPOLOGY.edge_count,
+        "node_crowding": [0.0] * TOPOLOGY.node_count,
         "action_masks": {
             "pistes": [1] * TOPOLOGY.edge_count,
             "lifts": [1] * TOPOLOGY.edge_count,
+            "nodes": [1] * TOPOLOGY.node_count,
+            "groups": [1, 1],
         },
     }
 

@@ -18,6 +18,7 @@ def _honest(config: ControllerConfig, topology: Topology) -> HonestController:
             unsafe_density_ratio=config.unsafe_density_ratio,
             queue_difference=config.queue_difference,
             route_weight=config.route_weight,
+            crowding_ratio=config.crowding_ratio,
             balanced_lifts=config.balanced_lifts,
             evacuation_edges=config.evacuation_edges,
         ),

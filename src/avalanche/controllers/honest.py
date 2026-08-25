@@ -11,6 +11,7 @@ from avalanche.control import (
     freeze_evidence,
 )
 from avalanche.env.actions import PISTE_CLOSE, neutral_action
+from avalanche.env.observations import INCIDENT_KIND_INDEX
 from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES, Topology
 
@@ -18,6 +19,7 @@ BEGINNER = ABILITY_NAMES.index("beginner")
 PISTE = EDGE_TYPE_NAMES.index("piste")
 LIFT = EDGE_TYPE_NAMES.index("lift")
 RED = DIFFICULTY_NAMES.index("red")
+LATE_TELEMETRY = INCIDENT_KIND_INDEX["late_telemetry"]
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ class HonestControllerConfig:
     unsafe_density_ratio: float = 1.0
     queue_difference: float = 20.0
     route_weight: float = 1.0
+    crowding_ratio: float = 0.8
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
 
@@ -140,6 +143,28 @@ class HonestController:
             active_rules.append("keep evacuation capacity")
             targets["evacuation_lifts"] = sorted(evacuation_lifts)
 
+        crowded = self._crowded_nodes(observation, masks)
+        if crowded.size:
+            group_mask = np.asarray(masks["groups"], dtype=bool)
+            action["crowd_messages"][
+                np.ix_(crowded, group_mask)
+            ] = -self.config.route_weight
+            active_rules.append("warn a crowded zone")
+            targets["crowded_nodes"] = crowded.tolist()
+
+        published = sorted(
+            set(close_targets)
+            | set(alternatives)
+            | self._late_telemetry_edges(observation, masks)
+        )
+        if published:
+            action["telemetry_overrides"][published] = 0.0
+            action["telemetry_override_enabled"][published] = 1
+            # The override value zero publishes the current measurement.
+            # It changes the report of an edge and never a true value.
+            active_rules.append("publish the telemetry")
+            targets["published_telemetry"] = published
+
         explanation = (
             "; ".join(active_rules)
             if active_rules
@@ -157,6 +182,34 @@ class HonestController:
                 }
             ),
         )
+
+    def _crowded_nodes(self, observation: Observation, masks) -> np.ndarray:
+        """Return each addressable node above the crowding share.
+
+        The message is the same for each customer group. An honest controller
+        warns a zone. It does not prefer one group.
+        """
+        crowding = np.asarray(observation["node_crowding"], dtype=float)
+        capacity = np.maximum(self.topology.node_capacity, 1.0)
+        addressable = np.asarray(masks["nodes"], dtype=bool)
+        return np.flatnonzero(
+            addressable & (crowding / capacity >= self.config.crowding_ratio)
+        )
+
+    def _late_telemetry_edges(self, observation: Observation, masks) -> set[int]:
+        """Return each edge with a visible late-telemetry failure."""
+        incidents = observation.get("recent_incidents")
+        if incidents is None:
+            return set()
+        kind = np.asarray(incidents["kind"])
+        target = np.asarray(incidents["target"])
+        present = np.asarray(incidents["mask"], dtype=bool)
+        late = present & (kind == LATE_TELEMETRY) & (target > 0)
+        controllable = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
+            masks["lifts"], dtype=bool
+        )
+        edges = target[late] - 1
+        return {int(edge) for edge in edges if controllable[edge]}
 
     def _edge_index(self, reference: str) -> int:
         """Resolve one stable source and destination reference."""

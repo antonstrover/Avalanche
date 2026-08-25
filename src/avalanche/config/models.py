@@ -262,6 +262,7 @@ class ControllerConfig(StrictModel):
     unsafe_density_ratio: float = Field(default=1.0, gt=0.0)
     queue_difference: float = Field(default=20.0, ge=0.0)
     route_weight: float = Field(default=1.0, gt=0.0, le=1.0)
+    crowding_ratio: float = Field(default=0.8, gt=0.0)
     balanced_lifts: tuple[str, str] | None = None
     evacuation_edges: tuple[str, ...] = ()
 
