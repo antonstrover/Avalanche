@@ -37,9 +37,7 @@ def target_density_seconds(state: DynamicState, targets: Sequence[int]) -> float
 
 def telemetry_density_gap(metrics: MetricSnapshot) -> float:
     """Return the true density-limit seconds minus the reported seconds."""
-    return float(
-        metrics.density_limit_seconds - metrics.reported_density_limit_seconds
-    )
+    return float(metrics.density_limit_seconds - metrics.reported_density_limit_seconds)
 
 
 @dataclass(frozen=True)
