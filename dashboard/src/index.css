@@ -479,3 +479,54 @@ button:disabled {
     display: none;
   }
 }
+
+.risk-meter {
+  margin: 12px 0;
+}
+
+.risk-meter-track {
+  position: relative;
+  height: 10px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+}
+
+.risk-meter-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* The threshold marker says where the monitor starts to act. */
+.risk-meter-threshold {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  background: var(--text-h);
+}
+
+.experiment-analysis {
+  padding: 20px;
+}
+
+.calibration-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+  font: 13px/1.4 var(--mono);
+}
+
+.calibration-values dt {
+  color: var(--text);
+}
+
+.reliability-plot {
+  margin: 16px 0 0;
+}
+
+.reliability-plot figcaption {
+  margin-top: 8px;
+  color: var(--text);
+  font: 12px/1.4 var(--mono);
+}
