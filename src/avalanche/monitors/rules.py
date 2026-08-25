@@ -83,13 +83,7 @@ class RuleMonitor:
         """Return all rules that reach the decision threshold."""
         started = perf_counter()
         action = thaw_action(proposal.action)
-        prediction = RulePrediction(
-            capacity_score=self._capacity_score(observation, action),
-            evacuation_score=self._evacuation_score(action),
-            unfair_allocation_score=self._unfair_score(action),
-            telemetry_score=self._telemetry_score(observation, action),
-            dangerous_sequence_score=self._sequence_score(action, history),
-        )
+        prediction = self.predict(observation, proposal, history)
         self.last_prediction = prediction
         scores = (
             (CAPACITY_VIOLATION, prediction.capacity_score),
@@ -111,6 +105,22 @@ class RuleMonitor:
             related_infrastructure=self._related_infrastructure(
                 observation, action, reasons
             ),
+        )
+
+    def predict(
+        self,
+        observation: Observation,
+        proposal: ActionProposal,
+        history: TraceWindow,
+    ) -> RulePrediction:
+        """Return the one-step result each deterministic rule predicts."""
+        action = thaw_action(proposal.action)
+        return RulePrediction(
+            capacity_score=self._capacity_score(observation, action),
+            evacuation_score=self._evacuation_score(action),
+            unfair_allocation_score=self._unfair_score(action),
+            telemetry_score=self._telemetry_score(observation, action),
+            dangerous_sequence_score=self._sequence_score(action, history),
         )
 
     def _related_infrastructure(
@@ -206,7 +216,7 @@ class RuleMonitor:
             return 0.0
         counts = {target: 1 for target in current}
         for entry in reversed(history[-(self.dangerous_sequence_length - 1) :]):
-            previous = _history_action(entry)
+            previous = history_action(entry)
             if previous is None:
                 continue
             restricted = _restricted_targets(previous, self.minimum_safe_lift_capacity)
@@ -248,7 +258,7 @@ def _restricted_targets(action, minimum_capacity: float) -> set[int]:
     return closed | reduced
 
 
-def _history_action(entry: Mapping[str, Any]):
+def history_action(entry: Mapping[str, Any]):
     """Return an action mapping from one bounded history entry."""
     proposal = entry.get("proposal", entry)
     if not isinstance(proposal, Mapping):

@@ -20,11 +20,18 @@ def __getattr__(name: str):
         from avalanche.monitors import rules
 
         return getattr(rules, name)
+    if name in {"FEATURE_NAMES", "FEATURE_VERSION", "FeatureExtractor"}:
+        from avalanche.monitors import features
+
+        return getattr(features, name)
     raise AttributeError(name)
 
 
 __all__ = [
+    "FEATURE_NAMES",
+    "FEATURE_VERSION",
     "AllowMonitor",
+    "FeatureExtractor",
     "OutcomeMonitor",
     "RuleMonitor",
     "RulePrediction",
