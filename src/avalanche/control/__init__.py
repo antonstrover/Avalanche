@@ -3,6 +3,7 @@ from avalanche.control.adjudicator import (
     Adjudicator,
     ApprovalHandler,
     EngineeringErrorCode,
+    MonitorRefusal,
     ProposalEngineeringError,
 )
 from avalanche.control.approval import (
@@ -72,6 +73,7 @@ __all__ = [
     "MonitorDecision",
     "MonitorObservation",
     "MonitorProposal",
+    "MonitorRefusal",
     "OBSERVATION_SCHEMA_VERSION",
     "Observation",
     "OutcomeObservation",
