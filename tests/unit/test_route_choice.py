@@ -1,5 +1,6 @@
 """The grouped route choice must follow the advice with the compliance probability."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -44,13 +45,17 @@ def choice_setup():
     topology = load_topology(FIXTURE)
     # The test measures the share that follows the advice, not the capacity limit.
     # A capacity above the population lets each skier start its chosen edge.
-    topology.edge_safe_capacity[:] = SKIER_COUNT
+    topology = replace(
+        topology,
+        edge_safe_capacity=np.full(topology.edge_count, SKIER_COUNT, dtype=np.float32),
+    )
     routes = build_route_table(topology)
     node = topology.node_index["lift1_top"]
     destination = topology.node_index["base_exit"]
     advised = edge_index(topology, "lift1_top", "lift2_base")
     table = edge_index(topology, "lift1_top", "ridge_junction")
-    assert routes.next_edge[node, destination] == table
+    advanced = ABILITY_NAMES.index("advanced")
+    assert routes.next_edge[advanced, node, destination] == table
     return topology, routes, node, destination, advised, table
 
 
@@ -65,6 +70,7 @@ def run_choice(choice_setup, compliance: float, close_advised: bool = False):
     pop = population_from_starts(
         starts=np.full(SKIER_COUNT, node), destinations=destination
     )
+    pop.ability[:] = ABILITY_NAMES.index("advanced")
     pop.compliance[:] = compliance
     select_next_edges(pop, topology, routes, state, np.random.default_rng(CHOICE_SEED))
 

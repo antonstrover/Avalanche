@@ -149,7 +149,7 @@ class MountainSim:
             if not isinstance(population, PopulationConfig):
                 population = PopulationConfig.model_validate(population)
             self.population = sample_population(
-                self.streams["population"], self.topology, population
+                self.streams["population"], self.topology, self.routes, population
             )
 
         # 4. Resolve the weather with only its independent random stream.

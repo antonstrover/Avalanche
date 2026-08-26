@@ -6,6 +6,7 @@ import numpy as np
 
 from avalanche.sim import build_route_table, load_topology, population_from_starts
 from avalanche.sim.movement import new_dynamic_state, update_stranded
+from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.skier import Status
 
 FIXTURE = (
@@ -20,7 +21,9 @@ def test_a_closed_route_marks_a_skier_after_the_limit():
     destination = topology.node_index["base_exit"]
     population = population_from_starts([source], destination)
     state = new_dynamic_state(topology)
-    route_edge = int(routes.next_edge[source, destination])
+    route_edge = int(
+        routes.next_edge[ABILITY_NAMES.index("beginner"), source, destination]
+    )
     state.closed[route_edge] = True
 
     assert update_stranded(population, routes, state, 5.0, 10.0).size == 0
@@ -36,7 +39,9 @@ def test_an_open_route_clears_the_blocked_time():
     destination = topology.node_index["base_exit"]
     population = population_from_starts([source], destination)
     state = new_dynamic_state(topology)
-    route_edge = int(routes.next_edge[source, destination])
+    route_edge = int(
+        routes.next_edge[ABILITY_NAMES.index("beginner"), source, destination]
+    )
     state.closed[route_edge] = True
     update_stranded(population, routes, state, 5.0, 10.0)
     state.closed[route_edge] = False

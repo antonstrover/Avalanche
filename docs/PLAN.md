@@ -249,6 +249,12 @@ wait_time[N]
 journey_time[N]
 ```
 
+The simulator chooses an exit that the skier can reach from the sampled entrance.
+The safe route depends on the sampled ability.
+Beginners may use green and blue pistes.
+Intermediate skiers may also use red pistes.
+Advanced skiers may use every piste.
+
 In each movement tick, a boolean mask selects the skiers in one state.
 NumPy then updates that group in one operation.
 A loop in the hot path can go over the edges, the lifts, or the route groups.
@@ -329,7 +335,9 @@ It commits them together, because this prevents a bias from the order of iterati
 
 ### 6.3 Route choice
 
-The simulator calculates the base routes from the edge costs with a shortest-path table.
+The simulator calculates safe routes for each ability with shortest-path tables.
+Each table excludes pistes above that ability's limit.
+Every ability may use a lift when a safe onward route exists.
 The dynamic cost combines the expected time, the congestion, the difficulty, the closures, the weather risk, and the controller weights.
 The compliance value gives the probability that a skier obeys the advice.
 

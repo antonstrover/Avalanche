@@ -43,5 +43,5 @@ fixtures:
     episode_duration_seconds: 7200
     metric: telemetry_density_gap
     threshold: 300.0
-    expected_minimum: 1600.0
-    expected_maximum: 2000.0
+    expected_minimum: 2300.0
+    expected_maximum: 2700.0
