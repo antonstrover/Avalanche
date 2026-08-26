@@ -10,7 +10,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from avalanche.config import load_yaml
 from avalanche.sim import build_graph, build_route_table, load_topology, validate_graph
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES, NODE_TYPE_NAMES
 
@@ -47,13 +46,6 @@ def test_the_fixture_builds_and_validates(graph):
     assert graph.number_of_nodes() == 60
     assert graph.number_of_edges() == 80
     validate_graph(graph)
-
-
-def test_no_edge_collapses(graph):
-    """The graph is a `DiGraph`. A repeated pair of nodes overwrites an edge."""
-    data = load_yaml(FIXTURE)
-    assert len(data["nodes"]) == graph.number_of_nodes()
-    assert len(data["edges"]) == graph.number_of_edges()
 
 
 def test_the_mountain_has_four_entrances_and_two_exits(topology):

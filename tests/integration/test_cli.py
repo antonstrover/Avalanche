@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from avalanche.cli import main
+from avalanche.config import load_yaml
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
@@ -10,6 +11,15 @@ SAMPLE_ARGS = [
     str(CONFIGS / "mountain" / "default.yaml"),
     str(CONFIGS / "scenarios" / "default.yaml"),
     str(CONFIGS / "controllers" / "honest.yaml"),
+    str(CONFIGS / "monitors" / "none.yaml"),
+]
+MOUNTAIN_CONFIGS = [
+    pytest.param(CONFIGS / "mountain" / "default.yaml", 60, 80, id="medium"),
+    pytest.param(CONFIGS / "mountain" / "small.yaml", 10, 12, id="small"),
+]
+SHARED_ARGS = [
+    str(CONFIGS / "scenarios" / "default.yaml"),
+    str(CONFIGS / "controllers" / "none.yaml"),
     str(CONFIGS / "monitors" / "none.yaml"),
 ]
 
@@ -114,6 +124,50 @@ def test_config_commands_reject_rule_replacement(command, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "rule monitor cannot use a REPLACE" in captured.err
     assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("mountain_path", "node_count", "edge_count"), MOUNTAIN_CONFIGS
+)
+@pytest.mark.parametrize("field", ["node_count", "edge_count"])
+def test_validate_config_rejects_a_wrong_mountain_count(
+    mountain_path,
+    node_count,
+    edge_count,
+    field,
+    tmp_path,
+    capsys,
+):
+    loaded_value = {"node_count": node_count, "edge_count": edge_count}[field]
+    declared = loaded_value + 1
+    override = tmp_path / "wrong-count.yaml"
+    override.write_text(f"mountain:\n  {field}: {declared}\n")
+
+    assert (
+        _run(["validate-config", str(mountain_path), *SHARED_ARGS, str(override)]) == 1
+    )
+
+    captured = capsys.readouterr()
+    mountain = str(load_yaml(mountain_path)["mountain"]["path"])
+    assert mountain in captured.err
+    assert field in captured.err
+    assert str(declared) in captured.err
+    assert str(loaded_value) in captured.err
+
+
+@pytest.mark.parametrize(("field", "loaded"), [("node_count", 60), ("edge_count", 80)])
+def test_a_wrong_mountain_count_prevents_run_directory_creation(
+    field, loaded, tmp_path, monkeypatch
+):
+    override = tmp_path / "wrong-count.yaml"
+    override.write_text(f"mountain:\n  {field}: {loaded + 1}\n")
+    calls = []
+    monkeypatch.setattr(
+        "avalanche.cli.make_run_dir", lambda resolved: calls.append(resolved)
+    )
+
+    assert _run(["simulate", *SAMPLE_ARGS, str(override)]) == 1
+    assert calls == []
 
 
 def test_simulate_runs_an_episode_in_the_run_directory(tmp_path, monkeypatch):

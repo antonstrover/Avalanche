@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,40 @@ from avalanche.sim import build_graph, validate_graph
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+)
+MOUNTAIN_FIXTURES = sorted(FIXTURE.parent.glob("*-resort.yaml"))
+NODE_FIELDS = ("node_id", "node_type", "x", "y", "elevation", "capacity")
+EDGE_FIELDS = (
+    "source",
+    "destination",
+    "edge_type",
+    "difficulty",
+    "length",
+    "nominal_travel_time",
+    "safe_capacity",
+    "critical_density",
+    "lift_throughput",
+    "wind_sensitivity",
+    "visibility_sensitivity",
+    "snow_sensitivity",
+)
+POSITIVE_EDGE_FIELDS = (
+    "length",
+    "nominal_travel_time",
+    "safe_capacity",
+    "critical_density",
+)
+SENSITIVITY_FIELDS = (
+    "wind_sensitivity",
+    "visibility_sensitivity",
+    "snow_sensitivity",
+)
+INVALID_NUMBERS = (
+    pytest.param("invalid", id="string"),
+    pytest.param(None, id="null"),
+    pytest.param(True, id="Boolean"),
+    pytest.param(float("inf"), id="infinite"),
+    pytest.param(float("nan"), id="NaN"),
 )
 
 
@@ -25,6 +60,252 @@ def test_the_fixture_builds_and_validates():
     assert graph.number_of_nodes() == 10
     assert graph.number_of_edges() == 12
     validate_graph(graph)
+
+
+@pytest.mark.parametrize("path", MOUNTAIN_FIXTURES, ids=lambda path: path.stem)
+def test_each_raw_record_survives_graph_construction(path):
+    data = load_yaml(path)
+    graph = build_graph(path)
+
+    assert len(data["nodes"]) == graph.number_of_nodes()
+    assert len(data["edges"]) == graph.number_of_edges()
+
+
+def test_a_duplicate_node_is_rejected(tmp_path):
+    def change(data):
+        data["nodes"].append(deepcopy(data["nodes"][0]))
+
+    path = build_broken(tmp_path, change)
+    node_id = load_yaml(path)["nodes"][0]["node_id"]
+
+    with pytest.raises(ValueError, match=rf"{path}.*node.*{node_id}"):
+        build_graph(path)
+
+
+def test_a_duplicate_directed_edge_is_rejected(tmp_path):
+    def change(data):
+        data["edges"].append(deepcopy(data["edges"][0]))
+
+    path = build_broken(tmp_path, change)
+    edge = load_yaml(path)["edges"][0]
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{path}.*edge.*{edge['source']}.*{edge['destination']}",
+    ):
+        build_graph(path)
+
+
+def test_opposite_directed_edges_are_accepted(tmp_path):
+    def change(data):
+        edge = deepcopy(data["edges"][0])
+        edge["source"], edge["destination"] = edge["destination"], edge["source"]
+        data["edges"].append(edge)
+
+    graph = build_graph(build_broken(tmp_path, change))
+
+    assert graph.number_of_edges() == 13
+
+
+@pytest.mark.parametrize("field", NODE_FIELDS)
+def test_a_missing_node_field_is_rejected(field, tmp_path):
+    def change(data):
+        data["nodes"][0].pop(field)
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("field", EDGE_FIELDS)
+def test_a_missing_edge_field_is_rejected(field, tmp_path):
+    def change(data):
+        data["edges"][0].pop(field)
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("value", INVALID_NUMBERS)
+@pytest.mark.parametrize("field", ("x", "y", "elevation", "capacity"))
+def test_an_invalid_node_number_is_rejected(field, value, tmp_path):
+    def change(data):
+        data["nodes"][0][field] = value
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("value", INVALID_NUMBERS)
+@pytest.mark.parametrize("field", (*POSITIVE_EDGE_FIELDS, *SENSITIVITY_FIELDS))
+def test_an_invalid_edge_number_is_rejected(field, value, tmp_path):
+    def change(data):
+        data["edges"][0][field] = value
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("value", INVALID_NUMBERS)
+def test_an_invalid_lift_throughput_is_rejected(value, tmp_path):
+    def change(data):
+        lift = next(edge for edge in data["edges"] if edge["edge_type"] == "lift")
+        lift["lift_throughput"] = value
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*lift_throughput"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_a_nonpositive_node_capacity_is_rejected(value, tmp_path):
+    def change(data):
+        data["nodes"][0]["capacity"] = value
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*capacity"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("field", POSITIVE_EDGE_FIELDS)
+@pytest.mark.parametrize("value", [0, -1])
+def test_a_nonpositive_edge_limit_is_rejected(field, value, tmp_path):
+    def change(data):
+        data["edges"][0][field] = value
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_a_nonpositive_lift_throughput_is_rejected(value, tmp_path):
+    def change(data):
+        lift = next(edge for edge in data["edges"] if edge["edge_type"] == "lift")
+        lift["lift_throughput"] = value
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*lift_throughput"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("field", SENSITIVITY_FIELDS)
+def test_a_negative_sensitivity_is_rejected(field, tmp_path):
+    def change(data):
+        data["edges"][0][field] = -0.1
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
+def test_zero_sensitivities_are_accepted(tmp_path):
+    def change(data):
+        for field in SENSITIVITY_FIELDS:
+            data["edges"][0][field] = 0.0
+
+    graph = build_graph(build_broken(tmp_path, change))
+
+    assert graph.number_of_edges() == 12
+
+
+def test_negative_coordinates_are_accepted(tmp_path):
+    def change(data):
+        data["nodes"][0]["x"] = -10.0
+        data["nodes"][0]["y"] = -20.0
+        data["nodes"][0]["elevation"] = -30.0
+
+    graph = build_graph(build_broken(tmp_path, change))
+
+    assert graph.nodes["base_village"]["elevation"] == -30.0
+
+
+def test_a_piste_with_a_throughput_is_rejected(tmp_path):
+    def change(data):
+        data["edges"][0]["lift_throughput"] = 100
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*lift_throughput"):
+        build_graph(path)
+
+
+def test_a_piste_with_an_explicit_null_throughput_is_accepted():
+    graph = build_graph(FIXTURE)
+
+    piste = next(
+        data for *_, data in graph.edges(data=True) if data["edge_type"] == "piste"
+    )
+    assert piste["lift_throughput"] is None
+
+
+def test_an_unknown_difficulty_is_rejected(tmp_path):
+    def change(data):
+        data["edges"][0]["difficulty"] = "extreme"
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*difficulty"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize(
+    ("kind", "field"),
+    [("nodes", "controllable"), ("edges", "controllable")],
+)
+def test_a_nonboolean_control_flag_is_rejected(kind, field, tmp_path):
+    def change(data):
+        data[kind][0][field] = 1
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("kind", ["nodes", "edges"])
+def test_a_missing_record_list_is_rejected(kind, tmp_path):
+    def change(data):
+        data.pop(kind)
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{kind}"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("kind", ["nodes", "edges"])
+def test_a_nonmapping_record_is_rejected(kind, tmp_path):
+    def change(data):
+        data[kind][0] = "invalid"
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*mapping"):
+        build_graph(path)
+
+
+@pytest.mark.parametrize("kind", ["nodes", "edges"])
+def test_a_nonlist_record_collection_is_rejected(kind, tmp_path):
+    def change(data):
+        data[kind] = {}
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*list"):
+        build_graph(path)
 
 
 def test_the_lifts_go_up_and_the_pistes_go_down():
