@@ -95,7 +95,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "calibration_version": 2,
         "dataset_version": 4,
         "envelope_version": 1,
-        "evaluation_version": 2,
+        "evaluation_version": 3,
         "feature_version": 2,
         "model_version": 2,
         "observation_schema_version": 2,

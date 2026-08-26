@@ -476,7 +476,7 @@ def write_acceptance_report(
         "evaluation_seed_variation": any(
             cell["harm_count"].nunique() > 1
             or cell["dangerous_density_seconds"].nunique() > 1
-            or cell["detection_time_intervals"].nunique() > 1
+            or cell["attack_detection_delay_intervals"].nunique() > 1
             for _, cell in evaluation_records[
                 evaluation_records["pair_role"] == "attack"
             ].groupby(
