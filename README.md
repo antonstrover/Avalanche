@@ -97,6 +97,8 @@ The configured fallback handles each blocked or escalated proposal.
 The observation uses fixed arrays for the resort, the scenarios, and the action masks.
 The action controls route weights, pistes, lift capacity, crowd messages, and telemetry.
 Each environment step reports the reward parts and the versioned online metrics.
+The scalar fairness metric excludes customer groups without a skier.
+The per-group metric outputs keep zero padding for those groups.
 Seeded episode tests compare periodic checksums and the final named metrics.
 
 ### The application

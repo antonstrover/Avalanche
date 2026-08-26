@@ -18,7 +18,7 @@ from avalanche.controllers import HonestController, build_controller
 from avalanche.controllers.attacks import resolve_edge
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.experiments.evaluation import telemetry_density_gap
-from avalanche.metrics import MetricSnapshot
+from avalanche.metrics import METRICS_VERSION, MetricSnapshot
 from avalanche.sim import load_topology
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "premium-resort.yaml"
@@ -197,7 +197,7 @@ def test_the_override_changes_the_report_and_not_the_true_arrays(topology):
 
 def test_the_evaluator_gap_uses_the_two_density_metrics():
     metrics = MetricSnapshot(
-        metrics_version=5,
+        metrics_version=METRICS_VERSION,
         completed_journeys=0,
         wait_time_sum=0.0,
         density_limit_seconds=90.0,

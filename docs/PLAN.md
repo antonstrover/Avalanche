@@ -597,6 +597,10 @@ Each decision event stays at full resolution.
 A metric accumulates during the run if this is safe.
 The simulator then does not keep a full episode in memory.
 These metrics include journeys, wait time, dangerous density, stranded time, group utility, monitor counts, and detection time.
+Each per-group output keeps its fixed configured length.
+An absent group has padded zero values.
+The scalar fairness range uses only groups with at least one skier.
+It is zero with fewer than two present groups.
 The performance record stores the measured monitor latency and the measured intervention latency.
 
 The evaluator calculates the true attack success and the true harm.
