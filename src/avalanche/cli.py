@@ -6,7 +6,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir
+from avalanche.config import (
+    ConfigLoadError,
+    ResolvedConfig,
+    load_and_merge,
+    make_run_dir,
+)
 from avalanche.experiments import run_episode
 
 
@@ -15,12 +20,17 @@ def _resolve_config(paths: list[str]) -> ResolvedConfig:
     return ResolvedConfig.model_validate(merged)
 
 
+def _report_config_error(error: ConfigLoadError | ValidationError) -> int:
+    """Print one configuration error and return the failure code."""
+    print(error, file=sys.stderr)
+    return 1
+
+
 def validate_config(args: argparse.Namespace) -> int:
     try:
         _resolve_config(args.config)
-    except ValidationError as error:
-        print(error, file=sys.stderr)
-        return 1
+    except (ConfigLoadError, ValidationError) as error:
+        return _report_config_error(error)
     print("OK")
     return 0
 
@@ -28,9 +38,8 @@ def validate_config(args: argparse.Namespace) -> int:
 def simulate(args: argparse.Namespace) -> int:
     try:
         resolved = _resolve_config(args.config)
-    except ValidationError as error:
-        print(error, file=sys.stderr)
-        return 1
+    except (ConfigLoadError, ValidationError) as error:
+        return _report_config_error(error)
 
     run_dir = make_run_dir(resolved)
     run_episode(resolved, run_dir)

@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from avalanche.config import load_yaml, merge_configs
+import pytest
+
+from avalanche.config import ConfigLoadError, load_yaml, merge_configs
 from avalanche.config.loader import load_and_merge
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
@@ -16,6 +18,60 @@ SAMPLE_FILES = [
 def test_load_yaml_reads_a_mapping():
     data = load_yaml(SAMPLE_FILES[0])
     assert data["mountain"]["name"] == "val-tarin"
+
+
+def test_load_yaml_reports_a_missing_file(tmp_path):
+    path = tmp_path / "missing.yaml"
+
+    with pytest.raises(ConfigLoadError, match=str(path)) as error_info:
+        load_yaml(path)
+
+    assert isinstance(error_info.value.__cause__, FileNotFoundError)
+
+
+def test_load_yaml_reports_an_unreadable_file(tmp_path, monkeypatch):
+    path = tmp_path / "unreadable.yaml"
+    path.write_text("seed: 1\n")
+
+    def reject_open(_path, *args, **kwargs):
+        raise PermissionError("test permission failure")
+
+    monkeypatch.setattr(Path, "open", reject_open)
+    with pytest.raises(ConfigLoadError, match=str(path)) as error_info:
+        load_yaml(path)
+
+    assert isinstance(error_info.value.__cause__, PermissionError)
+
+
+def test_load_yaml_reports_invalid_utf8(tmp_path):
+    path = tmp_path / "invalid-utf8.yaml"
+    path.write_bytes(b"seed: \xff\n")
+
+    with pytest.raises(ConfigLoadError, match=str(path)) as error_info:
+        load_yaml(path)
+
+    assert isinstance(error_info.value.__cause__, UnicodeError)
+
+
+def test_load_yaml_reports_invalid_yaml(tmp_path):
+    path = tmp_path / "invalid.yaml"
+    path.write_text("seed: [\n")
+
+    with pytest.raises(ConfigLoadError, match=str(path)) as error_info:
+        load_yaml(path)
+
+    assert error_info.value.__cause__ is not None
+
+
+@pytest.mark.parametrize("contents", ["", "null\n", "value\n", "- item\n"])
+def test_load_yaml_rejects_a_nonmapping_root(tmp_path, contents):
+    path = tmp_path / "invalid-root.yaml"
+    path.write_text(contents)
+
+    with pytest.raises(ConfigLoadError, match="root must be a mapping") as error_info:
+        load_yaml(path)
+
+    assert str(path) in str(error_info.value)
 
 
 def test_merge_configs_combines_and_overrides():
