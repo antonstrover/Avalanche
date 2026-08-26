@@ -101,6 +101,7 @@ class ProposalEngineeringError(RuntimeError):
 class AdjudicationResult:
     """Hold one proposal, one decision, and one final action."""
 
+    decision_id: str
     proposal: ActionProposal
     decision: MonitorDecision
     executed_action: ExecutedAction
@@ -205,9 +206,7 @@ class Adjudicator:
                 fallback_source = fallback.controller_id
             else:
                 approval_request = ApprovalRequest(
-                    decision_id=(
-                        f"{proposal.simulation_time:g}:{proposal.controller_id}"
-                    ),
+                    decision_id=decision_identifier(proposal),
                     proposal=proposal,
                     decision=decision,
                     safe_fallback=fallback.action,
@@ -240,6 +239,7 @@ class Adjudicator:
         if record_fallback is not None:
             record_fallback(executed_action)
         return AdjudicationResult(
+            decision_id=decision_identifier(proposal),
             proposal=proposal,
             decision=decision,
             executed_action=executed_action,
@@ -260,6 +260,11 @@ class Adjudicator:
             self.validate(action)
         except (TypeError, ValueError) as error:
             raise ProposalEngineeringError(code, str(error), proposal) from error
+
+
+def decision_identifier(proposal: ActionProposal) -> str:
+    """Return the stable identifier for one control decision."""
+    return f"{proposal.simulation_time:g}:{proposal.controller_id}"
 
 
 def _qualified_type(error: BaseException) -> str:

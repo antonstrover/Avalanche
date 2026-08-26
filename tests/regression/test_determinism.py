@@ -55,8 +55,8 @@ METRIC_NAMES = {
     "mean_wait_seconds",
     "intervention_latency_count",
     "monitor_decision_count",
-    "detection_interval",
-    "harm_before_detection",
+    "first_intervention_interval",
+    "harm_before_first_intervention",
     "intervention_cost",
 }
 DETERMINISTIC_SUMMARY_FIELDS = (

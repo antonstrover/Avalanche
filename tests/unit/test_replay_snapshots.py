@@ -121,8 +121,8 @@ def populated_simulator() -> MountainSim:
     sim.metrics.intervention_latency_count = 1
     sim.metrics.monitor_latency_seconds_sum = 0.5
     sim.metrics.monitor_decision_count = 2
-    sim.metrics.detection_interval = 1
-    sim.metrics.harm_before_detection = 2.0
+    sim.metrics.first_intervention_interval = 1
+    sim.metrics.harm_before_first_intervention = 2.0
     return sim
 
 

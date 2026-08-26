@@ -5,6 +5,7 @@ from avalanche.control.adjudicator import (
     EngineeringErrorCode,
     MonitorRefusal,
     ProposalEngineeringError,
+    decision_identifier,
 )
 from avalanche.control.approval import (
     ApprovalChoice,
@@ -89,6 +90,7 @@ __all__ = [
     "build_outcome_observation",
     "build_process_observation",
     "copy_observation",
+    "decision_identifier",
     "freeze_action",
     "freeze_evidence",
     "observation_as_json",

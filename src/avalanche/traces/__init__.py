@@ -6,12 +6,18 @@ from avalanche.traces.snapshots import (
     encode_snapshot,
     restore_snapshot,
 )
-from avalanche.traces.writer import EVENT_SCHEMA_VERSION, EventRecord, TraceWriter
+from avalanche.traces.writer import (
+    EVENT_SCHEMA_VERSION,
+    EventRecord,
+    EventState,
+    TraceWriter,
+)
 
 __all__ = [
     "EVENT_SCHEMA_VERSION",
     "SNAPSHOT_SCHEMA_VERSION",
     "EventRecord",
+    "EventState",
     "SnapshotSchemaError",
     "TraceWriter",
     "encode_snapshot",

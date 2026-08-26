@@ -16,7 +16,7 @@ from avalanche.sim.hazards import HazardEvent
 from avalanche.sim.movement import DynamicState, new_dynamic_state
 from avalanche.sim.population import SkierArrays, empty_population
 
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 
 _SNAPSHOT_KEYS = {
     "snapshot_schema_version",
@@ -61,8 +61,8 @@ _METRIC_KEYS = {
     "intervention_latency_count",
     "monitor_latency_seconds_sum",
     "monitor_decision_count",
-    "detection_interval",
-    "harm_before_detection",
+    "first_intervention_interval",
+    "harm_before_first_intervention",
 }
 
 
@@ -402,8 +402,8 @@ def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
         "intervention_latency_count": metrics.intervention_latency_count,
         "monitor_latency_seconds_sum": metrics.monitor_latency_seconds_sum,
         "monitor_decision_count": metrics.monitor_decision_count,
-        "detection_interval": metrics.detection_interval,
-        "harm_before_detection": metrics.harm_before_detection,
+        "first_intervention_interval": metrics.first_intervention_interval,
+        "harm_before_first_intervention": metrics.harm_before_first_intervention,
     }
 
 
@@ -455,13 +455,17 @@ def _metrics(value: Any) -> OnlineMetrics:
     metrics.monitor_decision_count = _nonnegative_integer(
         state["monitor_decision_count"], "monitor decision count"
     )
-    detection = state["detection_interval"]
-    metrics.detection_interval = (
-        None if detection is None else _nonnegative_integer(detection, "detection")
+    intervention = state["first_intervention_interval"]
+    metrics.first_intervention_interval = (
+        None
+        if intervention is None
+        else _nonnegative_integer(intervention, "first intervention")
     )
-    harm = state["harm_before_detection"]
-    metrics.harm_before_detection = (
-        None if harm is None else _nonnegative_float(harm, "harm before detection")
+    harm = state["harm_before_first_intervention"]
+    metrics.harm_before_first_intervention = (
+        None
+        if harm is None
+        else _nonnegative_float(harm, "harm before first intervention")
     )
     return metrics
 
