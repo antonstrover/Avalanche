@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import platform
 from pathlib import Path
 
 import numpy as np
@@ -331,3 +332,8 @@ def test_the_real_matrix_runs_complete_pairs_without_fixture_rows(
         .nunique()
         .tolist()
     )
+    metadata_paths = list((tmp_path / "evaluation").rglob("evaluation-metadata.json"))
+    assert metadata_paths
+    for path in metadata_paths:
+        metadata = json.loads(path.read_text())
+        assert metadata["python_version"] == platform.python_version()

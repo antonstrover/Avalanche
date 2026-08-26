@@ -71,7 +71,7 @@ def build_process_observation(
 
 
 def build_outcome_observation(
-    observation: ControllerObservation, sim: "MountainSim"
+    observation: ControllerObservation, sim: MountainSim
 ) -> OutcomeObservation:
     """Return reported data with harm from the last completed interval."""
     copied = copy_observation(observation)
@@ -89,7 +89,7 @@ def build_outcome_observation(
 
 def build_evaluator_observation(
     observation: ControllerObservation,
-    sim: "MountainSim",
+    sim: MountainSim,
     proposal: ActionProposal | None = None,
 ) -> EvaluatorObservation:
     """Return complete state and proposal evidence for the evaluator."""
@@ -134,7 +134,7 @@ def build_evaluator_observation(
 
 def build_monitor_observation(
     observation: Observation,
-    sim: "MountainSim",
+    sim: MountainSim,
     profile: InformationProfile | str = InformationProfile.PRINCIPAL,
     *,
     outcome: bool = False,

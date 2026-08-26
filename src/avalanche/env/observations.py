@@ -161,7 +161,7 @@ def build_observation_space(
 
 
 def build_observation(
-    sim: "MountainSim",
+    sim: MountainSim,
     config: ObservationConfig,
     action_masks: ActionMasks | None = None,
 ) -> Observation:
@@ -235,7 +235,7 @@ def build_observation(
 
 
 def _weather_forecast(
-    sim: "MountainSim", config: ObservationConfig
+    sim: MountainSim, config: ObservationConfig
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return the next fixed number of scheduled weather changes."""
     schedule = sim.weather_schedule
@@ -253,7 +253,7 @@ def _weather_forecast(
     return forecast, times, mask
 
 
-def _recent_incidents(sim: "MountainSim", config: ObservationConfig) -> IncidentArrays:
+def _recent_incidents(sim: MountainSim, config: ObservationConfig) -> IncidentArrays:
     """Encode recent visible failures and hazard events."""
     records: list[tuple[float, str, int, float]] = []
     if sim.failure_schedule is not None:

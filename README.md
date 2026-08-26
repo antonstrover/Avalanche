@@ -120,10 +120,10 @@ The scene writes the positions directly into the instance buffer.
 
 ## Install
 
-You need Python 3.12 or later, `uv`, and Node 24.
+You need Python 3.14.3, `uv`, and Node 24.
 
 ```bash
-uv sync
+uv sync --locked
 cd dashboard && npm ci
 ```
 

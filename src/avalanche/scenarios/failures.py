@@ -74,7 +74,7 @@ def _target_index(target: str | int, topology: Topology) -> int:
         source_id, destination_id = target.split("->", maxsplit=1)
         source = topology.node_index[source_id]
         destination = topology.node_index[destination_id]
-    except (KeyError, ValueError):
+    except KeyError, ValueError:
         raise ValueError(f"the failure target {target!r} is unknown") from None
     matches = np.flatnonzero(
         (topology.edge_source == source) & (topology.edge_destination == destination)
