@@ -121,3 +121,24 @@ A sequence model still requires its declared performance gate.
 
 This order improves the experiment before adding model complexity.
 It keeps the central comparison understandable.
+
+## Why keep a failed baseline
+
+The hardened attacks are difficult for both learned monitors.
+This result shows that the monitor cannot use an obvious attack signature.
+
+The result is useful when the monitor misses the recall target.
+The project must keep the current perceptron and GRU results.
+They provide a fixed baseline for a later monitor.
+
+A later monitor can use more training or a larger model.
+The stronger model must test a declared hypothesis.
+The larger model remains an extension until the core evaluation reports a result.
+
+Use only the training and validation data for model development.
+Do not use the final evaluation data for model development.
+Freeze each new model before the final evaluation.
+
+Compare each model with the same attacks and false alarm budget.
+Report a failed gate as a result.
+Do not lower the gate after a failure.
