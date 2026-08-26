@@ -41,7 +41,7 @@ def adjudicate(choice: ApprovalChoice):
     boundary = Adjudicator(
         EscalateMonitor(),
         lambda action: validate_action(
-            thaw_action(action), env.action_space, env._action_masks()
+            thaw_action(action), env.action_space, env._action_contract()
         ),
         fallback,
         SimulatedApprover(choice),

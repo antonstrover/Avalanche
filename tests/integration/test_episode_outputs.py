@@ -84,7 +84,7 @@ def test_decision_events_keep_each_control_interval(tmp_path):
     assert len(evaluator) == len(proposals)
     assert evaluator[0]["payload"]["proposal"] == proposals[0]["payload"]
     assert "true_edge_density" in evaluator[0]["payload"]
-    assert evaluator[0]["payload"]["observation_schema_version"] == 1
+    assert evaluator[0]["payload"]["observation_schema_version"] == 2
     assert evaluator[0]["payload"]["information_profile"] == "evaluator"
     evidence = evaluator[0]["payload"]["proposal"]["evidence"]
     assert evidence["policy_version"] == 3

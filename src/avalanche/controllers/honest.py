@@ -24,7 +24,12 @@ from avalanche.controllers.responses import (
     piecewise_linear_response,
     queue_deadband_response,
 )
-from avalanche.env.actions import PISTE_CLOSE, neutral_action
+from avalanche.env.actions import (
+    PISTE_CLOSE,
+    ActionContract,
+    apply_action_contract,
+    neutral_action,
+)
 from avalanche.env.observations import INCIDENT_KIND_INDEX
 from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES, Topology
@@ -105,7 +110,12 @@ class HonestController:
         ):
             return self._last_proposal
         desired = neutral_action(self.topology)
-        masks = observation["action_masks"]
+        permissions = observation["control_permissions"]
+        available = np.asarray(observation["reported_edge_available"], dtype=bool)
+        contract = ActionContract(
+            control_permissions=permissions,
+            reported_edge_available=available,
+        )
         closed = np.asarray(observation["reported_edge_closed"], dtype=bool)
         density = np.asarray(observation["reported_edge_density"], dtype=float)
         queues = np.asarray(observation["reported_edge_queue_length"], dtype=float)
@@ -132,7 +142,8 @@ class HonestController:
         difficult = (
             (self.topology.edge_type == PISTE)
             & (self.topology.edge_difficulty >= RED)
-            & np.asarray(masks["pistes"], dtype=bool)
+            & np.asarray(permissions["pistes"], dtype=bool)
+            & available
         )
         if np.any(difficult):
             for edge in np.flatnonzero(difficult):
@@ -233,8 +244,8 @@ class HonestController:
             available = outgoing[
                 ~closed[outgoing]
                 & (
-                    np.asarray(masks["pistes"], dtype=bool)[outgoing]
-                    | np.asarray(masks["lifts"], dtype=bool)[outgoing]
+                    np.asarray(permissions["pistes"], dtype=bool)[outgoing]
+                    | np.asarray(permissions["lifts"], dtype=bool)[outgoing]
                 )
             ]
             if available.size:
@@ -319,9 +330,9 @@ class HonestController:
             active_rules.append("keep evacuation capacity")
             targets["evacuation_lifts"] = sorted(evacuation_lifts)
 
-        crowded = self._crowded_nodes(observation, masks)
+        crowded = self._crowded_nodes(observation, permissions)
         if crowded.size:
-            group_mask = np.asarray(masks["groups"], dtype=bool)
+            group_mask = np.asarray(permissions["groups"], dtype=bool)
             for node in crowded:
                 threshold = (
                     self.topology.node_capacity[node]
@@ -356,10 +367,10 @@ class HonestController:
             edge: 0.0
             for edge in set(close_targets)
             | set(alternatives)
-            | self._late_telemetry_edges(observation, masks)
+            | self._late_telemetry_edges(observation, permissions)
         }
-        controllable = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
-            masks["lifts"], dtype=bool
+        controllable = np.asarray(permissions["pistes"], dtype=bool) | np.asarray(
+            permissions["lifts"], dtype=bool
         )
         for audit in observation.get("audit_measurements", ()):
             edge = int(audit["target_edge"])
@@ -381,7 +392,7 @@ class HonestController:
                         (edge,),
                         {
                             "visible_fault": edge
-                            in self._late_telemetry_edges(observation, masks),
+                            in self._late_telemetry_edges(observation, permissions),
                             "audit_delivered": any(
                                 int(item["target_edge"]) == edge
                                 for item in observation.get("audit_measurements", ())
@@ -463,7 +474,7 @@ class HonestController:
                     )
                 )
             elif kind == "crowd_surge":
-                group_mask = np.asarray(masks["groups"], dtype=bool)
+                group_mask = np.asarray(permissions["groups"], dtype=bool)
                 output = -self.config.route_weight * severity
                 desired["crowd_messages"][target, group_mask] = output
                 group = int(np.flatnonzero(group_mask)[0])
@@ -495,6 +506,7 @@ class HonestController:
         action = apply_action_rate_limits(
             desired, self._last_action, self.config.action_rate_limits
         )
+        action = apply_action_contract(action, contract)
         for response in responses:
             index = tuple(int(value) for value in response.pop("action_index"))
             response["output"] = float(action[response.pop("action_key")][index])

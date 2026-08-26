@@ -252,7 +252,7 @@ def test_an_invalid_action_cannot_reach_the_simulator():
     action["piste_requests"][lift] = PISTE_CLOSE
     checksum = env.sim.state_checksum()
 
-    with pytest.raises(InvalidActionError, match="masked piste request"):
+    with pytest.raises(InvalidActionError, match="piste request permission"):
         env.step(action)
 
     assert env.sim.state_checksum() == checksum

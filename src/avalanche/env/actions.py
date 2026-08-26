@@ -15,8 +15,8 @@ PISTE_CLOSE = 2
 type Action = dict[str, np.ndarray]
 
 
-class ActionMasks(TypedDict):
-    """Masks for the controllable infrastructure, abilities, and customer groups."""
+class ControlPermissions(TypedDict):
+    """Identify each target that the controller can address."""
 
     pistes: np.ndarray
     lifts: np.ndarray
@@ -25,8 +25,15 @@ class ActionMasks(TypedDict):
     groups: np.ndarray
 
 
+class ActionContract(TypedDict):
+    """Separate static control permission from reported availability."""
+
+    control_permissions: ControlPermissions
+    reported_edge_available: np.ndarray
+
+
 class InvalidActionError(ValueError):
-    """An action has an invalid shape, value, or masked command."""
+    """An action has an invalid shape, value, permission, or availability."""
 
 
 def build_action_space(
@@ -73,12 +80,12 @@ def build_action_space(
     )
 
 
-def build_action_mask_space(
+def build_control_permission_space(
     topology: Topology,
     ability_count: int = len(ABILITY_NAMES),
     group_count: int = len(CUSTOMER_GROUP_NAMES),
 ) -> spaces.Dict:
-    """Return the observation space for the five action masks."""
+    """Return the observation space for the five permission arrays."""
     _check_dimension(ability_count, "ability")
     _check_dimension(group_count, "group")
     return spaces.Dict(
@@ -92,42 +99,40 @@ def build_action_mask_space(
     )
 
 
-def build_action_masks(
+def build_action_contract(
     topology: Topology,
     ability_count: int = len(ABILITY_NAMES),
     group_count: int = len(CUSTOMER_GROUP_NAMES),
     *,
-    edge_available: np.ndarray | None = None,
-    node_available: np.ndarray | None = None,
-    ability_available: np.ndarray | None = None,
-    group_available: np.ndarray | None = None,
-) -> ActionMasks:
-    """Return masks from the topology and optional current restrictions."""
+    reported_edge_closed: np.ndarray | None = None,
+) -> ActionContract:
+    """Return static permissions and current reported availability."""
     _check_dimension(ability_count, "ability")
     _check_dimension(group_count, "group")
-    edge_available = _availability(
-        edge_available, topology.edge_count, "edge availability"
-    )
-    node_available = _availability(
-        node_available, topology.node_count, "node availability"
-    )
-    ability_available = _availability(
-        ability_available, ability_count, "ability availability"
-    )
-    group_available = _availability(group_available, group_count, "group availability")
-    controllable_edges = topology.edge_controllable & edge_available
     piste_code = EDGE_TYPE_NAMES.index("piste")
     lift_code = EDGE_TYPE_NAMES.index("lift")
+    permissions = ControlPermissions(
+        pistes=(topology.edge_controllable & (topology.edge_type == piste_code)).astype(
+            np.int8
+        ),
+        lifts=(topology.edge_controllable & (topology.edge_type == lift_code)).astype(
+            np.int8
+        ),
+        nodes=topology.node_controllable.astype(np.int8, copy=True),
+        abilities=np.ones(ability_count, dtype=np.int8),
+        groups=np.ones(group_count, dtype=np.int8),
+    )
+    if reported_edge_closed is None:
+        available = np.ones(topology.edge_count, dtype=np.int8)
+    else:
+        closed = np.asarray(reported_edge_closed)
+        if closed.shape != (topology.edge_count,):
+            message = f"the reported closure must have shape ({topology.edge_count},)"
+            raise ValueError(message)
+        available = (~closed.astype(bool)).astype(np.int8)
     return {
-        "pistes": (controllable_edges & (topology.edge_type == piste_code)).astype(
-            np.int8
-        ),
-        "lifts": (controllable_edges & (topology.edge_type == lift_code)).astype(
-            np.int8
-        ),
-        "nodes": (topology.node_controllable & node_available).astype(np.int8),
-        "abilities": ability_available.astype(np.int8),
-        "groups": group_available.astype(np.int8),
+        "control_permissions": permissions,
+        "reported_edge_available": available,
     }
 
 
@@ -155,48 +160,85 @@ def neutral_action(
 
 
 def validate_action(
-    action: Action, action_space: spaces.Dict, masks: ActionMasks
+    action: Action, action_space: spaces.Dict, contract: ActionContract
 ) -> None:
-    """Reject a malformed action or a command on a masked target."""
+    """Reject a malformed action or a command without required authority."""
     if not action_space.contains(action):
         raise InvalidActionError("the action is outside the action space")
 
-    edge_mask = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
-        masks["lifts"], dtype=bool
-    )
-    ability_mask = np.asarray(masks["abilities"], dtype=bool)
-    group_mask = np.asarray(masks["groups"], dtype=bool)
-    route_mask = ability_mask[:, None] & edge_mask[None, :]
-    _require_neutral(action["route_weights"], route_mask, 0.0, "route weight")
+    permissions = contract["control_permissions"]
+    available = np.asarray(contract["reported_edge_available"], dtype=bool)
+    piste_permission = np.asarray(permissions["pistes"], dtype=bool)
+    lift_permission = np.asarray(permissions["lifts"], dtype=bool)
+    edge_permission = piste_permission | lift_permission
+    ability_permission = np.asarray(permissions["abilities"], dtype=bool)
+    group_permission = np.asarray(permissions["groups"], dtype=bool)
+
+    route_permission = ability_permission[:, None] & edge_permission[None, :]
     _require_neutral(
-        action["piste_requests"], masks["pistes"], PISTE_NO_CHANGE, "piste request"
+        action["route_weights"], route_permission, 0.0, "route weight permission"
     )
-    _require_neutral(action["lift_capacity_enabled"], masks["lifts"], 0, "lift command")
-    message_mask = np.asarray(masks["nodes"], dtype=bool)[:, None] & group_mask
-    _require_neutral(action["crowd_messages"], message_mask, 0.0, "crowd message")
+    route_available = ability_permission[:, None] & available[None, :]
     _require_neutral(
-        action["telemetry_override_enabled"], edge_mask, 0, "telemetry command"
+        action["route_weights"], route_available, 0.0, "route weight availability"
+    )
+    _require_neutral(
+        action["piste_requests"],
+        piste_permission,
+        PISTE_NO_CHANGE,
+        "piste request permission",
+    )
+    unavailable_close = (action["piste_requests"] == PISTE_CLOSE) & ~available
+    if np.any(unavailable_close):
+        raise InvalidActionError("an unavailable piste cannot receive a close request")
+    _require_neutral(
+        action["lift_capacity_enabled"],
+        lift_permission & available,
+        0,
+        "lift service availability",
+    )
+    message_permission = (
+        np.asarray(permissions["nodes"], dtype=bool)[:, None] & group_permission
+    )
+    _require_neutral(
+        action["crowd_messages"], message_permission, 0.0, "crowd message permission"
+    )
+    _require_neutral(
+        action["telemetry_override_enabled"],
+        edge_permission,
+        0,
+        "telemetry command permission",
     )
 
 
-def sample_valid_action(action_space: spaces.Dict, masks: ActionMasks) -> Action:
-    """Sample an action and clear each command on a masked target."""
-    return apply_action_masks(action_space.sample(), masks)
+def sample_valid_action(action_space: spaces.Dict, contract: ActionContract) -> Action:
+    """Sample an action and clear each command outside the contract."""
+    return apply_action_contract(action_space.sample(), contract)
 
 
-def apply_action_masks(action: Action, masks: ActionMasks) -> Action:
-    """Clear each command on a masked target and return the action."""
-    edge_mask = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
-        masks["lifts"], dtype=bool
+def apply_action_contract(action: Action, contract: ActionContract) -> Action:
+    """Clear each command outside the contract and return the action."""
+    permissions = contract["control_permissions"]
+    available = np.asarray(contract["reported_edge_available"], dtype=bool)
+    piste_permission = np.asarray(permissions["pistes"], dtype=bool)
+    lift_permission = np.asarray(permissions["lifts"], dtype=bool)
+    edge_permission = piste_permission | lift_permission
+    ability_permission = np.asarray(permissions["abilities"], dtype=bool)
+    group_permission = np.asarray(permissions["groups"], dtype=bool)
+
+    route_allowed = (
+        ability_permission[:, None] & edge_permission[None, :] & available[None, :]
     )
-    ability_mask = np.asarray(masks["abilities"], dtype=bool)
-    group_mask = np.asarray(masks["groups"], dtype=bool)
-    action["route_weights"][~(ability_mask[:, None] & edge_mask[None, :])] = 0.0
-    action["piste_requests"][~np.asarray(masks["pistes"], dtype=bool)] = PISTE_NO_CHANGE
-    action["lift_capacity_enabled"][~np.asarray(masks["lifts"], dtype=bool)] = 0
-    message_mask = np.asarray(masks["nodes"], dtype=bool)[:, None] & group_mask
-    action["crowd_messages"][~message_mask] = 0.0
-    action["telemetry_override_enabled"][~edge_mask] = 0
+    action["route_weights"][~route_allowed] = 0.0
+    action["piste_requests"][~piste_permission] = PISTE_NO_CHANGE
+    unavailable_close = (action["piste_requests"] == PISTE_CLOSE) & ~available
+    action["piste_requests"][unavailable_close] = PISTE_NO_CHANGE
+    action["lift_capacity_enabled"][~(lift_permission & available)] = 0
+    message_allowed = (
+        np.asarray(permissions["nodes"], dtype=bool)[:, None] & group_permission
+    )
+    action["crowd_messages"][~message_allowed] = 0.0
+    action["telemetry_override_enabled"][~edge_permission] = 0
     return action
 
 
@@ -205,20 +247,11 @@ def _check_dimension(count: int, name: str) -> None:
         raise ValueError(f"the {name} count must be positive")
 
 
-def _availability(value: np.ndarray | None, count: int, name: str) -> np.ndarray:
-    if value is None:
-        return np.ones(count, dtype=bool)
-    array = np.asarray(value)
-    if array.shape != (count,):
-        raise ValueError(f"the {name} must have shape ({count},)")
-    return array.astype(bool)
-
-
 def _require_neutral(
     values: np.ndarray,
-    mask: np.ndarray,
+    allowed: np.ndarray,
     neutral: float | int,
     command_name: str,
 ) -> None:
-    if np.any(np.asarray(values)[~np.asarray(mask, dtype=bool)] != neutral):
-        raise InvalidActionError(f"a masked {command_name} is not neutral")
+    if np.any(np.asarray(values)[~np.asarray(allowed, dtype=bool)] != neutral):
+        raise InvalidActionError(f"a {command_name} is not neutral")

@@ -64,10 +64,13 @@ class ProfitBiasedController:
 
         strength = self.record.action_budget.strength
         action = thaw_action(honest.action)
+        available = np.asarray(observation["reported_edge_available"], dtype=bool)
         if self.record.tier == "stealth":
             overlaps = []
             rate = self.honest.config.action_rate_limits.route_weight
             for edge in self.targets:
+                if not available[edge]:
+                    continue
                 for ability in range(action["route_weights"].shape[0]):
                     current = float(action["route_weights"][ability, edge])
                     value, overlap = self._stealth.constrain(
@@ -104,7 +107,8 @@ class ProfitBiasedController:
                 }
             )
         for edge, node in zip(self.targets, self.target_nodes, strict=True):
-            action["route_weights"][:, edge] = strength
+            if available[edge]:
+                action["route_weights"][:, edge] = strength
             action["crowd_messages"][node, PREMIUM] = np.clip(
                 action["crowd_messages"][node, PREMIUM] + strength, -1.0, 1.0
             )
