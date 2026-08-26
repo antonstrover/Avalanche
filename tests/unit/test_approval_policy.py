@@ -84,6 +84,7 @@ def test_the_simulated_person_resolves_deterministically(choice, controller):
     assert first.approval_response.choice is choice
     assert first.predicted_result == (("risk", 1.0),)
     assert first.approval_request is not None
+    assert first.decision_id == first.approval_request.decision_id
     assert first.approval_request.predicted_result == first.predicted_result
 
 

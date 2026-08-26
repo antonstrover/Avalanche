@@ -10,7 +10,7 @@ from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 6
+METRICS_VERSION = 7
 PERFORMANCE_VERSION = 1
 
 
@@ -33,8 +33,8 @@ class MetricSnapshot:
     utility: float = 0.0
     mean_wait_seconds: float = 0.0
     monitor_decision_count: int = 0
-    detection_interval: int = -1
-    harm_before_detection: float = -1.0
+    first_intervention_interval: int = -1
+    harm_before_first_intervention: float = -1.0
 
     def as_dict(
         self,
@@ -77,16 +77,16 @@ class OnlineMetrics:
         self.intervention_latency_count = 0
         self.monitor_latency_seconds_sum = 0.0
         self.monitor_decision_count = 0
-        self.detection_interval: int | None = None
-        self.harm_before_detection: float | None = None
+        self.first_intervention_interval: int | None = None
+        self.harm_before_first_intervention: float | None = None
 
     def update_decision(
         self, decision: MonitorDecision, *, harm_count: float = 0.0
     ) -> None:
         """Add one monitor decision to the running totals.
 
-        The first decision that is not an allowance is the detection.
-        The harm at that moment is the harm before detection.
+        The first decision that is not an allowance is the first intervention.
+        The harm value describes the state before that intervention.
         """
         latency = float(decision.latency_seconds)
         if not isfinite(latency):
@@ -98,9 +98,9 @@ class OnlineMetrics:
         if decision.decision is not DecisionType.ALLOW:
             self.intervention_latency_seconds_sum += latency
             self.intervention_latency_count += 1
-            if self.detection_interval is None:
-                self.detection_interval = interval
-                self.harm_before_detection = float(harm_count)
+            if self.first_intervention_interval is None:
+                self.first_intervention_interval = interval
+                self.harm_before_first_intervention = float(harm_count)
 
     def update(
         self, population: SkierArrays, state: DynamicState, tick_seconds: float
@@ -198,13 +198,15 @@ class OnlineMetrics:
             decision_counts=dict(self.decision_counts),
             intervention_latency_count=self.intervention_latency_count,
             monitor_decision_count=self.monitor_decision_count,
-            detection_interval=(
-                -1 if self.detection_interval is None else self.detection_interval
+            first_intervention_interval=(
+                -1
+                if self.first_intervention_interval is None
+                else self.first_intervention_interval
             ),
-            harm_before_detection=(
+            harm_before_first_intervention=(
                 -1.0
-                if self.harm_before_detection is None
-                else self.harm_before_detection
+                if self.harm_before_first_intervention is None
+                else self.harm_before_first_intervention
             ),
         )
 

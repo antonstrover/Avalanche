@@ -7,6 +7,7 @@ from avalanche.sim import MountainSim
 from avalanche.traces import (
     EVENT_SCHEMA_VERSION,
     SNAPSHOT_SCHEMA_VERSION,
+    EventState,
     TraceWriter,
 )
 
@@ -45,3 +46,18 @@ def test_an_event_carries_the_complete_envelope(tmp_path):
     snapshot = writer.snapshot_rows[0]
     assert snapshot["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
     assert snapshot["state_checksum"] == sim.state_checksum()
+
+
+def test_an_event_can_use_one_captured_boundary_state(tmp_path):
+    sim = MountainSim(FIXTURE)
+    sim.reset(seed=4)
+    writer = TraceWriter(tmp_path, "run-one", "episode-0", 4)
+    boundary = EventState.capture(sim)
+    sim.tick()
+
+    writer.record("action_executed", "test", {}, sim, state=boundary)
+
+    event = writer.events[0]
+    assert event.simulation_time == boundary.simulation_time
+    assert event.step == boundary.step
+    assert event.state_checksum == boundary.state_checksum

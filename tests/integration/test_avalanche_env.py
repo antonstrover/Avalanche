@@ -145,8 +145,8 @@ def test_an_executed_action_changes_each_supported_control():
         "mean_wait_seconds",
         "intervention_latency_count",
         "monitor_decision_count",
-        "detection_interval",
-        "harm_before_detection",
+        "first_intervention_interval",
+        "harm_before_first_intervention",
         "intervention_cost",
     }
 

@@ -1,5 +1,7 @@
 """Write material events and periodic replay snapshots."""
 
+from __future__ import annotations
+
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,7 +14,21 @@ from avalanche.metrics import MetricSnapshot
 from avalanche.sim.engine import MountainSim
 from avalanche.traces.snapshots import encode_snapshot
 
-EVENT_SCHEMA_VERSION = 1
+EVENT_SCHEMA_VERSION = 2
+
+
+@dataclass(frozen=True)
+class EventState:
+    """Identify the simulator state for one trace event."""
+
+    simulation_time: float
+    step: int
+    state_checksum: str
+
+    @classmethod
+    def capture(cls, sim: MountainSim) -> EventState:
+        """Capture the current simulator state identity."""
+        return cls(sim.simulation_time, sim.step, sim.state_checksum())
 
 
 @dataclass(frozen=True)
@@ -55,20 +71,23 @@ class TraceWriter:
         actor_id: str,
         payload: dict[str, Any],
         sim: MountainSim,
+        *,
+        state: EventState | None = None,
     ) -> None:
         """Buffer one material event with the current state identity."""
+        identity = state or EventState.capture(sim)
         self.events.append(
             EventRecord(
                 schema_version=EVENT_SCHEMA_VERSION,
                 run_id=self.run_id,
                 episode_id=self.episode_id,
                 seed=self.seed,
-                simulation_time=sim.simulation_time,
-                step=sim.step,
+                simulation_time=identity.simulation_time,
+                step=identity.step,
                 event_type=event_type,
                 actor_id=actor_id,
                 payload=payload,
-                state_checksum=sim.state_checksum(),
+                state_checksum=identity.state_checksum,
             )
         )
 

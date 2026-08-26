@@ -136,6 +136,20 @@ class _RewardSnapshot:
     skier_wait_times: np.ndarray
 
 
+@dataclass(frozen=True)
+class ControlIntervalTransition:
+    """Hold one adjudicated interval before its movement runs."""
+
+    proposal: ActionProposal
+    adjudication: AdjudicationResult
+    evaluator_observation: EvaluatorObservation
+    simulation_time: float
+    step: int
+    state_checksum: str
+    reward_before: _RewardSnapshot
+    intervention_cost: float
+
+
 class _EnvironmentActionSpace(spaces.Dict):
     """A dictionary space that samples commands within the current contract."""
 
@@ -293,6 +307,13 @@ class AvalancheEnv(gym.Env):
         self, proposal: ActionProposal
     ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
         """Validate one controller proposal and run one control interval."""
+        transition = self.begin_control_interval(proposal)
+        return self.complete_control_interval(transition)
+
+    def begin_control_interval(
+        self, proposal: ActionProposal
+    ) -> ControlIntervalTransition:
+        """Adjudicate and apply one proposal without movement."""
         if self._ended:
             raise RuntimeError("reset the environment before the next step")
         if proposal.simulation_time != self.sim.simulation_time:
@@ -300,19 +321,47 @@ class AvalancheEnv(gym.Env):
 
         before = self._reward_snapshot()
         before_checksum = self.sim.state_checksum()
+        before_time = self.sim.simulation_time
+        before_step = self.sim.step
         adjudication = self.execute_proposal(proposal)
         executed = adjudication.executed_action
         intervention_cost = action_intervention_cost(executed)
+        evaluator = self.last_evaluator_observation
+        if evaluator is None:
+            raise RuntimeError("the adjudication must create evaluator evidence")
+        return ControlIntervalTransition(
+            proposal=proposal,
+            adjudication=adjudication,
+            evaluator_observation=evaluator,
+            simulation_time=before_time,
+            step=before_step,
+            state_checksum=before_checksum,
+            reward_before=before,
+            intervention_cost=intervention_cost,
+        )
+
+    def complete_control_interval(
+        self, transition: ControlIntervalTransition
+    ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
+        """Run movement after one adjudicated control boundary."""
+        if self.sim.simulation_time != transition.simulation_time:
+            raise RuntimeError("complete the current control interval only once")
+        if self.last_adjudication is not transition.adjudication:
+            raise RuntimeError("complete the most recent adjudication")
 
         for _ in range(self.config.movement_ticks_per_step):
             self.sim.tick()
 
         after = self._reward_snapshot()
         reward_result = calculate_reward(
-            self._reward_transition(before, after, intervention_cost),
+            self._reward_transition(
+                transition.reward_before,
+                after,
+                transition.intervention_cost,
+            ),
             self.reward_weights,
         )
-        self._cumulative_intervention_cost += intervention_cost
+        self._cumulative_intervention_cost += transition.intervention_cost
         terminated = self._is_terminated()
         truncated = self.sim.simulation_time >= self.config.episode_duration_seconds
         self._ended = terminated or truncated
@@ -322,15 +371,15 @@ class AvalancheEnv(gym.Env):
             {
                 "reward_parts": reward_result.parts.as_dict(),
                 "checksums": {
-                    "before": before_checksum,
+                    "before": transition.state_checksum,
                     "after": self.sim.state_checksum(),
                 },
-                "action_proposal": proposal,
-                "monitor_decision": adjudication.decision,
-                "adjudication": adjudication,
-                "executed_action": executed,
-                "evaluator_observation": self.last_evaluator_observation,
-                "current_intervention_cost": intervention_cost,
+                "action_proposal": transition.proposal,
+                "monitor_decision": transition.adjudication.decision,
+                "adjudication": transition.adjudication,
+                "executed_action": transition.adjudication.executed_action,
+                "evaluator_observation": transition.evaluator_observation,
+                "current_intervention_cost": transition.intervention_cost,
             }
         )
         return observation, reward_result.scalar, terminated, truncated, info

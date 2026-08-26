@@ -20,6 +20,7 @@ from avalanche.env.adapter import (
     DEFAULT_REWARD_WEIGHTS,
     AvalancheEnv,
     AvalancheEnvConfig,
+    ControlIntervalTransition,
     action_intervention_cost,
     create_action_proposal,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "ActionContract",
     "AvalancheEnv",
     "AvalancheEnvConfig",
+    "ControlIntervalTransition",
     "DEFAULT_REWARD_WEIGHTS",
     "InvalidActionError",
     "IncidentArrays",

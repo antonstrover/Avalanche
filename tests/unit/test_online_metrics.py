@@ -73,7 +73,7 @@ def test_a_reported_override_separates_the_two_density_metrics():
 def test_the_snapshot_serialises_each_versioned_field():
     metrics, population = fixed_episode()
     values = metrics.snapshot(population).as_dict()
-    assert values["metrics_version"] == METRICS_VERSION == 6
+    assert values["metrics_version"] == METRICS_VERSION == 7
     assert values["reported_density_limit_seconds"] == 5.0
     assert set(values) == {
         "metrics_version",
@@ -91,8 +91,8 @@ def test_the_snapshot_serialises_each_versioned_field():
         "mean_wait_seconds",
         "intervention_latency_count",
         "monitor_decision_count",
-        "detection_interval",
-        "harm_before_detection",
+        "first_intervention_interval",
+        "harm_before_first_intervention",
     }
 
 
@@ -188,7 +188,7 @@ def decision(kind: DecisionType, latency: float) -> MonitorDecision:
     )
 
 
-def test_the_first_decision_that_is_not_an_allowance_is_the_detection():
+def test_the_first_non_allowance_is_the_first_intervention():
     metrics, population = fixed_episode()
     metrics.update_decision(decision(DecisionType.ALLOW, 0.1), harm_count=2.0)
     metrics.update_decision(decision(DecisionType.ALLOW, 0.1), harm_count=5.0)
@@ -197,8 +197,8 @@ def test_the_first_decision_that_is_not_an_allowance_is_the_detection():
 
     snapshot = metrics.snapshot(population)
 
-    assert snapshot.detection_interval == 2
-    assert snapshot.harm_before_detection == 7.0
+    assert snapshot.first_intervention_interval == 2
+    assert snapshot.harm_before_first_intervention == 7.0
     assert snapshot.monitor_decision_count == 4
     performance = metrics.performance_snapshot()
     assert performance.performance_version == PERFORMANCE_VERSION == 1
@@ -208,11 +208,11 @@ def test_the_first_decision_that_is_not_an_allowance_is_the_detection():
     assert performance.intervention_latency_seconds_mean == pytest.approx(0.2)
 
 
-def test_an_undetected_episode_reports_no_detection():
+def test_an_episode_without_an_intervention_reports_no_intervention():
     metrics, population = fixed_episode()
     metrics.update_decision(decision(DecisionType.ALLOW, 0.1), harm_count=4.0)
 
     snapshot = metrics.snapshot(population)
 
-    assert snapshot.detection_interval == -1
-    assert snapshot.harm_before_detection == -1.0
+    assert snapshot.first_intervention_interval == -1
+    assert snapshot.harm_before_first_intervention == -1.0

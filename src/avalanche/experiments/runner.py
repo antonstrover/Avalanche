@@ -14,6 +14,7 @@ from avalanche.control import (
     ApprovalChoice,
     ProposalEngineeringError,
     SimulatedApprover,
+    decision_identifier,
     observation_as_json,
 )
 from avalanche.controllers import build_controller
@@ -24,7 +25,7 @@ from avalanche.experiments.evaluation import assess_attack
 from avalanche.monitors import build_monitor
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import Status
-from avalanche.traces import TraceWriter
+from avalanche.traces import EventState, TraceWriter
 
 
 def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
@@ -77,41 +78,56 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     while not (terminated or truncated):
         controller_observation = env.controller_observation()
         proposal = controller.propose(controller_observation)
+        decision_id = decision_identifier(proposal)
+        boundary_state = EventState.capture(env.sim)
+        attack_active = int(
+            resolved.controller.attack is not None
+            and is_active(
+                resolved.controller.attack,
+                float(proposal.simulation_time),
+                controller_observation,
+            )
+        )
         trace.record(
             "action_proposed",
             proposal.controller_id,
-            proposal.model_dump(mode="json"),
+            {
+                **proposal.model_dump(mode="json"),
+                "decision_id": decision_id,
+            },
             env.sim,
+            state=boundary_state,
         )
+        evaluator_payload = observation_as_json(env.evaluator_observation(proposal))
         trace.record(
             "evaluator_observation",
             "evaluator",
-            observation_as_json(env.evaluator_observation(proposal)),
+            {
+                **evaluator_payload,
+                "attack_active": attack_active,
+                "decision_id": decision_id,
+            },
             env.sim,
+            state=boundary_state,
         )
         before = _material_state(env)
         try:
-            observation, _, terminated, truncated, info = env.step_proposal(proposal)
+            transition = env.begin_control_interval(proposal)
         except ProposalEngineeringError as error:
             trace.record("engineering_error", "adjudicator", error.as_dict(), env.sim)
             raise
-        adjudication = info["adjudication"]
+        adjudication = transition.adjudication
+        if adjudication.decision_id != decision_id:
+            raise RuntimeError("the adjudication changed the decision identifier")
+        if transition.state_checksum != boundary_state.state_checksum:
+            raise RuntimeError("the adjudication changed the boundary identity")
         risk_scores.append(float(adjudication.decision.risk_score))
-        attack_labels.append(
-            0
-            if resolved.controller.attack is None
-            else int(
-                is_active(
-                    resolved.controller.attack,
-                    float(proposal.simulation_time),
-                    controller_observation,
-                )
-            )
-        )
+        attack_labels.append(attack_active)
         trace.record(
             "monitor_decision",
             resolved.monitor.kind,
             {
+                "decision_id": decision_id,
                 **adjudication.decision.model_dump(
                     mode="json", exclude={"predicted_result"}
                 ),
@@ -119,6 +135,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "predicted_result": dict(adjudication.predicted_result),
             },
             env.sim,
+            state=boundary_state,
         )
         if adjudication.approval_request is not None:
             request = adjudication.approval_request
@@ -126,11 +143,12 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "approval_requested",
                 "adjudicator",
                 {
-                    "decision_id": request.decision_id,
+                    "decision_id": decision_id,
                     "predicted_result": dict(request.predicted_result),
                     "safe_fallback": asdict(request.safe_fallback),
                 },
                 env.sim,
+                state=boundary_state,
             )
         if adjudication.approval_response is not None:
             response = adjudication.approval_response
@@ -138,19 +156,35 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "approval_resolved",
                 "simulated-person",
                 {
-                    "decision_id": adjudication.approval_request.decision_id,
+                    "decision_id": decision_id,
                     "choice": response.choice.value,
                 },
                 env.sim,
+                state=boundary_state,
             )
-        executed = info["executed_action"]
+        executed = adjudication.executed_action
         trace.record(
             "action_executed",
             executed.controller_id,
             {
+                "decision_id": decision_id,
                 "controller_id": executed.controller_id,
                 "simulation_time": executed.simulation_time,
                 "action": asdict(executed.action),
+            },
+            env.sim,
+            state=boundary_state,
+        )
+        observation, _, terminated, truncated, info = env.complete_control_interval(
+            transition
+        )
+        trace.record(
+            "control_interval_outcome",
+            "simulator",
+            {
+                "decision_id": decision_id,
+                "reward_parts": info["reward_parts"],
+                "metrics": info["metrics"],
             },
             env.sim,
         )
@@ -170,7 +204,8 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         np.sum(env.sim.state.dangerous_density_seconds, dtype=np.float64)
     )
     metrics["false_alarm"] = float(
-        resolved.controller.attack is None and snapshot.detection_interval >= 0
+        resolved.controller.attack is None
+        and snapshot.first_intervention_interval >= 0
     )
     assessment = assess_attack(
         resolved.controller, env.topology, snapshot, env.sim.state
