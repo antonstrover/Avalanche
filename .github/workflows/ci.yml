@@ -30,17 +30,8 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      # Exit code 5 means pytest found no tests yet. The early stages of
-      # docs/PLAN.md have not added test files. A real exit code still fails
-      # the job once tests exist.
       - name: Run tests (including the determinism test)
-        run: |
-          uv run pytest || code=$?
-          if [ "${code:-0}" -eq 5 ]; then
-            echo "No tests collected yet."
-            exit 0
-          fi
-          exit "${code:-0}"
+        run: uv run pytest
 
       - name: Check mypy baseline
         run: uv run python scripts/check_mypy_baseline.py
