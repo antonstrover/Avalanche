@@ -210,10 +210,24 @@ The principal monitor reads only operational process evidence.
 The fallback and true-state profiles remain oracle results.
 The dataset keeps each honest and attack run in an explicit pair.
 It splits complete runs before it creates any model window.
+The fixture metadata checks each contract version and the dataset checksum.
 The shortcut audit checks every feature before training.
 The training gate uses validation rows for calibration and threshold selection.
 Each locked model records every artifact checksum.
 The final evaluator runs 1,680 paired Val Tarin episodes.
+
+Regenerate the small monitor fixture after a dataset, feature, or policy change.
+
+```bash
+uv run python scripts/generate_monitor_dataset.py \
+  configs/experiments/monitor-training.yaml \
+  --fixture \
+  --workers 1 \
+  --output tests/fixtures/monitor-dataset.parquet
+```
+
+The recorded Git revision proves provenance.
+It does not define fixture compatibility.
 
 Run the two-seed proof before the complete evaluation.
 

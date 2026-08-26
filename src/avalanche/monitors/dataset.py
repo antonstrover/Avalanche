@@ -51,7 +51,7 @@ from avalanche.monitors.rules import RuleMonitor
 ATTACK_LABEL = "attack_active"
 HARM_LABEL = "harm_in_horizon"
 HARM_MASK = "harm_label_known"
-DATASET_VERSION = 3
+DATASET_VERSION = 4
 KEY_COLUMNS = (
     "run_id",
     "scenario_family",
@@ -121,6 +121,38 @@ class DatasetEntry:
     attack_kind: str = "honest"
     attack_tier: str = "none"
     holdout_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LabelSelection:
+    """Store validated rows and the number of removed unknown labels."""
+
+    rows: pd.DataFrame
+    removed_rows: int
+
+
+def select_labelled_rows(
+    frame: pd.DataFrame,
+    label: str,
+    *,
+    filter_unknown: bool = False,
+) -> LabelSelection:
+    """Validate one binary label and optionally remove unknown rows."""
+    if label not in frame:
+        raise ValueError(f"the dataset rows miss the {label!r} label")
+    values = frame[label]
+    unknown = values.isna()
+    if label == HARM_LABEL and HARM_MASK in frame:
+        known_mask = frame[HARM_MASK].astype(bool)
+        if bool((unknown == known_mask).any()):
+            raise ValueError("the future harm label disagrees with its known mask")
+    known = values[~unknown]
+    if not known.isin((0, 1)).all():
+        raise ValueError(f"the {label!r} label must contain only zero or one")
+    if bool(unknown.any()) and not filter_unknown:
+        raise ValueError(f"the {label!r} label contains unknown values")
+    selected = frame.loc[~unknown].copy() if filter_unknown else frame.copy()
+    return LabelSelection(selected, int(unknown.sum()))
 
 
 def label_future_harm(rows: pd.DataFrame, horizon: int) -> pd.DataFrame:
@@ -286,19 +318,28 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     if int(manifest.get("dataset_version", 0)) != DATASET_VERSION:
         raise ValueError(f"the dataset manifest must use version {DATASET_VERSION}")
     strengths = [float(value) for value in manifest.get("attack_strengths", ())]
-    variants = tuple(str(value) for value in manifest["policy_variants"])
-    entries = []
-    for mountain in manifest["mountains"]:
-        for family in manifest["families"]:
-            for controller in mountain["controllers"]:
+    variants = _required_axis(manifest, "policy_variants")
+    seeds = tuple(int(value) for value in _required_axis(manifest, "seeds"))
+    families = _required_axis(manifest, "families")
+    mountains = _required_axis(manifest, "mountains")
+    _repo_path(str(manifest["monitor"]))
+    controllers = _resolved_manifest_controllers(mountains)
+    if controllers and not strengths:
+        raise ValueError("attack strengths are required for attack controllers")
+    if not controllers and strengths:
+        raise ValueError("attack strengths need one attack controller")
+    entries: list[DatasetEntry] = []
+    for mountain in mountains:
+        for family in families:
+            for controller, resolved_controller in controllers[mountain["id"]]:
+                attack = resolved_controller.attack
+                assert attack is not None
                 for variant in variants:
                     for strength in strengths:
-                        reasons = _holdout_reasons(
-                            manifest, controller, variant, strength
-                        )
+                        reasons = _holdout_reasons(manifest, attack, variant, strength)
                         if reasons and family["id"] != "busy-weekend":
                             continue
-                        for seed in manifest["seeds"]:
+                        for seed in seeds:
                             pair_id = _pair_id(
                                 mountain["id"],
                                 family["id"],
@@ -315,8 +356,8 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                 "pair_id": pair_id,
                                 "split": _family_split(family["id"]),
                                 "policy_variant": variant,
-                                "attack_kind": controller["kind"],
-                                "attack_tier": controller["tier"],
+                                "attack_kind": attack.kind,
+                                "attack_tier": attack.tier,
                                 "holdout_reasons": reasons,
                             }
                             entries.extend(
@@ -324,10 +365,10 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                     DatasetEntry(
                                         controller_kind="honest",
                                         config_paths=(
-                                            mountain["config"],
-                                            family["config"],
-                                            mountain["honest_config"],
-                                            manifest["monitor"],
+                                            _repo_relative(mountain["config"]),
+                                            _repo_relative(family["config"]),
+                                            _repo_relative(mountain["honest_config"]),
+                                            _repo_relative(manifest["monitor"]),
                                         ),
                                         pair_role="honest",
                                         **common,
@@ -335,18 +376,137 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                     DatasetEntry(
                                         controller_kind=controller["id"],
                                         config_paths=(
-                                            mountain["config"],
-                                            family["config"],
-                                            mountain["honest_config"],
-                                            controller["config"],
-                                            manifest["monitor"],
+                                            _repo_relative(mountain["config"]),
+                                            _repo_relative(family["config"]),
+                                            _repo_relative(mountain["honest_config"]),
+                                            _repo_relative(controller["config"]),
+                                            _repo_relative(manifest["monitor"]),
                                         ),
                                         pair_role="attack",
                                         **common,
                                     ),
                                 )
                             )
+    expected = _expected_entry_count(
+        manifest, mountains, controllers, variants, strengths, seeds
+    )
+    if len(entries) != expected:
+        raise ValueError(
+            f"the dataset matrix expanded to {len(entries)} runs instead of {expected}"
+        )
+    _validate_expanded_axes(
+        entries, mountains, families, controllers, variants, strengths
+    )
     return entries
+
+
+def _required_axis(manifest: dict[str, Any], name: str) -> tuple[Any, ...]:
+    """Return one declared axis and reject an empty value."""
+    values = tuple(manifest.get(name, ()))
+    if not values:
+        raise ValueError(f"the dataset axis {name!r} must not be empty")
+    return values
+
+
+def _resolved_manifest_controllers(
+    mountains: Sequence[dict[str, Any]],
+) -> dict[str, tuple[tuple[dict[str, Any], ControllerConfig], ...]]:
+    """Validate and classify each composed matrix controller."""
+    result = {}
+    for mountain in mountains:
+        _repo_path(str(mountain["config"]))
+        honest_path = _repo_path(str(mountain["honest_config"]))
+        honest = ControllerConfig.model_validate(
+            load_and_merge(honest_path)["controller"]
+        )
+        if honest.kind != "honest" or honest.attack is not None:
+            raise ValueError("the matrix honest controller must contain no attack")
+        resolved = []
+        for controller in _required_axis(mountain, "controllers"):
+            if "attack" in controller:
+                raise ValueError("the matrix controller uses the obsolete attack flag")
+            controller_path = _repo_path(str(controller["config"]))
+            config = ControllerConfig.model_validate(
+                load_and_merge(honest_path, controller_path)["controller"]
+            )
+            if config.attack is None:
+                raise ValueError("each matrix attack controller needs an attack record")
+            resolved.append((controller, config))
+        result[str(mountain["id"])] = tuple(resolved)
+    return result
+
+
+def _repo_path(value: str) -> Path:
+    """Resolve one declared path from the repository root."""
+    relative = Path(value)
+    if relative.is_absolute():
+        raise ValueError("a dataset configuration path must be relative")
+    path = (REPO_ROOT / relative).resolve()
+    if not path.is_relative_to(REPO_ROOT.resolve()):
+        raise ValueError("a dataset configuration path leaves the repository")
+    if not path.is_file():
+        raise ValueError(f"the dataset configuration path {value!r} does not exist")
+    return path
+
+
+def _repo_relative(value: str) -> str:
+    """Return one validated repository-relative path."""
+    return str(_repo_path(str(value)).relative_to(REPO_ROOT.resolve()))
+
+
+def _expected_entry_count(
+    manifest: dict[str, Any],
+    mountains: Sequence[dict[str, Any]],
+    controllers: dict[str, tuple[tuple[dict[str, Any], ControllerConfig], ...]],
+    variants: Sequence[str],
+    strengths: Sequence[float],
+    seeds: Sequence[int],
+) -> int:
+    """Calculate the complete paired run count from resolved attacks."""
+    attack_count = 0
+    for mountain in mountains:
+        for family in manifest["families"]:
+            for _, controller in controllers[str(mountain["id"])]:
+                assert controller.attack is not None
+                for variant in variants:
+                    for strength in strengths:
+                        reasons = _holdout_reasons(
+                            manifest, controller.attack, variant, strength
+                        )
+                        if not reasons or family["id"] == "busy-weekend":
+                            attack_count += len(seeds)
+    return attack_count * 2
+
+
+def _validate_expanded_axes(
+    entries: Sequence[DatasetEntry],
+    mountains: Sequence[dict[str, Any]],
+    families: Sequence[dict[str, Any]],
+    controllers: dict[str, tuple[tuple[dict[str, Any], ControllerConfig], ...]],
+    variants: Sequence[str],
+    strengths: Sequence[float],
+) -> None:
+    """Reject any declared matrix axis that produces no attack entry."""
+    attacks = [entry for entry in entries if entry.pair_role == "attack"]
+    expected = {
+        "mountain": {str(value["id"]) for value in mountains},
+        "scenario family": {str(value["id"]) for value in families},
+        "controller": {
+            str(value["id"]) for items in controllers.values() for value, _ in items
+        },
+        "policy variant": set(variants),
+        "attack strength": set(strengths),
+    }
+    actual = {
+        "mountain": {entry.mountain for entry in attacks},
+        "scenario family": {entry.scenario_family for entry in attacks},
+        "controller": {entry.controller_kind for entry in attacks},
+        "policy variant": {entry.policy_variant for entry in attacks},
+        "attack strength": {entry.attack_strength for entry in attacks},
+    }
+    for name, declared in expected.items():
+        if not declared <= actual[name]:
+            raise ValueError(f"the dataset {name} axis contains an empty entry")
 
 
 def _family_split(family: str) -> str:
@@ -362,7 +522,7 @@ def _family_split(family: str) -> str:
 
 def _holdout_reasons(
     manifest: dict[str, Any],
-    controller: dict[str, Any],
+    attack: Any,
     variant: str,
     strength: float,
 ) -> tuple[str, ...]:
@@ -371,11 +531,11 @@ def _holdout_reasons(
     reasons = []
     if variant in holdouts["policy_variants"]:
         reasons.append("policy_variant")
-    if controller["kind"] in holdouts["strategies"]:
+    if attack.kind in holdouts["strategies"]:
         reasons.append("strategy")
-    if controller["trigger_kind"] in holdouts["triggers"]:
+    if attack.trigger.kind in holdouts["triggers"]:
         reasons.append("trigger")
-    if set(controller["targets"]) & set(holdouts["targets"]):
+    if set(attack.targets) & set(holdouts["targets"]):
         reasons.append("target")
     lower, upper = holdouts["strength_range"]
     if float(lower) <= strength <= float(upper):
@@ -438,6 +598,7 @@ def generate_dataset_entries(
         manifest,
         profile,
     )
+    _write_fixture_metadata(frame, entries, output_path, manifest_path, profile)
     return output_path
 
 
@@ -553,6 +714,12 @@ def _write_manifest_summary(
             .to_dict(),
             "known_harm_labels": int(frame[HARM_MASK].sum()),
             "unknown_harm_labels": int((frame[HARM_MASK] == 0).sum()),
+            "by_attack_kind": frame.groupby("attack_kind", dropna=False)
+            .size()
+            .to_dict(),
+            "by_attack_strength": frame.groupby("attack_strength", dropna=False)
+            .size()
+            .to_dict(),
         },
         "checksums": {
             "dataset_sha256": _file_checksum(output_path),
@@ -570,6 +737,62 @@ def _write_manifest_summary(
     }
     output_path.with_suffix(".manifest.json").write_text(
         json.dumps(artifact_manifest, indent=2, sort_keys=True) + "\n"
+    )
+
+
+def load_dataset_fixture(
+    dataset_path: Path,
+    metadata_path: Path | None = None,
+) -> pd.DataFrame:
+    """Load one fixture after every compatibility and integrity check."""
+    metadata_path = metadata_path or dataset_path.with_suffix(".metadata.json")
+    command = (
+        "uv run python scripts/generate_monitor_dataset.py "
+        "configs/experiments/monitor-training.yaml --fixture --workers 1 "
+        "--output tests/fixtures/monitor-dataset.parquet"
+    )
+    try:
+        metadata = json.loads(metadata_path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"regenerate the dataset fixture with: {command}") from error
+    expected = {
+        "dataset_version": DATASET_VERSION,
+        "feature_version": FEATURE_VERSION,
+        "honest_policy_version": HONEST_POLICY_VERSION,
+        "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
+    }
+    if any(metadata.get(name) != value for name, value in expected.items()):
+        raise ValueError(f"regenerate the dataset fixture with: {command}")
+    if metadata.get("dataset_sha256") != _file_checksum(dataset_path):
+        raise ValueError(f"regenerate the dataset fixture with: {command}")
+    frame = pd.read_parquet(dataset_path)
+    if int(metadata.get("row_count", -1)) != len(frame):
+        raise ValueError(f"regenerate the dataset fixture with: {command}")
+    return frame
+
+
+def _write_fixture_metadata(
+    frame: pd.DataFrame,
+    entries: Sequence[DatasetEntry],
+    output_path: Path,
+    source_path: Path,
+    information_profile: InformationProfile,
+) -> None:
+    """Write the compact metadata required by a fixture consumer."""
+    relative_source = source_path.resolve().relative_to(REPO_ROOT.resolve())
+    metadata = {
+        "dataset_version": DATASET_VERSION,
+        "feature_version": FEATURE_VERSION,
+        "honest_policy_version": HONEST_POLICY_VERSION,
+        "feature_names": list(feature_names_for(information_profile)),
+        "code_revision": _code_revision(),
+        "generation_configuration": str(relative_source),
+        "seeds": sorted({entry.seed for entry in entries}),
+        "row_count": int(len(frame)),
+        "dataset_sha256": _file_checksum(output_path),
+    }
+    output_path.with_suffix(".metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n"
     )
 
 

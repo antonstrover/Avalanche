@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 import torch
 
@@ -17,6 +16,7 @@ from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir
 from avalanche.control import DecisionType
 from avalanche.experiments import run_episode
 from avalanche.monitors.calibration import calibrate
+from avalanche.monitors.dataset import load_dataset_fixture
 from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.learned import LEARNED_PROCESS_RISK
 from avalanche.monitors.perceptron import (
@@ -38,10 +38,7 @@ SEED = 20260825
 @pytest.fixture(scope="module")
 def model_path(tmp_path_factory) -> Path:
     """Train one small model and save it with its calibration."""
-    frame = pd.read_parquet(FIXTURE)
-    for name in FEATURE_NAMES:
-        if name not in frame:
-            frame[name] = 0.0
+    frame = load_dataset_fixture(FIXTURE)
     parts, assignment = split_by_family(frame, seed=SEED)
     config = TrainingConfig(seed=SEED, epochs=8)
     model = train_perceptron(parts["train"], parts["validation"], config)
