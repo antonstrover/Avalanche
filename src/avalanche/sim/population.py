@@ -17,6 +17,23 @@ from avalanche.sim.topology import NODE_TYPE_NAMES, Topology
 
 CUSTOMER_GROUP_NAMES = ("standard", "premium")
 
+POPULATION_ARRAY_FIELDS = (
+    "location_kind",
+    "location_index",
+    "progress",
+    "destination",
+    "ability",
+    "risk_tolerance",
+    "group",
+    "compliance",
+    "status",
+    "wait_time",
+    "journey_time",
+    "blocked_time",
+    "arrival_time",
+    "queue_ticket",
+)
+
 if TYPE_CHECKING:
     from avalanche.sim.routes import RouteTable
 
@@ -65,22 +82,7 @@ class SkierArrays:
         The checksum and the invariant tests walk this order.
         A new field must join this list.
         """
-        return (
-            ("location_kind", self.location_kind),
-            ("location_index", self.location_index),
-            ("progress", self.progress),
-            ("destination", self.destination),
-            ("ability", self.ability),
-            ("risk_tolerance", self.risk_tolerance),
-            ("group", self.group),
-            ("compliance", self.compliance),
-            ("status", self.status),
-            ("wait_time", self.wait_time),
-            ("journey_time", self.journey_time),
-            ("blocked_time", self.blocked_time),
-            ("arrival_time", self.arrival_time),
-            ("queue_ticket", self.queue_ticket),
-        )
+        return tuple((name, getattr(self, name)) for name in POPULATION_ARRAY_FIELDS)
 
 
 def empty_population(count: int) -> SkierArrays:

@@ -6,6 +6,8 @@ The engine applies deterministic weather and hazard conditions.
 """
 
 import hashlib
+import json
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -385,55 +387,67 @@ class MountainSim:
     def state_checksum(self) -> str:
         """Return the digest of the dynamic state.
 
-        The digest covers the simulation time, the population, and the edge state.
-        The name of each field goes into the digest before the values of that field.
-        A rename or a new order therefore changes the digest.
+        The digest covers each input that can change a later movement tick.
+        It excludes immutable configuration and derived event views.
+        It excludes metrics and history because they cannot change movement.
         The digest is stable on one platform.
         """
         digest = hashlib.blake2b(digest_size=16)
-        state_fields = (
-            ("closed", self.state.closed),
-            ("weather_closed", self.state.weather_closed),
-            ("failure_closed", self.state.failure_closed),
-            ("lift_stopped", self.state.lift_stopped),
-            ("telemetry_late", self.state.telemetry_late),
-            ("lift_capacity_factor", self.state.lift_capacity_factor),
-            ("lift_service_residual", self.state.lift_service_residual),
-            ("crowd_messages", self.state.crowd_messages),
-            ("telemetry_override", self.state.telemetry_override),
-            (
-                "telemetry_override_enabled",
-                self.state.telemetry_override_enabled,
-            ),
-            ("occupancy", self.state.occupancy),
-            ("queue_length", self.state.queue_length),
-            ("speed_factor", self.state.speed_factor),
-            ("weather_risk", self.state.weather_risk),
-            ("density_ratio", self.state.density_ratio),
-            (
-                "reported_density_ratio",
-                self.state.reported_density_ratio,
-            ),
-            ("hazard_score", self.state.hazard_score),
-            ("dangerous_duration", self.state.dangerous_duration),
-            (
-                "dangerous_density_seconds",
-                self.state.dangerous_density_seconds,
-            ),
-            ("early_indicator", self.state.early_indicator),
-            ("harm_active", self.state.harm_active),
-            ("indicator_count", self.state.indicator_count),
-            ("harm_count", self.state.harm_count),
-            ("reported_occupancy", self.state.reported_occupancy),
-            ("reported_queue_length", self.state.reported_queue_length),
-            ("reported_speed_factor", self.state.reported_speed_factor),
-            ("reported_closed", self.state.reported_closed),
+        _digest_array(digest, "simulation_time", np.array(self.simulation_time, "<f8"))
+        _digest_array(digest, "step", np.array(self.step, "<i8"))
+        _digest_array(digest, "tick_seconds", np.array(self.tick_seconds, "<f8"))
+        _digest_array(
+            digest,
+            "population.arrived",
+            np.array(self.population.arrived, "<i8"),
         )
-        digest.update(np.float64(self.simulation_time).tobytes())
+        _digest_array(
+            digest,
+            "population.next_ticket",
+            np.array(self.population.next_ticket, "<i8"),
+        )
         if self.weather_schedule is not None:
-            digest.update(b"weather")
-            digest.update(self.weather.as_array().tobytes())
-        for name, array in (*self.population.checksum_fields(), *state_fields):
-            digest.update(name.encode())
-            digest.update(np.ascontiguousarray(array).tobytes())
+            _digest_array(digest, "weather", self.weather.as_array())
+            _digest_array(
+                digest,
+                "weather.next_transition",
+                np.array(self.weather_schedule.next_transition, "<i8"),
+            )
+        for name, array in self.population.checksum_fields():
+            _digest_array(digest, f"population.{name}", array)
+        for name, array in self.state.checksum_fields():
+            _digest_array(digest, f"state.{name}", array)
+        choice = self.streams.get("choice")
+        if choice is not None:
+            _digest_bytes(
+                digest,
+                "random.choice",
+                json.dumps(
+                    choice.bit_generator.state,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode(),
+            )
         return digest.hexdigest()
+
+
+def _digest_array(digest: Any, name: str, values: np.ndarray) -> None:
+    """Add one named array with a stable type and shape."""
+    array = np.asarray(values)
+    dtype = array.dtype.newbyteorder("<")
+    portable = np.ascontiguousarray(array, dtype=dtype)
+    _digest_bytes(digest, name, portable.tobytes())
+    _digest_bytes(digest, f"{name}.dtype", dtype.str.encode())
+    shape = struct.pack("<Q", portable.ndim) + b"".join(
+        struct.pack("<Q", size) for size in portable.shape
+    )
+    _digest_bytes(digest, f"{name}.shape", shape)
+
+
+def _digest_bytes(digest: Any, name: str, values: bytes) -> None:
+    """Add one named byte value with unambiguous lengths."""
+    encoded_name = name.encode()
+    digest.update(struct.pack("<Q", len(encoded_name)))
+    digest.update(encoded_name)
+    digest.update(struct.pack("<Q", len(values)))
+    digest.update(values)
