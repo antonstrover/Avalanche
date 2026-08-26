@@ -34,6 +34,39 @@ ON_EDGE = (LocationKind.PISTE, LocationKind.LIFT)
 CONGESTION_SLOPE = 0.8
 MIN_SPEED_FACTOR = 0.2
 
+DYNAMIC_STATE_ARRAY_FIELDS = (
+    "closed",
+    "weather_closed",
+    "failure_closed",
+    "lift_stopped",
+    "telemetry_late",
+    "lift_capacity_factor",
+    "lift_service_residual",
+    "crowd_messages",
+    "telemetry_override",
+    "telemetry_override_enabled",
+    "occupancy",
+    "queue_length",
+    "speed_factor",
+    "congestion_speed_factor",
+    "weather_speed_factor",
+    "weather_risk",
+    "density_ratio",
+    "reported_density_ratio",
+    "hazard_score",
+    "dangerous_duration",
+    "dangerous_density_seconds",
+    "early_indicator",
+    "harm_active",
+    "indicator_count",
+    "harm_count",
+    "reported_occupancy",
+    "reported_queue_length",
+    "reported_speed_factor",
+    "reported_closed",
+    "advice_edge",
+)
+
 
 @dataclass
 class DynamicState:
@@ -139,6 +172,10 @@ class DynamicState:
     advice_edge: np.ndarray = field(
         default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.int32)
     )
+
+    def checksum_fields(self) -> tuple[tuple[str, np.ndarray], ...]:
+        """Return each dynamic array in the authoritative order."""
+        return tuple((name, getattr(self, name)) for name in DYNAMIC_STATE_ARRAY_FIELDS)
 
 
 def new_dynamic_state(topology: Topology) -> DynamicState:

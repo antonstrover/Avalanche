@@ -7,6 +7,7 @@ import pyarrow.parquet as pq
 
 from avalanche.config import ResolvedConfig, load_and_merge
 from avalanche.experiments import run_episode
+from avalanche.traces import SNAPSHOT_SCHEMA_VERSION
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
@@ -53,7 +54,12 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     assert metrics_table.num_rows == 3
     assert "monitor_latency_seconds_sum" not in metrics_table.column_names
     assert "intervention_latency_seconds_sum" not in metrics_table.column_names
-    assert pq.read_table(tmp_path / "snapshots.parquet").num_rows == 3
+    snapshots = pq.read_table(tmp_path / "snapshots.parquet")
+    assert snapshots.num_rows == 3
+    assert (
+        snapshots.column("snapshot_schema_version").to_pylist()
+        == [SNAPSHOT_SCHEMA_VERSION] * 3
+    )
     assert summary["information_profile"] == "principal"
     assert summary["policy_version"] == 3
     assert summary["metrics"]["harm_count"] >= 0

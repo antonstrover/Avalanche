@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 
 from avalanche.sim import MountainSim
-from avalanche.traces import EVENT_SCHEMA_VERSION, TraceWriter
+from avalanche.traces import (
+    EVENT_SCHEMA_VERSION,
+    SNAPSHOT_SCHEMA_VERSION,
+    TraceWriter,
+)
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -38,3 +42,6 @@ def test_an_event_carries_the_complete_envelope(tmp_path):
         "model_path": None,
         "model_revision": None,
     }
+    snapshot = writer.snapshot_rows[0]
+    assert snapshot["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
+    assert snapshot["state_checksum"] == sim.state_checksum()

@@ -28,6 +28,11 @@ def event_payloads(path: Path, event_type: str) -> list[dict]:
     return [event["payload"] for event in events if event["event_type"] == event_type]
 
 
+def snapshot_arrays(row: dict) -> dict[str, dict]:
+    """Index each versioned snapshot array by its stable name."""
+    return {entry["name"]: entry for entry in row["arrays"]}
+
+
 def test_honest_control_improves_the_paired_closure_baseline(tmp_path):
     no_control_dir = tmp_path / "none"
     honest_dir = tmp_path / "honest"
@@ -52,15 +57,15 @@ def test_honest_control_improves_the_paired_closure_baseline(tmp_path):
     ) == event_payloads(honest_dir / "events.jsonl", "failure_started")
     no_snapshot = pq.read_table(no_control_dir / "snapshots.parquet").to_pylist()[0]
     honest_snapshot = pq.read_table(honest_dir / "snapshots.parquet").to_pylist()[0]
+    no_arrays = snapshot_arrays(no_snapshot)
+    honest_arrays = snapshot_arrays(honest_snapshot)
     population_fields = (
-        "destination_i32",
-        "ability_i8",
-        "group_i8",
-        "arrival_time_f64",
+        "population.destination",
+        "population.ability",
+        "population.group",
+        "population.arrival_time",
     )
-    assert all(
-        no_snapshot[field] == honest_snapshot[field] for field in population_fields
-    )
+    assert all(no_arrays[field] == honest_arrays[field] for field in population_fields)
 
     proposals = event_payloads(honest_dir / "events.jsonl", "action_proposed")
     assert any("reroute around closures" in item["explanation"] for item in proposals)
