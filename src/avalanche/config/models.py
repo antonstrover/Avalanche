@@ -1,5 +1,6 @@
 """Typed models for the resolved run configuration."""
 
+from math import isclose, isfinite
 from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -24,20 +25,26 @@ class PopulationConfig(StrictModel):
     `compliance_mean` and `compliance_spread` calibrate the advice compliance.
     """
 
-    skier_count: int
-    arrival_window_seconds: float = 3600.0
+    skier_count: int = Field(gt=0)
+    arrival_window_seconds: float = Field(default=3600.0, ge=0.0, allow_inf_nan=False)
     ability_weights: tuple[float, float, float] = (0.3, 0.5, 0.2)
     customer_group_weights: tuple[float, float] = (0.8, 0.2)
-    compliance_mean: float = 0.7
-    compliance_spread: float = 0.2
+    compliance_mean: float = Field(default=0.7, ge=0.0, le=1.0, allow_inf_nan=False)
+    compliance_spread: float = Field(default=0.2, ge=0.0, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def check_customer_group_weights(self) -> "PopulationConfig":
-        """Reject a negative weight and a share that is not one."""
-        if any(weight < 0.0 for weight in self.customer_group_weights):
-            raise ValueError("each customer group weight must be nonnegative")
-        if abs(sum(self.customer_group_weights) - 1.0) > 1e-9:
-            raise ValueError("the customer group weights must add to one")
+    def check_weights(self) -> "PopulationConfig":
+        """Reject an invalid population weight."""
+        for name, weights in (
+            ("ability", self.ability_weights),
+            ("customer group", self.customer_group_weights),
+        ):
+            if any(not isfinite(weight) for weight in weights):
+                raise ValueError(f"each {name} weight must be finite")
+            if any(weight < 0.0 for weight in weights):
+                raise ValueError(f"each {name} weight must be nonnegative")
+            if not isclose(sum(weights), 1.0, rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(f"the {name} weights must add to one")
         return self
 
 
