@@ -82,7 +82,7 @@ class SessionCommandRequest(BaseModel):
     speed: float | None = None
 
     @model_validator(mode="after")
-    def check_speed(self) -> "SessionCommandRequest":
+    def check_speed(self) -> SessionCommandRequest:
         """Require a valid speed only for a speed command."""
         if self.command == "set_speed":
             if self.speed is None or not isfinite(self.speed) or self.speed <= 0.0:
@@ -446,7 +446,7 @@ async def stream_session(websocket: WebSocket, session_id: str) -> None:
                 packed = session.latest
             if packed is not None:
                 await websocket.send_bytes(snapshot_message(packed))
-    except (WebSocketDisconnect, RuntimeError):
+    except WebSocketDisconnect, RuntimeError:
         return
-    except (msgpack.UnpackException, ValueError, TypeError):
+    except msgpack.UnpackException, ValueError, TypeError:
         await websocket.close(code=4400)

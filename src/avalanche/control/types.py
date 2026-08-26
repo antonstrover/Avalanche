@@ -281,7 +281,7 @@ class MonitorDecision(BaseModel):
     predicted_result: PredictedResult = ()
 
     @model_validator(mode="after")
-    def check_replacement(self) -> "MonitorDecision":
+    def check_replacement(self) -> MonitorDecision:
         """Require a replacement only for a replace decision."""
         has_replacement = self.replacement_action is not None
         if self.decision is DecisionType.REPLACE and not has_replacement:

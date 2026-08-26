@@ -19,7 +19,7 @@ class Weather:
     temperature: float
 
     @classmethod
-    def from_config(cls, value: WeatherStateConfig) -> "Weather":
+    def from_config(cls, value: WeatherStateConfig) -> Weather:
         """Build a weather value from its configuration."""
         return cls(value.wind, value.visibility, value.snowfall, value.temperature)
 

@@ -70,7 +70,7 @@ class HonestEnvelope:
         samples: tuple[EnvelopeSample, ...],
         training_variants: tuple[str, ...],
         **widths: float,
-    ) -> "HonestEnvelope":
+    ) -> HonestEnvelope:
         """Build each populated bin from the declared training variants."""
         allowed = frozenset(training_variants)
         selected = [sample for sample in samples if sample.policy_variant in allowed]

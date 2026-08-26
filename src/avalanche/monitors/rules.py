@@ -259,7 +259,7 @@ class RuleMonitor:
             source_id, destination_id = reference.split("->", maxsplit=1)
             source = self.topology.node_index[source_id]
             destination = self.topology.node_index[destination_id]
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             raise ValueError(f"the edge reference {reference!r} is invalid") from None
         matches = np.flatnonzero(
             (self.topology.edge_source == source)

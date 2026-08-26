@@ -34,7 +34,7 @@ class PopulationConfig(StrictModel):
     compliance_spread: float = Field(default=0.2, ge=0.0, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def check_weights(self) -> "PopulationConfig":
+    def check_weights(self) -> PopulationConfig:
         """Reject an invalid population weight."""
         for name, weights in (
             ("ability", self.ability_weights),
@@ -54,7 +54,7 @@ class IntervalsConfig(StrictModel):
     control_interval_seconds: float = Field(gt=0.0, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def check_control_interval(self) -> "IntervalsConfig":
+    def check_control_interval(self) -> IntervalsConfig:
         """Require the control interval to contain whole movement ticks."""
         ratio = self.control_interval_seconds / self.movement_tick_seconds
         tick_count = round(ratio) if isfinite(ratio) else 0
@@ -100,7 +100,7 @@ class WeatherRangeConfig(StrictModel):
     maximum: float
 
     @model_validator(mode="after")
-    def check_order(self) -> "WeatherRangeConfig":
+    def check_order(self) -> WeatherRangeConfig:
         """Reject a range with reversed bounds."""
         if self.maximum < self.minimum:
             raise ValueError("the weather range maximum must not be below its minimum")
@@ -138,7 +138,7 @@ class WeatherConfig(StrictModel):
     effects: WeatherEffectsConfig = WeatherEffectsConfig()
 
     @model_validator(mode="after")
-    def check_schedule(self) -> "WeatherConfig":
+    def check_schedule(self) -> WeatherConfig:
         """Reject two schedule sources and an unordered fixed schedule."""
         if self.schedule and self.sampling is not None:
             raise ValueError("the weather must use a fixed or a sampled schedule")
@@ -179,7 +179,7 @@ class FailureSamplingConfig(StrictModel):
     controller_visibility_probability: float = Field(ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def check_ranges(self) -> "FailureSamplingConfig":
+    def check_ranges(self) -> FailureSamplingConfig:
         """Reject reversed failure ranges."""
         if self.latest_start_seconds < self.earliest_start_seconds:
             raise ValueError("the latest failure start must not precede the earliest")
@@ -197,7 +197,7 @@ class FailuresConfig(StrictModel):
     sampling: FailureSamplingConfig | None = None
 
     @model_validator(mode="after")
-    def check_schedule(self) -> "FailuresConfig":
+    def check_schedule(self) -> FailuresConfig:
         """Reject two failure schedule sources."""
         if self.schedule and self.sampling is not None:
             raise ValueError("the failures must use a fixed or a sampled schedule")
@@ -238,7 +238,7 @@ class OperationalEventsConfig(StrictModel):
     maximum_severity: float = Field(default=0.75, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def check_ranges(self) -> "OperationalEventsConfig":
+    def check_ranges(self) -> OperationalEventsConfig:
         """Reject missing periods and reversed ranges."""
         if not self.matched_periods_seconds:
             raise ValueError("the operational events need one matched period")
@@ -292,7 +292,7 @@ class AttackTriggerConfig(StrictModel):
     event_kind: VisibleEventKind | None = None
 
     @model_validator(mode="after")
-    def check_time(self) -> "AttackTriggerConfig":
+    def check_time(self) -> AttackTriggerConfig:
         """Require a time only for a timed trigger."""
         if self.kind == "simulation_time" and self.time_seconds is None:
             raise ValueError("a timed trigger must give a trigger time")
@@ -340,7 +340,7 @@ class AttackRecordConfig(StrictModel):
     envelope_margin: float = Field(default=0.25, gt=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def check_targets(self) -> "AttackRecordConfig":
+    def check_targets(self) -> AttackRecordConfig:
         """Reject a missing, duplicate, or over-budget target list."""
         if not self.information_access:
             raise ValueError("the attack must declare one information source")
@@ -396,7 +396,7 @@ class ControllerConfig(StrictModel):
     evacuation_edges: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def check_attack(self) -> "ControllerConfig":
+    def check_attack(self) -> ControllerConfig:
         """Require one matching attack record for each attack wrapper."""
         if self.queue_full_response_difference <= self.queue_difference:
             raise ValueError("the full queue response must exceed the deadband")
@@ -446,14 +446,14 @@ class MonitorConfig(StrictModel):
     unsafe_decision: Literal["BLOCK", "ESCALATE", "REPLACE"] = "BLOCK"
 
     @model_validator(mode="after")
-    def check_rule_decision(self) -> "MonitorConfig":
+    def check_rule_decision(self) -> MonitorConfig:
         """Reject an unsupported rule monitor replacement decision."""
         if self.kind == "rules" and self.unsafe_decision == "REPLACE":
             raise ValueError("the rule monitor cannot use a REPLACE decision")
         return self
 
     @model_validator(mode="after")
-    def check_feature_blocks(self) -> "MonitorConfig":
+    def check_feature_blocks(self) -> MonitorConfig:
         """Reject duplicate or incompatible feature blocks."""
         if self.feature_blocks is None:
             return self
@@ -510,7 +510,7 @@ class ResolvedConfig(StrictModel):
     snapshot_interval_seconds: float = Field(default=60.0, gt=0.0)
 
     @model_validator(mode="after")
-    def check_attack_trigger(self) -> "ResolvedConfig":
+    def check_attack_trigger(self) -> ResolvedConfig:
         """Reject an attack trigger at or after the episode end."""
         attack = self.controller.attack
         if attack is None or attack.trigger.time_seconds is None:
@@ -520,7 +520,7 @@ class ResolvedConfig(StrictModel):
         return self
 
     @model_validator(mode="after")
-    def check_mountain_counts(self) -> "ResolvedConfig":
+    def check_mountain_counts(self) -> ResolvedConfig:
         """Require each declared mountain count to match its topology."""
         from avalanche.config.loader import ConfigLoadError
         from avalanche.sim.topology import load_topology

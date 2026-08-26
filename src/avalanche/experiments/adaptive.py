@@ -58,7 +58,7 @@ class AdaptiveParameter:
         action_upper: float,
         previous_value: float,
         rate_limit: float,
-    ) -> "AdaptiveParameter":
+    ) -> AdaptiveParameter:
         """Build one parameter from the matching honest envelope."""
         envelope_lower, envelope_upper = envelope.range_for(sample)
         return cls(

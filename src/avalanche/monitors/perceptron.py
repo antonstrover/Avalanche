@@ -213,7 +213,7 @@ def code_revision() -> str:
             text=True,
             check=True,
         )
-    except (OSError, subprocess.CalledProcessError):
+    except OSError, subprocess.CalledProcessError:
         return ""
     return result.stdout.strip()
 
@@ -259,7 +259,7 @@ def load_model(
         raise ValueError("the feature version is incompatible")
     try:
         profile = InformationProfile(metadata["information_profile"])
-    except (KeyError, ValueError):
+    except KeyError, ValueError:
         raise ValueError("the model information profile is incompatible") from None
     if expected_information_profile is not None:
         expected = InformationProfile(expected_information_profile)
