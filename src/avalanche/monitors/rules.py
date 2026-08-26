@@ -75,7 +75,10 @@ class RuleMonitor:
         self.evacuation_edges = frozenset(
             self._edge_index(reference) for reference in evacuation_edges
         )
-        self.unsafe_decision = DecisionType(unsafe_decision)
+        decision = DecisionType(unsafe_decision)
+        if decision is DecisionType.REPLACE:
+            raise ValueError("the rule monitor cannot use a REPLACE decision")
+        self.unsafe_decision = decision
 
     def reset(self, seed: int) -> None:
         """Reset the stateless rule monitor."""

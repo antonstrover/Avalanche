@@ -445,6 +445,13 @@ class MonitorConfig(StrictModel):
     unsafe_decision: Literal["BLOCK", "ESCALATE", "REPLACE"] = "BLOCK"
 
     @model_validator(mode="after")
+    def check_rule_decision(self) -> "MonitorConfig":
+        """Reject an unsupported rule monitor replacement decision."""
+        if self.kind == "rules" and self.unsafe_decision == "REPLACE":
+            raise ValueError("the rule monitor cannot use a REPLACE decision")
+        return self
+
+    @model_validator(mode="after")
     def check_feature_blocks(self) -> "MonitorConfig":
         """Reject duplicate or incompatible feature blocks."""
         if self.feature_blocks is None:
