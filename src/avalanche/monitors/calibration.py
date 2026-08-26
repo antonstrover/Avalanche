@@ -8,13 +8,80 @@ The test scenarios stay for the final evaluation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
+CALIBRATION_VERSION = 2
+TEMPERATURE_SCAN_BOUNDARY = "TEMPERATURE_SCAN_BOUNDARY"
+BOUNDARY_STEP_TOLERANCE = 1
 # The search range of the temperature scan, in log space.
 LOG_TEMPERATURE_LIMIT = 3.0
 COARSE_STEPS = 61
 FINE_STEPS = 41
+
+
+@dataclass(frozen=True)
+class TemperatureFit:
+    """Hold one selected temperature and its scan diagnostics."""
+
+    temperature: float
+    log_temperature: float
+    search_low: float
+    search_high: float
+    candidate_index: int
+    boundary_side: Literal["low", "high", "none"]
+
+    @classmethod
+    def from_candidates(
+        cls, log_candidates: np.ndarray, candidate_index: int
+    ) -> TemperatureFit:
+        """Build diagnostics from one ordered log-temperature scan."""
+        candidates = np.asarray(log_candidates, dtype=float)
+        if candidates.ndim != 1 or candidates.size < 3:
+            raise ValueError("a temperature scan needs three candidates")
+        if not 0 <= candidate_index < candidates.size:
+            raise ValueError("the temperature candidate index is invalid")
+        if candidate_index <= BOUNDARY_STEP_TOLERANCE:
+            side: Literal["low", "high", "none"] = "low"
+        elif candidate_index >= candidates.size - 1 - BOUNDARY_STEP_TOLERANCE:
+            side = "high"
+        else:
+            side = "none"
+        selected = float(candidates[candidate_index])
+        return cls(
+            temperature=float(np.exp(selected)),
+            log_temperature=selected,
+            search_low=float(candidates[0]),
+            search_high=float(candidates[-1]),
+            candidate_index=int(candidate_index),
+            boundary_side=side,
+        )
+
+    def as_dict(self) -> dict[str, int | float | str]:
+        """Return every durable temperature fit field."""
+        return {
+            "temperature": self.temperature,
+            "log_temperature": self.log_temperature,
+            "search_low": self.search_low,
+            "search_high": self.search_high,
+            "candidate_index": self.candidate_index,
+            "boundary_side": self.boundary_side,
+        }
+
+    def warnings(self) -> tuple[dict[str, float | str], ...]:
+        """Return one warning when the fit reaches a scan boundary."""
+        if self.boundary_side == "none":
+            return ()
+        return (
+            {
+                "code": TEMPERATURE_SCAN_BOUNDARY,
+                "selected_log_temperature": self.log_temperature,
+                "search_low": self.search_low,
+                "search_high": self.search_high,
+                "boundary_side": self.boundary_side,
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -46,11 +113,15 @@ class Calibration:
     false_alarm_rate: float
     brier_score: float
     curve: ReliabilityCurve
+    temperature_fit: TemperatureFit
 
     def as_dict(self) -> dict[str, object]:
         """Return the calibration for the model metadata."""
         return {
+            "calibration_version": CALIBRATION_VERSION,
             "temperature": self.temperature,
+            "temperature_fit": self.temperature_fit.as_dict(),
+            "warnings": self.temperature_fit.warnings(),
             "threshold": self.threshold,
             "false_alarm_budget": self.false_alarm_budget,
             "false_alarm_rate": self.false_alarm_rate,
@@ -66,7 +137,7 @@ def apply_temperature(logits: np.ndarray, temperature: float) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.asarray(logits, dtype=float) / temperature))
 
 
-def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> float:
+def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> TemperatureFit:
     """Fit one temperature on the validation data.
 
     A scan over the log temperature needs no optimiser for one parameter.
@@ -75,10 +146,15 @@ def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> float:
     logits = np.asarray(logits, dtype=float)
     labels = np.asarray(labels, dtype=float)
     limit = LOG_TEMPERATURE_LIMIT
-    best = _scan(logits, labels, -limit, limit, COARSE_STEPS)
+    coarse = _scan(logits, labels, -limit, limit, COARSE_STEPS)
     span = 2.0 * LOG_TEMPERATURE_LIMIT / (COARSE_STEPS - 1)
-    best = _scan(logits, labels, best - span, best + span, FINE_STEPS)
-    return float(np.exp(best))
+    return _scan(
+        logits,
+        labels,
+        coarse.log_temperature - span,
+        coarse.log_temperature + span,
+        FINE_STEPS,
+    )
 
 
 def select_threshold(
@@ -155,7 +231,8 @@ def calibrate(
     bins: int = 10,
 ) -> Calibration:
     """Fit the temperature and select the threshold on the validation data."""
-    temperature = fit_temperature(logits, labels)
+    temperature_fit = fit_temperature(logits, labels)
+    temperature = temperature_fit.temperature
     scores = apply_temperature(logits, temperature)
     threshold = select_threshold(scores, labels, false_alarm_budget=false_alarm_budget)
     return Calibration(
@@ -165,16 +242,17 @@ def calibrate(
         false_alarm_rate=false_alarm_rate(scores, labels, threshold),
         brier_score=float(np.mean((scores - np.asarray(labels, dtype=float)) ** 2)),
         curve=reliability_curve(scores, labels, bins),
+        temperature_fit=temperature_fit,
     )
 
 
 def _scan(
     logits: np.ndarray, labels: np.ndarray, low: float, high: float, steps: int
-) -> float:
-    """Return the log temperature with the lowest loss in one range."""
+) -> TemperatureFit:
+    """Return the temperature fit with the lowest loss in one range."""
     candidates = np.linspace(low, high, steps)
     losses = [_loss(logits, labels, float(np.exp(value))) for value in candidates]
-    return float(candidates[int(np.argmin(losses))])
+    return TemperatureFit.from_candidates(candidates, int(np.argmin(losses)))
 
 
 def _loss(logits: np.ndarray, labels: np.ndarray, temperature: float) -> float:

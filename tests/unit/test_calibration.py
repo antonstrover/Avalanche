@@ -11,6 +11,8 @@ import numpy as np
 import pytest
 
 from avalanche.monitors.calibration import (
+    CALIBRATION_VERSION,
+    TEMPERATURE_SCAN_BOUNDARY,
     apply_temperature,
     calibrate,
     false_alarm_rate,
@@ -68,12 +70,57 @@ def test_the_temperature_improves_the_brier_score():
     # A model with over-confident outputs needs a temperature above one.
     over_confident = logits * 4.0
 
-    temperature = fit_temperature(over_confident, labels)
+    fit = fit_temperature(over_confident, labels)
     before = np.mean((apply_temperature(over_confident, 1.0) - labels) ** 2)
-    after = np.mean((apply_temperature(over_confident, temperature) - labels) ** 2)
+    after = np.mean((apply_temperature(over_confident, fit.temperature) - labels) ** 2)
 
-    assert temperature > 1.0
+    assert fit.temperature > 1.0
     assert after < before
+
+
+def test_an_interior_temperature_fit_has_no_warning():
+    logits, labels = mixed_scores()
+
+    fit = fit_temperature(logits * 4.0, labels)
+
+    assert fit.boundary_side == "none"
+    assert fit.warnings() == ()
+    assert fit.search_low < fit.log_temperature < fit.search_high
+
+
+def test_a_temperature_below_the_range_records_the_low_boundary():
+    fit = fit_temperature(
+        np.array([-2.0, -1.0, 1.0, 2.0]),
+        np.array([0.0, 0.0, 1.0, 1.0]),
+    )
+
+    assert fit.boundary_side == "low"
+    assert fit.candidate_index <= 1
+    assert fit.warnings()[0]["code"] == TEMPERATURE_SCAN_BOUNDARY
+    assert fit.warnings()[0]["boundary_side"] == "low"
+
+
+def test_a_temperature_above_the_range_records_the_high_boundary():
+    fit = fit_temperature(
+        np.array([-2.0, -1.0, 1.0, 2.0]),
+        np.array([1.0, 1.0, 0.0, 0.0]),
+    )
+
+    assert fit.boundary_side == "high"
+    assert fit.candidate_index >= 39
+    assert fit.warnings()[0] == {
+        "code": TEMPERATURE_SCAN_BOUNDARY,
+        "selected_log_temperature": fit.log_temperature,
+        "search_low": fit.search_low,
+        "search_high": fit.search_high,
+        "boundary_side": "high",
+    }
+
+
+def test_equal_temperature_inputs_give_equal_diagnostics():
+    logits, labels = mixed_scores()
+
+    assert fit_temperature(logits, labels) == fit_temperature(logits, labels)
 
 
 def test_the_temperature_does_not_change_the_ranking():
@@ -104,6 +151,9 @@ def test_the_calibration_records_every_run_time_value():
 
     assert calibration.false_alarm_rate <= 0.05
     assert calibration.temperature > 0.0
+    assert values["calibration_version"] == CALIBRATION_VERSION == 2
+    assert values["temperature_fit"]["temperature"] == calibration.temperature
+    assert isinstance(values["warnings"], tuple)
     assert values["reliability_curve"]["counts"]
     assert 0.0 <= calibration.brier_score <= 1.0
 
