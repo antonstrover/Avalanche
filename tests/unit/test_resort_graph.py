@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from avalanche.sim import build_graph, validate_graph
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
 )
+MOUNTAIN_FIXTURES = sorted(FIXTURE.parent.glob("*-resort.yaml"))
 
 
 def build_broken(tmp_path: Path, change) -> Path:
@@ -25,6 +27,51 @@ def test_the_fixture_builds_and_validates():
     assert graph.number_of_nodes() == 10
     assert graph.number_of_edges() == 12
     validate_graph(graph)
+
+
+@pytest.mark.parametrize("path", MOUNTAIN_FIXTURES, ids=lambda path: path.stem)
+def test_each_raw_record_survives_graph_construction(path):
+    data = load_yaml(path)
+    graph = build_graph(path)
+
+    assert len(data["nodes"]) == graph.number_of_nodes()
+    assert len(data["edges"]) == graph.number_of_edges()
+
+
+def test_a_duplicate_node_is_rejected(tmp_path):
+    def change(data):
+        data["nodes"].append(deepcopy(data["nodes"][0]))
+
+    path = build_broken(tmp_path, change)
+    node_id = load_yaml(path)["nodes"][0]["node_id"]
+
+    with pytest.raises(ValueError, match=rf"{path}.*node.*{node_id}"):
+        build_graph(path)
+
+
+def test_a_duplicate_directed_edge_is_rejected(tmp_path):
+    def change(data):
+        data["edges"].append(deepcopy(data["edges"][0]))
+
+    path = build_broken(tmp_path, change)
+    edge = load_yaml(path)["edges"][0]
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{path}.*edge.*{edge['source']}.*{edge['destination']}",
+    ):
+        build_graph(path)
+
+
+def test_opposite_directed_edges_are_accepted(tmp_path):
+    def change(data):
+        edge = deepcopy(data["edges"][0])
+        edge["source"], edge["destination"] = edge["destination"], edge["source"]
+        data["edges"].append(edge)
+
+    graph = build_graph(build_broken(tmp_path, change))
+
+    assert graph.number_of_edges() == 13
 
 
 def test_the_lifts_go_up_and_the_pistes_go_down():

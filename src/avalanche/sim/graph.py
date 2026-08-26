@@ -14,12 +14,33 @@ NODE_TYPES = frozenset({"entrance", "exit", "lift_station", "junction", "safe_zo
 EDGE_TYPES = frozenset({"piste", "lift"})
 
 
+def _reject_duplicate_records(data: dict[str, object], path: Path) -> None:
+    """Reject a repeated node or directed edge identity."""
+    node_ids: set[object] = set()
+    for node in data.get("nodes", []):
+        node_id = node["node_id"]
+        if node_id in node_ids:
+            raise ValueError(f"the mountain {path} repeats the node {node_id!r}")
+        node_ids.add(node_id)
+
+    endpoint_pairs: set[tuple[object, object]] = set()
+    for edge in data.get("edges", []):
+        endpoints = (edge["source"], edge["destination"])
+        if endpoints in endpoint_pairs:
+            raise ValueError(
+                f"the mountain {path} repeats the directed edge "
+                f"{endpoints[0]!r} to {endpoints[1]!r}"
+            )
+        endpoint_pairs.add(endpoints)
+
+
 def build_graph(path: Path) -> nx.DiGraph:
     """Read the mountain YAML file and return a directed graph.
 
     Each node and each edge keeps its static fields as attributes.
     """
     data = load_yaml(path)
+    _reject_duplicate_records(data, path)
     graph = nx.DiGraph(name=data.get("name", path.stem))
     for node in data.get("nodes", []):
         attributes = dict(node)
