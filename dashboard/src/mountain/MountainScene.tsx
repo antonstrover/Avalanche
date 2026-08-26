@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { CameraControls } from "@react-three/drei";
 import { Buildings } from "./Buildings";
 import { Timeline } from "../components/Timeline";
 import { Failures } from "./Failures";
@@ -30,6 +29,10 @@ import {
     type CameraPresetName,
 } from "./cameraPresets";
 import { reducedMotion } from "./conditions";
+import {
+    OrbitCameraControls,
+    type OrbitCameraHandle,
+} from "./OrbitCameraControls";
 
 export function LayerToggles({
     layers,
@@ -91,7 +94,7 @@ export function MountainScene({
 }) {
     const [drawn, setDrawn] = useState(false);
     const [visibleLayers, setVisibleLayers] = useState(INITIAL_LAYERS);
-    const controls = useRef<ComponentRef<typeof CameraControls>>(null);
+    const controls = useRef<OrbitCameraHandle>(null);
     const presets = useMemo(() => cameraPresets(model), [model]);
     const telemetry = useMemo(
         () => edgeTelemetryView(display.telemetry, showTrueState),
@@ -201,8 +204,10 @@ export function MountainScene({
                             onFocus={onDecisionFocus}
                         />
                     </group>
-                    <CameraControls
+                    <OrbitCameraControls
                         ref={controls}
+                        initialPosition={model.cameraPosition}
+                        initialTarget={model.cameraTarget}
                     />
                     <FirstFrame onDrawn={() => setDrawn(true)} />
                 </Canvas>
