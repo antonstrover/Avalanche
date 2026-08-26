@@ -49,8 +49,32 @@ class PopulationConfig(StrictModel):
 
 
 class IntervalsConfig(StrictModel):
-    movement_tick_seconds: float
-    control_interval_seconds: float
+    movement_tick_seconds: float = Field(gt=0.0, allow_inf_nan=False)
+    control_interval_seconds: float = Field(gt=0.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def check_control_interval(self) -> "IntervalsConfig":
+        """Require the control interval to contain whole movement ticks."""
+        ratio = self.control_interval_seconds / self.movement_tick_seconds
+        tick_count = round(ratio) if isfinite(ratio) else 0
+        try:
+            expected = tick_count * self.movement_tick_seconds
+        except OverflowError:
+            expected = 0.0
+        valid = tick_count >= 1 and isclose(
+            self.control_interval_seconds, expected, rel_tol=0.0, abs_tol=1e-9
+        )
+        if not valid:
+            raise ValueError(
+                f"the control interval {self.control_interval_seconds} must contain "
+                f"whole movement ticks of {self.movement_tick_seconds}"
+            )
+        return self
+
+    @property
+    def movement_ticks_per_control_interval(self) -> int:
+        """Return the movement tick count in one control interval."""
+        return round(self.control_interval_seconds / self.movement_tick_seconds)
 
 
 class WeatherStateConfig(StrictModel):
