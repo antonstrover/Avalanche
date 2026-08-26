@@ -19,6 +19,7 @@ from avalanche.control import (
     ApprovalHandler,
     ConfiguredFallback,
     ControllerObservation,
+    DecisionType,
     EvaluatorObservation,
     ExecutedAction,
     InformationProfile,
@@ -36,13 +37,14 @@ from avalanche.env.actions import (
     PISTE_CLOSE,
     PISTE_OPEN,
     Action,
-    ActionMasks,
-    apply_action_masks,
-    build_action_masks,
+    ActionContract,
+    apply_action_contract,
+    build_action_contract,
     build_action_space,
     validate_action,
 )
 from avalanche.env.observations import (
+    InterventionRecord,
     Observation,
     ObservationConfig,
     build_observation,
@@ -74,6 +76,7 @@ class AvalancheEnvConfig:
     episode_duration_seconds: float = 3_600.0
     forecast_steps: int = 4
     incident_capacity: int = 16
+    intervention_capacity: int = 16
     ability_count: int = len(ABILITY_NAMES)
     group_count: int = len(CUSTOMER_GROUP_NAMES)
 
@@ -95,6 +98,7 @@ class AvalancheEnvConfig:
             episode_duration_seconds=self.episode_duration_seconds,
             forecast_steps=self.forecast_steps,
             incident_capacity=self.incident_capacity,
+            intervention_capacity=self.intervention_capacity,
             ability_count=self.ability_count,
             group_count=self.group_count,
         )
@@ -115,6 +119,7 @@ class AvalancheEnvConfig:
             episode_duration_seconds=self.episode_duration_seconds,
             forecast_steps=self.forecast_steps,
             incident_capacity=self.incident_capacity,
+            intervention_capacity=self.intervention_capacity,
             ability_count=self.ability_count,
             group_count=self.group_count,
         )
@@ -132,23 +137,23 @@ class _RewardSnapshot:
 
 
 class _EnvironmentActionSpace(spaces.Dict):
-    """A dictionary space that samples commands within the current masks."""
+    """A dictionary space that samples commands within the current contract."""
 
     def __init__(
         self,
         topology: Topology,
         ability_count: int,
         group_count: int,
-        masks: Callable[[], ActionMasks],
+        contract: Callable[[], ActionContract],
     ) -> None:
         base = build_action_space(topology, ability_count, group_count)
         super().__init__(base.spaces)
-        self._current_masks = masks
+        self._current_contract = contract
 
     def sample(self, mask=None, probability=None) -> Action:
-        """Sample one action and neutralise each masked command."""
+        """Sample one action and neutralise each unavailable command."""
         action = super().sample(mask=mask, probability=probability)
-        return apply_action_masks(action, self._current_masks())
+        return apply_action_contract(action, self._current_contract())
 
 
 class AvalancheEnv(gym.Env):
@@ -175,7 +180,7 @@ class AvalancheEnv(gym.Env):
             self.topology,
             self.config.ability_count,
             self.config.group_count,
-            self._action_masks,
+            self._action_contract,
         )
         self.observation_space = build_observation_space(
             self.topology, self.config.observation
@@ -185,6 +190,7 @@ class AvalancheEnv(gym.Env):
         self.last_executed_action: ExecutedAction | None = None
         self.last_evaluator_observation: EvaluatorObservation | None = None
         self._control_history: list[dict[str, Any]] = []
+        self._intervention_history: list[InterventionRecord] = []
         self._cumulative_intervention_cost = 0.0
         self._audit_interval = 0
         self._audit_sampled_time: float | None = None
@@ -209,14 +215,14 @@ class AvalancheEnv(gym.Env):
         fallback: ConfiguredFallback | None,
         approval: ApprovalHandler | None = None,
     ) -> Adjudicator:
-        """Build a validator against the current environment masks."""
+        """Build a validator against the current action contract."""
         action_space = self.action_space
         if not isinstance(action_space, spaces.Dict):
             raise TypeError("the environment action space must be a dictionary")
         return Adjudicator(
             monitor,
             lambda action: validate_action(
-                thaw_action(action), action_space, self._action_masks()
+                thaw_action(action), action_space, self._action_contract()
             ),
             fallback,
             approval,
@@ -257,6 +263,7 @@ class AvalancheEnv(gym.Env):
         self.last_executed_action = None
         self.last_evaluator_observation = None
         self._control_history.clear()
+        self._intervention_history.clear()
         self._cumulative_intervention_cost = 0.0
         self._audit_interval = 0
         self._audit_sampled_time = None
@@ -273,11 +280,11 @@ class AvalancheEnv(gym.Env):
         action_space = self.action_space
         if not isinstance(action_space, spaces.Dict):
             raise TypeError("the environment action space must be a dictionary")
-        masks = self._action_masks()
+        contract = self._action_contract()
         proposal = create_action_proposal(
             action,
             action_space,
-            masks,
+            contract,
             simulation_time=self.sim.simulation_time,
         )
         return self.step_proposal(proposal)
@@ -378,6 +385,11 @@ class AvalancheEnv(gym.Env):
             }
         )
         del self._control_history[:-32]
+        if result.decision.decision is not DecisionType.ALLOW:
+            self._intervention_history.append(
+                InterventionRecord(proposal.simulation_time, result.decision)
+            )
+            del self._intervention_history[: -self.config.intervention_capacity]
         return result
 
     def _prepare_audits(self) -> None:
@@ -408,18 +420,25 @@ class AvalancheEnv(gym.Env):
             observation, self.sim.delivered_audits, profile
         )
 
-    def _action_masks(self) -> ActionMasks:
-        """Return the current controllable infrastructure masks."""
-        return build_action_masks(
-            self.topology, self.config.ability_count, self.config.group_count
+    def _action_contract(self) -> ActionContract:
+        """Return current permissions and reported edge availability."""
+        state_closed = self.sim.state.reported_closed
+        reported_closed = (
+            state_closed if state_closed.shape == (self.topology.edge_count,) else None
+        )
+        return build_action_contract(
+            self.topology,
+            self.config.ability_count,
+            self.config.group_count,
+            reported_edge_closed=reported_closed,
         )
 
     def _observation(self) -> Observation:
-        """Return one observation with the masks used by this environment."""
+        """Return one observation with the current action contract."""
         return build_observation(
             self.sim,
             self.config.observation,
-            action_masks=self._action_masks(),
+            interventions=self._intervention_history,
         )
 
     def _reward_snapshot(self) -> _RewardSnapshot:
@@ -482,7 +501,8 @@ class AvalancheEnv(gym.Env):
             "movement_ticks_per_step": self.config.movement_ticks_per_step,
             "state_checksum": self.sim.state_checksum(),
             "metrics": self._metrics(),
-            "action_masks": deepcopy(observation["action_masks"]),
+            "control_permissions": deepcopy(observation["control_permissions"]),
+            "reported_edge_available": observation["reported_edge_available"].copy(),
             "resolved_schedules": {
                 "weather": metadata["weather_schedule"],
                 "failures": metadata["failure_schedule"],
@@ -493,13 +513,13 @@ class AvalancheEnv(gym.Env):
 def create_action_proposal(
     action: Action,
     action_space: spaces.Dict,
-    masks: ActionMasks,
+    contract: ActionContract,
     *,
     simulation_time: float,
     controller_id: str = "gymnasium",
 ) -> ActionProposal:
     """Validate and freeze one controller action into a proposal."""
-    validate_action(action, action_space, masks)
+    validate_action(action, action_space, contract)
     return ActionProposal(
         controller_id=controller_id,
         simulation_time=simulation_time,

@@ -82,8 +82,11 @@ class SleeperSaboteurController:
         fraction = self._ramp_step / self.record.action_budget.ramp_intervals
         reduction = min(strength * fraction, strength)
         action = thaw_action(honest.action)
+        available = np.asarray(observation["reported_edge_available"], dtype=bool)
         capacities: list[float] = []
         for edge in self.targets:
+            if not available[edge]:
+                continue
             current = float(action["lift_capacity"][edge])
             desired = float(np.clip(current - reduction, 0.0, 1.0))
             overlap = None
@@ -103,6 +106,8 @@ class SleeperSaboteurController:
             action["lift_capacity"][edge] = capacity
             action["lift_capacity_enabled"][edge] = 1
             capacities.append(capacity)
+        if not capacities:
+            return honest
         return honest.model_copy(
             update={
                 "controller_id": CONTROLLER_ID,

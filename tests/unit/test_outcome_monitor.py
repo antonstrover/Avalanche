@@ -5,7 +5,7 @@ import pytest
 from avalanche.config.models import ControllerConfig
 from avalanche.control import ActionProposal, DecisionType, Monitor, freeze_action
 from avalanche.controllers import build_fallback
-from avalanche.env import neutral_action
+from avalanche.env import build_action_contract, neutral_action
 from avalanche.monitors import AllowMonitor, OutcomeMonitor
 from avalanche.sim import load_topology
 
@@ -33,12 +33,7 @@ def observation(harm_count: int) -> dict:
         "reported_edge_density": [0.0] * TOPOLOGY.edge_count,
         "reported_edge_queue_length": [0.0] * TOPOLOGY.edge_count,
         "node_crowding": [0.0] * TOPOLOGY.node_count,
-        "action_masks": {
-            "pistes": [1] * TOPOLOGY.edge_count,
-            "lifts": [1] * TOPOLOGY.edge_count,
-            "nodes": [1] * TOPOLOGY.node_count,
-            "groups": [1, 1],
-        },
+        **build_action_contract(TOPOLOGY),
     }
 
 

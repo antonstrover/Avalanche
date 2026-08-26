@@ -112,7 +112,8 @@ def test_each_builder_copies_every_nested_array():
             built["reported_edge_occupancy"], base["reported_edge_occupancy"]
         )
         assert not np.shares_memory(
-            built["action_masks"]["pistes"], base["action_masks"]["pistes"]
+            built["control_permissions"]["pistes"],
+            base["control_permissions"]["pistes"],
         )
     outcome["true_harm_active"].fill(1)
     evaluator["true_edge_occupancy"].fill(99)

@@ -15,7 +15,7 @@ from avalanche.controllers.responses import (
     piecewise_linear_response,
     queue_deadband_response,
 )
-from avalanche.env import build_action_masks, neutral_action
+from avalanche.env import build_action_contract, neutral_action
 from avalanche.sim import load_topology
 
 FIXTURE = (
@@ -46,7 +46,7 @@ def observation() -> dict:
         "reported_edge_queue_length": np.zeros(TOPOLOGY.edge_count, dtype=np.float32),
         "node_demand": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
         "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        "action_masks": build_action_masks(TOPOLOGY),
+        **build_action_contract(TOPOLOGY),
         "audit_measurements": [],
     }
 

@@ -7,7 +7,7 @@ import pytest
 
 from avalanche.controllers.honest import HonestController, HonestControllerConfig
 from avalanche.controllers.responses import ActionRateLimits
-from avalanche.env import build_action_masks
+from avalanche.env import build_action_contract
 from avalanche.sim import load_topology
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES
 
@@ -31,7 +31,7 @@ def base_observation(event: dict) -> dict:
         "reported_edge_queue_length": np.zeros(edge_count, dtype=np.float32),
         "node_demand": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
         "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        "action_masks": build_action_masks(TOPOLOGY),
+        **build_action_contract(TOPOLOGY),
         "operational_events": [event],
     }
 

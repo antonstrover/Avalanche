@@ -39,7 +39,7 @@ from avalanche.env import (
     PISTE_CLOSE,
     AvalancheEnv,
     AvalancheEnvConfig,
-    build_action_masks,
+    build_action_contract,
     build_action_space,
     validate_action,
 )
@@ -955,7 +955,7 @@ def validate_replacement_action(action: dict[str, Any]) -> None:
     validate_action(
         thaw_action(frozen),
         build_action_space(topology),
-        build_action_masks(topology),
+        build_action_contract(topology),
     )
 
 

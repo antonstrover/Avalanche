@@ -4,10 +4,12 @@ import numpy as np
 import pytest
 
 from avalanche.env import (
+    PISTE_CLOSE,
+    PISTE_OPEN,
     InvalidActionError,
-    build_action_mask_space,
-    build_action_masks,
+    build_action_contract,
     build_action_space,
+    build_control_permission_space,
     neutral_action,
     sample_valid_action,
     validate_action,
@@ -53,21 +55,23 @@ def test_the_neutral_action_requests_no_change(topology):
     assert np.all(action["telemetry_override_enabled"] == 0)
 
 
-def test_the_masks_follow_the_topology(topology):
-    masks = build_action_masks(topology)
-    mask_space = build_action_mask_space(topology)
+def test_the_permissions_follow_the_topology(topology):
+    contract = build_action_contract(topology)
+    permissions = contract["control_permissions"]
+    permission_space = build_control_permission_space(topology)
     piste = EDGE_TYPE_NAMES.index("piste")
     lift = EDGE_TYPE_NAMES.index("lift")
     exit_node = NODE_TYPE_NAMES.index("exit")
 
-    assert mask_space.contains(masks)
-    assert np.array_equal(masks["pistes"], topology.edge_type == piste)
-    assert np.array_equal(masks["lifts"], topology.edge_type == lift)
-    assert np.array_equal(masks["nodes"], topology.node_type != exit_node)
-    assert masks["abilities"].size == len(ABILITY_NAMES)
-    assert masks["groups"].size == len(CUSTOMER_GROUP_NAMES)
-    assert np.all(masks["abilities"] == 1)
-    assert np.all(masks["groups"] == 1)
+    assert permission_space.contains(permissions)
+    assert np.array_equal(permissions["pistes"], topology.edge_type == piste)
+    assert np.array_equal(permissions["lifts"], topology.edge_type == lift)
+    assert np.array_equal(permissions["nodes"], topology.node_type != exit_node)
+    assert permissions["abilities"].size == len(ABILITY_NAMES)
+    assert permissions["groups"].size == len(CUSTOMER_GROUP_NAMES)
+    assert np.all(permissions["abilities"] == 1)
+    assert np.all(permissions["groups"] == 1)
+    assert np.all(contract["reported_edge_available"] == 1)
 
 
 def test_the_masks_honor_configured_controls(tmp_path):
@@ -81,68 +85,92 @@ def test_the_masks_honor_configured_controls(tmp_path):
     mountain = tmp_path / "controlled-resort.yaml"
     mountain.write_text(text)
     topology = load_topology(mountain)
-    masks = build_action_masks(topology)
+    permissions = build_action_contract(topology)["control_permissions"]
     entrance = topology.node_index["base_village"]
 
-    assert masks["nodes"][entrance] == 0
-    assert masks["pistes"][0] == 0
+    assert permissions["nodes"][entrance] == 0
+    assert permissions["pistes"][0] == 0
 
 
-def test_current_restrictions_reduce_the_masks(topology):
-    edge_available = np.ones(topology.edge_count, dtype=bool)
-    node_available = np.ones(topology.node_count, dtype=bool)
-    ability_available = np.ones(len(ABILITY_NAMES), dtype=bool)
-    group_available = np.ones(len(CUSTOMER_GROUP_NAMES), dtype=bool)
-    edge_available[0] = False
-    node_available[0] = False
-    ability_available[1] = False
-    group_available[1] = False
+def test_a_reported_closure_changes_only_availability(topology):
+    closed = np.zeros(topology.edge_count, dtype=bool)
+    closed[0] = True
+    contract = build_action_contract(topology, reported_edge_closed=closed)
 
-    masks = build_action_masks(
-        topology,
-        edge_available=edge_available,
-        node_available=node_available,
-        ability_available=ability_available,
-        group_available=group_available,
-    )
-
-    assert masks["pistes"][0] == 0
-    assert masks["nodes"][0] == 0
-    assert masks["abilities"][1] == 0
-    assert masks["groups"][1] == 0
+    assert contract["control_permissions"]["pistes"][0] == 1
+    assert contract["reported_edge_available"][0] == 0
 
 
 def test_a_masked_command_is_rejected(topology):
     action_space = build_action_space(topology)
-    masks = build_action_masks(topology)
+    contract = build_action_contract(topology)
     action = neutral_action(topology)
-    lift_edge = int(np.flatnonzero(masks["lifts"])[0])
+    lift_edge = int(np.flatnonzero(contract["control_permissions"]["lifts"])[0])
     action["piste_requests"][lift_edge] = 2
 
-    with pytest.raises(InvalidActionError, match="masked piste request"):
-        validate_action(action, action_space, masks)
+    with pytest.raises(InvalidActionError, match="piste request permission"):
+        validate_action(action, action_space, contract)
 
 
 def test_a_malformed_action_is_rejected(topology):
     action_space = build_action_space(topology)
-    masks = build_action_masks(topology)
+    contract = build_action_contract(topology)
     action = neutral_action(topology)
     action["route_weights"] = np.zeros((1, 1), dtype=np.float32)
 
     with pytest.raises(InvalidActionError, match="outside the action space"):
-        validate_action(action, action_space, masks)
+        validate_action(action, action_space, contract)
 
 
-def test_sampled_actions_respect_each_mask(topology):
+def test_sampled_actions_respect_the_contract(topology):
     action_space = build_action_space(topology)
-    masks = build_action_masks(topology)
-    masks["pistes"][0] = 0
-    masks["nodes"][0] = 0
-    masks["abilities"][1] = 0
-    masks["groups"][1] = 0
+    contract = build_action_contract(topology)
+    permissions = contract["control_permissions"]
+    permissions["pistes"][0] = 0
+    permissions["nodes"][0] = 0
+    permissions["abilities"][1] = 0
+    permissions["groups"][1] = 0
+    contract["reported_edge_available"][1] = 0
     action_space.seed(82)
 
     for _ in range(100):
-        action = sample_valid_action(action_space, masks)
+        action = sample_valid_action(action_space, contract)
         assert action_space.contains(action)
-        validate_action(action, action_space, masks)
+        validate_action(action, action_space, contract)
+
+
+def test_a_closed_piste_accepts_only_a_reopening_request(topology):
+    action_space = build_action_space(topology)
+    piste = int(np.flatnonzero(topology.edge_type == EDGE_TYPE_NAMES.index("piste"))[0])
+    closed = np.zeros(topology.edge_count, dtype=bool)
+    closed[piste] = True
+    contract = build_action_contract(topology, reported_edge_closed=closed)
+    action = neutral_action(topology)
+    action["piste_requests"][piste] = PISTE_OPEN
+
+    validate_action(action, action_space, contract)
+
+    action["piste_requests"][piste] = PISTE_CLOSE
+    with pytest.raises(InvalidActionError, match="unavailable piste"):
+        validate_action(action, action_space, contract)
+
+
+def test_an_unavailable_edge_rejects_service_but_accepts_telemetry(topology):
+    action_space = build_action_space(topology)
+    lift = int(np.flatnonzero(topology.edge_type == EDGE_TYPE_NAMES.index("lift"))[0])
+    closed = np.zeros(topology.edge_count, dtype=bool)
+    closed[lift] = True
+    contract = build_action_contract(topology, reported_edge_closed=closed)
+    action = neutral_action(topology)
+    action["telemetry_override_enabled"][lift] = 1
+
+    validate_action(action, action_space, contract)
+
+    action["lift_capacity_enabled"][lift] = 1
+    with pytest.raises(InvalidActionError, match="lift service availability"):
+        validate_action(action, action_space, contract)
+
+    action = neutral_action(topology)
+    action["route_weights"][0, lift] = 0.5
+    with pytest.raises(InvalidActionError, match="route weight availability"):
+        validate_action(action, action_space, contract)

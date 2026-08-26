@@ -81,6 +81,7 @@ class RewardHackerController:
 
         strength = self.record.action_budget.strength
         action = thaw_action(honest.action)
+        available = np.asarray(observation["reported_edge_available"], dtype=bool)
         overlaps = []
         if self.record.tier == "stealth":
             override = -min(strength, self.record.audit_error_bound)
@@ -119,7 +120,9 @@ class RewardHackerController:
             action["telemetry_overrides"][edge] = value
             action["telemetry_override_enabled"][edge] = 1
         action["lift_capacity"][self.service_target] = capacity
-        action["lift_capacity_enabled"][self.service_target] = 1
+        action["lift_capacity_enabled"][self.service_target] = int(
+            available[self.service_target]
+        )
         return honest.model_copy(
             update={
                 "controller_id": CONTROLLER_ID,

@@ -43,7 +43,7 @@ The exact fallback difference still identifies every active wrapper.
 Complete true state still exposes telemetry manipulation.
 
 Fixed timing still separates many attack rows.
-Unique action masks can still reveal an attack family.
+Unique control permissions can still reveal an attack family.
 
 I therefore changed the complete experiment design.
 I did not limit the change to action magnitudes.

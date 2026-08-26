@@ -19,7 +19,7 @@ from avalanche.scenarios.audits import AUDIT_SCHEMA_VERSION, AuditMeasurement
 if TYPE_CHECKING:
     from avalanche.sim.engine import MountainSim
 
-OBSERVATION_SCHEMA_VERSION = 1
+OBSERVATION_SCHEMA_VERSION = 2
 
 
 def copy_observation(value: Any) -> Any:

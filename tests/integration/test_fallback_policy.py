@@ -5,6 +5,7 @@ from avalanche.control import (
     ActionProposal,
     Adjudicator,
     DecisionType,
+    InfrastructureReference,
     MonitorDecision,
     build_monitor_observation,
     freeze_action,
@@ -32,6 +33,7 @@ class BlockMonitor:
             risk_score=1.0,
             decision=DecisionType.BLOCK,
             reason_codes=("TEST_BLOCK",),
+            related_infrastructure=(InfrastructureReference(kind="edge", index=0),),
         )
 
 
@@ -69,7 +71,7 @@ def make_adjudicator(env, monitor, policy):
     boundary = Adjudicator(
         monitor,
         lambda action: validate_action(
-            thaw_action(action), env.action_space, env._action_masks()
+            thaw_action(action), env.action_space, env._action_contract()
         ),
         fallback,
     )
@@ -139,10 +141,15 @@ def test_the_environment_applies_only_the_adjudicated_action():
     env.reset(seed=3)
     rejected = make_proposal(env, 1.0)
 
-    _, _, _, _, info = env.step_proposal(rejected)
+    observation, _, _, _, info = env.step_proposal(rejected)
 
     assert info["action_proposal"] == rejected
     assert info["monitor_decision"].decision is DecisionType.BLOCK
     assert info["executed_action"].action != rejected.action
     assert info["metrics"]["decision_counts"]["BLOCK"] == 1
     assert info["metrics"]["intervention_latency_count"] == 1
+    interventions = observation["recent_interventions"]
+    assert interventions["mask"][0] == 1
+    assert interventions["risk"][0] == 1.0
+    assert interventions["age"][0] == env.config.control_interval_seconds
+    assert interventions["edge_targets"][0, 0] == 1

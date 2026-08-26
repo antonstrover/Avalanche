@@ -94,7 +94,7 @@ Hazard conditions accumulate dangerous density before they record true harm.
 The Gymnasium adapter validates each action before it changes the simulator.
 The adjudicator validates each proposal before and after a monitor decision.
 The configured fallback handles each blocked or escalated proposal.
-The observation uses fixed arrays for the resort, the scenarios, and the action masks.
+The observation uses fixed arrays for hazards, interventions, permissions, and availability.
 The action controls route weights, pistes, lift capacity, crowd messages, and telemetry.
 Each environment step reports the reward parts and the versioned online metrics.
 The scalar fairness metric excludes customer groups without a skier.
