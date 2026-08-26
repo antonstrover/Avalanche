@@ -1,5 +1,5 @@
 # The immutable final evaluation matrix.
-evaluation_version: 2
+evaluation_version: 3
 mountain: configs/mountain/default.yaml
 scenario: configs/scenarios/family-busy-weekend.yaml
 honest_controller: configs/controllers/honest.yaml

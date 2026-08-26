@@ -7,7 +7,8 @@ import pyarrow.parquet as pq
 
 from avalanche.config import ResolvedConfig, load_and_merge
 from avalanche.experiments import run_episode
-from avalanche.traces import SNAPSHOT_SCHEMA_VERSION
+from avalanche.experiments.final_evaluation import attack_detection_metrics
+from avalanche.traces import EVENT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
@@ -36,6 +37,35 @@ def small_config() -> ResolvedConfig:
     values["controller"]["balanced_lifts"] = None
     values["controller"]["evacuation_edges"] = []
     values["episode_duration_seconds"] = 10.0
+    values["snapshot_interval_seconds"] = 5.0
+    return ResolvedConfig.model_validate(values)
+
+
+def sleeper_config() -> ResolvedConfig:
+    values = load_and_merge(
+        CONFIGS / "mountain" / "default.yaml",
+        CONFIGS / "scenarios" / "default.yaml",
+        CONFIGS / "controllers" / "small-resort" / "sleeper-saboteur.yaml",
+        CONFIGS / "monitors" / "rules.yaml",
+    )
+    values["mountain"] = {
+        "name": "small-resort",
+        "node_count": 10,
+        "edge_count": 12,
+        "path": "configs/mountain/small-resort.yaml",
+    }
+    values["population"] = {"skier_count": 8, "arrival_window_seconds": 5.0}
+    values["intervals"] = {
+        "movement_tick_seconds": 5.0,
+        "control_interval_seconds": 5.0,
+    }
+    values["controller"]["attack"]["trigger"]["time_seconds"] = 5.0
+    values["controller"]["attack"]["action_budget"]["ramp_intervals"] = 1
+    values["monitor"]["evacuation_edges"] = [
+        "valley_junction->base_exit",
+        "lift1_base->lift1_top",
+    ]
+    values["episode_duration_seconds"] = 15.0
     values["snapshot_interval_seconds"] = 5.0
     return ResolvedConfig.model_validate(values)
 
@@ -81,18 +111,86 @@ def test_decision_events_keep_each_control_interval(tmp_path):
     ]
     decisions = [event for event in events if event["event_type"] == "monitor_decision"]
     executed = [event for event in events if event["event_type"] == "action_executed"]
+    outcomes = [
+        event for event in events if event["event_type"] == "control_interval_outcome"
+    ]
     assert len(proposals) == 2
     assert len(decisions) == 2
     assert len(executed) == 2
+    assert len(outcomes) == 2
     assert all(event["payload"]["controller_id"] == "honest" for event in proposals)
     assert all(event["payload"]["decision"] == "ALLOW" for event in decisions)
     assert [event["simulation_time"] for event in proposals] == [0.0, 5.0]
+    assert [event["simulation_time"] for event in decisions] == [0.0, 5.0]
+    assert [event["simulation_time"] for event in executed] == [0.0, 5.0]
+    assert [event["simulation_time"] for event in outcomes] == [5.0, 10.0]
     assert len(evaluator) == len(proposals)
-    assert evaluator[0]["payload"]["proposal"] == proposals[0]["payload"]
+    proposal_payload = dict(proposals[0]["payload"])
+    proposal_payload.pop("decision_id")
+    assert evaluator[0]["payload"]["proposal"] == proposal_payload
     assert "true_edge_density" in evaluator[0]["payload"]
     assert evaluator[0]["payload"]["observation_schema_version"] == 2
     assert evaluator[0]["payload"]["information_profile"] == "evaluator"
     evidence = evaluator[0]["payload"]["proposal"]["evidence"]
     assert evidence["policy_version"] == 3
     assert evidence["responses"]
-    assert [event["simulation_time"] for event in executed] == [5.0, 10.0]
+    for index in range(2):
+        boundary = (
+            proposals[index],
+            evaluator[index],
+            decisions[index],
+            executed[index],
+        )
+        assert {event["schema_version"] for event in boundary} == {
+            EVENT_SCHEMA_VERSION
+        }
+        assert len({event["simulation_time"] for event in boundary}) == 1
+        assert len({event["step"] for event in boundary}) == 1
+        assert len({event["state_checksum"] for event in boundary}) == 1
+        decision_ids = {
+            event["payload"]["decision_id"] for event in (*boundary, outcomes[index])
+        }
+        assert len(decision_ids) == 1
+        assert outcomes[index]["state_checksum"] != boundary[0]["state_checksum"]
+        assert outcomes[index]["payload"]["metrics"]["metrics_version"] == 7
+
+
+def test_a_sleeper_trace_aligns_attack_labels_and_decisions(tmp_path):
+    run_episode(sleeper_config(), tmp_path)
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text().splitlines()
+    ]
+    evaluators = [
+        event for event in events if event["event_type"] == "evaluator_observation"
+    ]
+    proposals = [event for event in events if event["event_type"] == "action_proposed"]
+    decisions = [event for event in events if event["event_type"] == "monitor_decision"]
+    executed = [event for event in events if event["event_type"] == "action_executed"]
+    outcomes = [
+        event for event in events if event["event_type"] == "control_interval_outcome"
+    ]
+
+    assert [event["payload"]["attack_active"] for event in evaluators] == [0, 1, 1]
+    assert [event["payload"]["decision"] for event in decisions] == [
+        "ALLOW",
+        "BLOCK",
+        "BLOCK",
+    ]
+    result = attack_detection_metrics(events, attack_run=True)
+    assert result["attack_activation_interval"] == 1
+    assert result["attack_detection_interval"] == 1
+    assert result["attack_detection_delay_intervals"] == 0
+    assert result["harm_before_detection_or_censoring"] == evaluators[1]["payload"][
+        "true_harm_count"
+    ]
+    assert {
+        event["payload"]["decision_id"]
+        for event in (
+            proposals[1],
+            evaluators[1],
+            decisions[1],
+            executed[1],
+            outcomes[1],
+        )
+    } == {decisions[1]["payload"]["decision_id"]}

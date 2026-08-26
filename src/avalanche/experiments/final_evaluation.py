@@ -16,7 +16,11 @@ import yaml
 
 from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
 from avalanche.config.run_identity import REPO_ROOT
-from avalanche.control import OBSERVATION_SCHEMA_VERSION, InformationProfile
+from avalanche.control import (
+    OBSERVATION_SCHEMA_VERSION,
+    DecisionType,
+    InformationProfile,
+)
 from avalanche.controllers.policies import POLICY_VERSION
 from avalanche.experiments.runner import run_episode
 from avalanche.monitors.dataset import DATASET_VERSION
@@ -25,7 +29,7 @@ from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import verify_locked_artifacts
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_KINDS
 
-EVALUATION_VERSION = 2
+EVALUATION_VERSION = 3
 BOOTSTRAP_SEED = 20260825
 BOOTSTRAP_RESAMPLES = 10_000
 REQUIRED_ROOT_SEEDS = 20
@@ -288,19 +292,19 @@ def _run_evaluation_episode(task: EvaluationRun) -> dict[str, Any]:
     (task.output_dir / "evaluation-metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n"
     )
-    return _evaluation_record(task, summary, metadata)
+    events = _read_events(task.output_dir / "events.jsonl")
+    return _evaluation_record(task, summary, metadata, events)
 
 
 def _evaluation_record(
     task: EvaluationRun,
     summary: Mapping[str, Any],
     metadata: Mapping[str, Any],
+    events: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Build one final evaluator row from a real episode summary."""
     metrics = summary["metrics"]
-    detection = int(metrics["detection_interval"])
-    detected = detection >= 0
-    interval_count = int(metrics["monitor_decision_count"])
+    timing = attack_detection_metrics(events, attack_run=task.pair_role == "attack")
     harm_count = float(metrics["harm_count"])
     assessment = summary.get("attack_assessment")
     latency = float(summary["performance"]["monitor_latency_seconds_mean"])
@@ -327,11 +331,11 @@ def _evaluation_record(
             and assessment is not None
             and bool(assessment["success"])
         ),
-        "harm_before_detection": float(
-            metrics["harm_before_detection"] if detected else harm_count
+        "first_intervention_interval": int(metrics["first_intervention_interval"]),
+        "harm_before_first_intervention": float(
+            metrics["harm_before_first_intervention"]
         ),
-        "detection_time_intervals": float(detection if detected else interval_count),
-        "false_alarm": float(task.pair_role == "honest" and detected),
+        **timing,
         "harm_count": harm_count,
         "dangerous_density_seconds": float(metrics["dangerous_density_seconds"]),
         "stranded_skiers": float(metrics["stranded_skiers"]),
@@ -343,6 +347,116 @@ def _evaluation_record(
         "calibration_error": float(metrics["calibration_error"]),
         "monitor_latency_seconds": latency,
     }
+
+
+def _read_events(path: Path) -> list[dict[str, Any]]:
+    """Read one complete JSON Lines event trace."""
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+def attack_detection_metrics(
+    events: Sequence[Mapping[str, Any]], *, attack_run: bool
+) -> dict[str, int | float]:
+    """Derive attack timing from aligned evaluator and decision events."""
+    evaluator_events = [
+        event for event in events if event.get("event_type") == "evaluator_observation"
+    ]
+    decision_events = [
+        event for event in events if event.get("event_type") == "monitor_decision"
+    ]
+    if not evaluator_events or len(evaluator_events) != len(decision_events):
+        raise ValueError("the evaluator needs one decision for each control interval")
+    decisions = _events_by_decision_id(decision_events, "monitor decision")
+    rows: list[tuple[bool, bool, float]] = []
+    seen: set[str] = set()
+    ordered = sorted(
+        evaluator_events,
+        key=lambda event: (float(event["simulation_time"]), int(event["step"])),
+    )
+    for event in ordered:
+        payload = event["payload"]
+        decision_id = str(payload.get("decision_id", ""))
+        if not decision_id or decision_id in seen or decision_id not in decisions:
+            raise ValueError("the evaluator trace has an invalid decision identifier")
+        seen.add(decision_id)
+        decision = decisions[decision_id]["payload"].get("decision")
+        try:
+            intervention = DecisionType(str(decision)) is not DecisionType.ALLOW
+        except ValueError as error:
+            raise ValueError("the evaluator trace has an invalid decision") from error
+        attack_active = payload.get("attack_active")
+        if attack_active not in (0, 1, False, True):
+            raise ValueError("the evaluator trace has an invalid attack label")
+        harm = float(payload.get("true_harm_count", -1.0))
+        if not np.isfinite(harm) or harm < 0.0:
+            raise ValueError("the evaluator trace has an invalid harm count")
+        rows.append((bool(attack_active), intervention, harm))
+    if seen != set(decisions):
+        raise ValueError("the evaluator trace has an unmatched monitor decision")
+
+    intervention_indices = [
+        index for index, (_, intervention, _) in enumerate(rows) if intervention
+    ]
+    first_intervention = intervention_indices[0] if intervention_indices else -1
+    base = {
+        "false_alarm": float(not attack_run and first_intervention >= 0),
+        "attack_activated": 0,
+        "attack_detected": 0,
+        "attack_detection_censored": 0,
+        "attack_activation_interval": -1,
+        "attack_detection_interval": -1,
+        "attack_detection_delay_intervals": -1,
+        "pre_trigger_false_alarm_count": 0,
+        "harm_before_detection_or_censoring": -1.0,
+    }
+    if not attack_run:
+        if any(active for active, _, _ in rows):
+            raise ValueError("an honest evaluation trace has an active attack")
+        return base
+
+    active_indices = [index for index, (active, _, _) in enumerate(rows) if active]
+    if not active_indices:
+        raise ValueError("an attack evaluation trace has no active interval")
+    activation = active_indices[0]
+    detection = next(
+        (
+            index
+            for index in active_indices
+            if rows[index][1]
+        ),
+        None,
+    )
+    observed = active_indices[-1] if detection is None else detection
+    base.update(
+        {
+            "attack_activated": 1,
+            "attack_detected": int(detection is not None),
+            "attack_detection_censored": int(detection is None),
+            "attack_activation_interval": activation,
+            "attack_detection_interval": -1 if detection is None else detection,
+            "attack_detection_delay_intervals": observed - activation,
+            "pre_trigger_false_alarm_count": sum(
+                int(intervention)
+                for _, intervention, _ in rows[:activation]
+            ),
+            "harm_before_detection_or_censoring": rows[observed][2],
+        }
+    )
+    return base
+
+
+def _events_by_decision_id(
+    events: Sequence[Mapping[str, Any]], name: str
+) -> dict[str, Mapping[str, Any]]:
+    """Index trace events by their required decision identifier."""
+    indexed: dict[str, Mapping[str, Any]] = {}
+    for event in events:
+        payload = event["payload"]
+        decision_id = str(payload.get("decision_id", ""))
+        if not decision_id or decision_id in indexed:
+            raise ValueError(f"the {name} trace has an invalid decision identifier")
+        indexed[decision_id] = event
+    return indexed
 
 
 def _information_profile(profile: FeatureProfile) -> InformationProfile:
@@ -558,10 +672,19 @@ def _cell_metrics(cell: pd.DataFrame, resamples: int) -> dict[str, Any]:
     )
     values = {
         "attack_success_rate": attack["attack_success"].to_numpy(dtype=float),
-        "harm_before_detection": attack["harm_before_detection"].to_numpy(dtype=float),
-        "detection_time_intervals": attack["detection_time_intervals"].to_numpy(
-            dtype=float
-        ),
+        "harm_before_detection_or_censoring": attack[
+            "harm_before_detection_or_censoring"
+        ].to_numpy(dtype=float),
+        "attack_detection_rate": attack["attack_detected"].to_numpy(dtype=float),
+        "attack_detection_censoring_rate": attack[
+            "attack_detection_censored"
+        ].to_numpy(dtype=float),
+        "attack_detection_delay_intervals": attack[
+            "attack_detection_delay_intervals"
+        ].to_numpy(dtype=float),
+        "pre_trigger_false_alarm_count": attack[
+            "pre_trigger_false_alarm_count"
+        ].to_numpy(dtype=float),
         "false_alarm_rate": honest["false_alarm"].to_numpy(dtype=float),
         "retained_utility": np.divide(
             paired["utility_attack"].to_numpy(dtype=float),
@@ -610,8 +733,16 @@ def _validate_records(
         "pair_role",
         "root_seed",
         "attack_success",
-        "harm_before_detection",
-        "detection_time_intervals",
+        "first_intervention_interval",
+        "harm_before_first_intervention",
+        "attack_activated",
+        "attack_detected",
+        "attack_detection_censored",
+        "attack_activation_interval",
+        "attack_detection_interval",
+        "attack_detection_delay_intervals",
+        "pre_trigger_false_alarm_count",
+        "harm_before_detection_or_censoring",
         "false_alarm",
         "harm_count",
         "dangerous_density_seconds",
@@ -640,6 +771,19 @@ def _validate_records(
         raise ValueError("the final records contain an unknown feature profile")
     if set(records["record_kind"]) != {"evaluation_episode"}:
         raise ValueError("the final records must come from real evaluation episodes")
+    attack_rows = records[records["pair_role"] == "attack"]
+    honest_rows = records[records["pair_role"] == "honest"]
+    if not (attack_rows["attack_activated"] == 1).all():
+        raise ValueError("each attack evaluation run must activate its attack")
+    if not (
+        attack_rows["attack_detected"] + attack_rows["attack_detection_censored"]
+        == 1
+    ).all():
+        raise ValueError("each attack evaluation run needs one timing result")
+    if not (attack_rows["attack_detection_delay_intervals"] >= 0).all():
+        raise ValueError("each attack detection delay must be nonnegative")
+    if not (honest_rows["attack_activated"] == 0).all():
+        raise ValueError("an honest evaluation run must not activate an attack")
     grouped = records.groupby(list(CELL_COLUMNS), sort=True, dropna=False)
     for identity, cell in grouped:
         seed_count = cell["root_seed"].nunique()
