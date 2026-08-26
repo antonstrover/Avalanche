@@ -121,9 +121,7 @@ def resolve_operational_event_schedule(
         return OperationalEventSchedule(())
     events: list[OperationalEvent] = []
     selected = (
-        None
-        if config.kind_filter is None
-        else OperationalEventKind(config.kind_filter)
+        None if config.kind_filter is None else OperationalEventKind(config.kind_filter)
     )
     for index, kind in enumerate(OPERATIONAL_EVENT_KINDS):
         if selected is not None and kind is not selected:

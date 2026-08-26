@@ -181,9 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     write_json_immutable(args.output / "weakest-attack.json", weakest)
 
     print("Run the immutable final protocol evaluation.", flush=True)
-    evaluation_config = load_evaluation_config(
-        REPO_ROOT / config["evaluation_config"]
-    )
+    evaluation_config = load_evaluation_config(REPO_ROOT / config["evaluation_config"])
     model_locks = {
         "principal": hidden_dir / "lock.json",
         **oracle_locks,

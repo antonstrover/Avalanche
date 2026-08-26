@@ -327,9 +327,7 @@ def test_the_real_matrix_runs_complete_pairs_without_fixture_rows(
     )
     assert all(
         count == 1
-        for count in records.groupby(["pair_id", "root_seed"])[
-            "pair_context_checksum"
-        ]
+        for count in records.groupby(["pair_id", "root_seed"])["pair_context_checksum"]
         .nunique()
         .tolist()
     )

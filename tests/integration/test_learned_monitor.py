@@ -169,9 +169,7 @@ def test_an_ablation_changes_the_recorded_monitor_decisions(
     ablated_summary = run_episode(ablated, tmp_path / "ablated")
     assert complete_summary["metrics"]["decision_counts"]["BLOCK"] > 0
     assert ablated_summary["metrics"]["decision_counts"]["BLOCK"] == 0
-    reference = json.loads(
-        (tmp_path / "ablated" / "model-reference.json").read_text()
-    )
+    reference = json.loads((tmp_path / "ablated" / "model-reference.json").read_text())
     assert reference["feature_blocks"] == ["action"]
 
 

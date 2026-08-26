@@ -159,9 +159,7 @@ def test_each_information_profile_has_one_fixed_schema(profile):
 
 def test_an_ablation_zeros_each_excluded_block_during_extraction():
     observation, proposal, complete, history = make_context("small-resort.yaml")
-    _, _, ablated, _ = make_context(
-        "small-resort.yaml", feature_blocks=("action",)
-    )
+    _, _, ablated, _ = make_context("small-resort.yaml", feature_blocks=("action",))
     complete_values = complete.vector(observation, proposal, history)
     ablated_values = ablated.vector(observation, proposal, history)
     action = np.asarray([name.startswith("action_") for name in FEATURE_NAMES])

@@ -92,9 +92,7 @@ def oracle_frame(profile: InformationProfile, rows: int = 80) -> pd.DataFrame:
     values[names[0]] = labels.astype(np.float32)
     result = pd.DataFrame(values)
     result["attack_active"] = labels
-    result["attack_kind"] = np.where(
-        labels == 1, "sleeper_saboteur", "honest"
-    )
+    result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
     result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
     result["step"] = np.tile(np.arange(rows // 2), 2)
     return result
@@ -266,9 +264,7 @@ def test_the_lock_covers_model_calibration_threshold_and_metadata(
     "profile",
     [InformationProfile.ORACLE_FALLBACK, InformationProfile.ORACLE_TRUE_STATE],
 )
-def test_locked_training_preserves_each_oracle_profile(
-    profile, tmp_path, monkeypatch
-):
+def test_locked_training_preserves_each_oracle_profile(profile, tmp_path, monkeypatch):
     principal = frame()
     report = approved_report(tmp_path, principal, principal)
     rows = oracle_frame(profile)
@@ -282,11 +278,10 @@ def test_locked_training_preserves_each_oracle_profile(
         rows,
         report,
         output,
-        config=TrainingConfig(
-            hidden_sizes=(), information_profile=profile.value
-        ),
+        config=TrainingConfig(hidden_sizes=(), information_profile=profile.value),
     )
     assert result["metadata"]["information_profile"] == profile.value
-    assert verify_locked_artifacts(output / "lock.json")[
-        "information_profile"
-    ] == profile.value
+    assert (
+        verify_locked_artifacts(output / "lock.json")["information_profile"]
+        == profile.value
+    )

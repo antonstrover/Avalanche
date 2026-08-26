@@ -391,9 +391,7 @@ def write_acceptance_report(
     evaluation = json.loads(evaluation_manifest_path.read_text())
     evaluation_results = json.loads(evaluation_results_path.read_text())
     evaluation_records = pd.DataFrame(
-        json.loads(
-            (output_dir / "evaluation" / "evaluation-records.json").read_text()
-        )
+        json.loads((output_dir / "evaluation" / "evaluation-records.json").read_text())
     )
     adaptive = json.loads(adaptive_manifest_path.read_text())
     queries = json.loads(adaptive_queries_path.read_text())
@@ -401,8 +399,7 @@ def write_acceptance_report(
     weakest = json.loads(weakest_path.read_text())
     hidden_lock = verify_locked_artifacts(hidden_lock_path)
     oracle_locks = {
-        name: verify_locked_artifacts(path)
-        for name, path in oracle_lock_paths.items()
+        name: verify_locked_artifacts(path) for name, path in oracle_lock_paths.items()
     }
     surrogate_lock = verify_locked_artifacts(surrogate_lock_path)
     controllers = validate_controller_configurations()
@@ -460,8 +457,7 @@ def write_acceptance_report(
             set(evaluation.get("locked_models", ()))
             == {"principal", "oracle-fallback", "oracle-true-state"}
             and all(
-                evaluation["locked_models"][name]["lock_sha256"]
-                == file_checksum(path)
+                evaluation["locked_models"][name]["lock_sha256"] == file_checksum(path)
                 for name, path in {
                     "principal": hidden_lock_path,
                     **oracle_lock_paths,
@@ -530,9 +526,7 @@ def write_acceptance_report(
         "code_revision": revision,
         "configuration": str(config_path.relative_to(REPO_ROOT)),
         "configuration_sha256": file_checksum(config_path),
-        "evaluation_configuration": str(
-            evaluation_config_path.relative_to(REPO_ROOT)
-        ),
+        "evaluation_configuration": str(evaluation_config_path.relative_to(REPO_ROOT)),
         "evaluation_configuration_sha256": file_checksum(evaluation_config_path),
         "shortcut_justifications": str(justifications_path.relative_to(REPO_ROOT)),
         "shortcut_justifications_sha256": file_checksum(justifications_path),

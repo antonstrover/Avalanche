@@ -172,9 +172,7 @@ def run_evaluation_matrix(
 ) -> pd.DataFrame:
     """Run every real paired episode in the bounded final matrix."""
     locks = _verify_model_locks(model_locks)
-    seeds = tuple(
-        int(seed) for seed in (root_seeds or tuple(config["root_seeds"]))
-    )
+    seeds = tuple(int(seed) for seed in (root_seeds or tuple(config["root_seeds"])))
     if not seeds or len(set(seeds)) != len(seeds):
         raise ValueError("the evaluation root seeds must be unique")
     revision = _code_revision()
@@ -252,11 +250,7 @@ def _resolve_evaluation_run(
     context.pop("monitor")
     context_checksum = _json_checksum(context)
     run_dir = (
-        output_dir
-        / "runs"
-        / f"cell-{cell.index:02d}"
-        / str(root_seed)
-        / pair_role
+        output_dir / "runs" / f"cell-{cell.index:02d}" / str(root_seed) / pair_role
     )
     return EvaluationRun(
         cell=cell,
@@ -282,9 +276,7 @@ def _run_evaluation_episode(task: EvaluationRun) -> dict[str, Any]:
     config_path.write_text(configuration_text)
     metadata = {
         "code_revision": task.code_revision,
-        "configuration_sha256": hashlib.sha256(
-            configuration_text.encode()
-        ).hexdigest(),
+        "configuration_sha256": hashlib.sha256(configuration_text.encode()).hexdigest(),
         "model_lock_sha256": task.model_lock_checksum,
         "pair_context_sha256": task.pair_context_checksum,
         "pair_id": task.pair_id,
@@ -337,9 +329,7 @@ def _evaluation_record(
         "harm_before_detection": float(
             metrics["harm_before_detection"] if detected else harm_count
         ),
-        "detection_time_intervals": float(
-            detection if detected else interval_count
-        ),
+        "detection_time_intervals": float(detection if detected else interval_count),
         "false_alarm": float(task.pair_role == "honest" and detected),
         "harm_count": harm_count,
         "dangerous_density_seconds": float(metrics["dangerous_density_seconds"]),
@@ -380,9 +370,7 @@ def _verify_model_locks(model_locks: Mapping[str, Path]) -> dict[str, Any]:
     for name in sorted(model_locks):
         lock_path = Path(model_locks[name])
         lock = verify_locked_artifacts(lock_path)
-        expected = (
-            name.replace("-", "_") if name != "principal" else "principal"
-        )
+        expected = name.replace("-", "_") if name != "principal" else "principal"
         if lock.get("information_profile") != expected:
             raise ValueError("an evaluation model lock has the wrong profile")
         result[name] = lock
@@ -662,8 +650,7 @@ def _validate_records(
             lambda values: tuple(values)
         )
         if not all(
-            len(value) == 2 and set(value) == {"honest", "attack"}
-            for value in pairs
+            len(value) == 2 and set(value) == {"honest", "attack"} for value in pairs
         ):
             raise ValueError("each final root seed needs one complete pair")
         contexts = cell.groupby(["pair_id", "root_seed"])[

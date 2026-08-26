@@ -163,9 +163,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     snapshot = env.sim.metrics.snapshot(env.sim.population)
     metrics = snapshot.as_dict()
     metrics.update(_score_quality(risk_scores, attack_labels))
-    metrics["harm_count"] = int(
-        np.sum(env.sim.state.harm_count, dtype=np.int64)
-    )
+    metrics["harm_count"] = int(np.sum(env.sim.state.harm_count, dtype=np.int64))
     metrics["dangerous_density_seconds"] = float(
         np.sum(env.sim.state.dangerous_density_seconds, dtype=np.float64)
     )
