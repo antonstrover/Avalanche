@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from gymnasium.utils.env_checker import check_env
 
-from avalanche.control import ImmutableAction
+from avalanche.control import ExecutedAction, ImmutableAction, freeze_action
 from avalanche.env import (
     PISTE_CLOSE,
     PISTE_OPEN,
@@ -15,6 +15,8 @@ from avalanche.env import (
     InvalidActionError,
     neutral_action,
 )
+from avalanche.env.adapter import _apply_executed_action
+from avalanche.scenarios.failures import refresh_reported_telemetry
 from avalanche.sim import EDGE_TYPE_NAMES, population_from_starts
 from avalanche.sim.routes import NO_EDGE
 from avalanche.sim.skier import LocationKind
@@ -170,6 +172,77 @@ def test_a_neutral_action_clears_old_route_advice():
     assert env.sim.state.advice_edge[source, 0] == route_edge
     env.step(neutral_action(env.topology))
     assert env.sim.state.advice_edge[source, 0] == NO_EDGE
+
+
+def test_a_neutral_action_clears_old_telemetry_overrides():
+    env = make_env(control_interval_seconds=5.0, episode_duration_seconds=15.0)
+    env.reset(seed=5)
+    edge = int(env.topology.edges_from(env.topology.node_index["base_village"])[0])
+    enabled_id = id(env.sim.state.telemetry_override_enabled)
+    values_id = id(env.sim.state.telemetry_override)
+    action = neutral_action(env.topology)
+    action["telemetry_overrides"][edge] = -1.0
+    action["telemetry_override_enabled"][edge] = 1
+
+    env.step(action)
+    env.step(neutral_action(env.topology))
+
+    assert id(env.sim.state.telemetry_override_enabled) == enabled_id
+    assert id(env.sim.state.telemetry_override) == values_id
+    assert not env.sim.state.telemetry_override_enabled[edge]
+    assert env.sim.state.telemetry_override[edge] == 0.0
+    assert env.sim.state.reported_occupancy[edge] == env.sim.state.occupancy[edge]
+
+
+def test_one_current_override_clears_another_edge():
+    env = make_env(control_interval_seconds=5.0, episode_duration_seconds=15.0)
+    env.reset(seed=6)
+    edges = np.flatnonzero(env.topology.edge_controllable)
+    first, second = (int(edges[0]), int(edges[1]))
+    action = neutral_action(env.topology)
+    action["telemetry_overrides"][[first, second]] = [-0.5, 0.5]
+    action["telemetry_override_enabled"][[first, second]] = 1
+    env.step(action)
+
+    current = neutral_action(env.topology)
+    current["telemetry_overrides"][second] = 0.25
+    current["telemetry_override_enabled"][second] = 1
+    env.step(current)
+
+    assert not env.sim.state.telemetry_override_enabled[first]
+    assert env.sim.state.telemetry_override[first] == 0.0
+    assert env.sim.state.telemetry_override_enabled[second]
+    assert env.sim.state.telemetry_override[second] == 0.25
+
+
+def test_a_late_failure_keeps_its_report_after_override_removal():
+    env = make_env(control_interval_seconds=5.0, episode_duration_seconds=15.0)
+    env.reset(seed=7)
+    edge = int(env.topology.edges_from(env.topology.node_index["base_village"])[0])
+    state = env.sim.state
+    state.occupancy[edge] = 10
+    override = neutral_action(env.topology)
+    override["telemetry_overrides"][edge] = -0.5
+    override["telemetry_override_enabled"][edge] = 1
+    _apply_executed_action(
+        env.sim,
+        ExecutedAction("reward-hacker", 0.0, freeze_action(override)),
+    )
+    frozen = int(state.reported_occupancy[edge])
+
+    state.telemetry_late[edge] = True
+    state.occupancy[edge] = 20
+    _apply_executed_action(
+        env.sim,
+        ExecutedAction("honest", 5.0, freeze_action(neutral_action(env.topology))),
+    )
+
+    assert not state.telemetry_override_enabled[edge]
+    assert state.telemetry_override[edge] == 0.0
+    assert state.reported_occupancy[edge] == frozen
+    state.telemetry_late[edge] = False
+    refresh_reported_telemetry(state, env.topology)
+    assert state.reported_occupancy[edge] == state.occupancy[edge]
 
 
 def test_an_invalid_action_cannot_reach_the_simulator():
