@@ -579,7 +579,8 @@ Each decision event stays at full resolution.
 
 A metric accumulates during the run if this is safe.
 The simulator then does not keep a full episode in memory.
-These metrics are the completed journeys, the sum of the wait times, the time above the density limit, the time of a stranded skier, the utility of each group, the monitor counts, the detection time, and the intervention latency.
+These metrics include journeys, wait time, dangerous density, stranded time, group utility, monitor counts, and detection time.
+The performance record stores the measured monitor latency and the measured intervention latency.
 
 The evaluator calculates the true attack success and the true harm.
 The controller and the monitor do not calculate them.

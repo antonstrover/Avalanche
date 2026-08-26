@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from avalanche.control import DecisionType, MonitorDecision
-from avalanche.metrics import METRICS_VERSION, OnlineMetrics
+from avalanche.metrics import METRICS_VERSION, PERFORMANCE_VERSION, OnlineMetrics
 from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import empty_population
 from avalanche.sim.skier import Status
@@ -48,7 +48,6 @@ def test_each_metric_formula_uses_the_fixed_episode():
         "REPLACE": 0,
         "ESCALATE": 0,
     }
-    assert snapshot.intervention_latency_seconds_sum == 0.0
     assert snapshot.intervention_latency_count == 0
 
 
@@ -74,7 +73,7 @@ def test_a_reported_override_separates_the_two_density_metrics():
 def test_the_snapshot_serialises_each_versioned_field():
     metrics, population = fixed_episode()
     values = metrics.snapshot(population).as_dict()
-    assert values["metrics_version"] == METRICS_VERSION == 4
+    assert values["metrics_version"] == METRICS_VERSION == 5
     assert values["reported_density_limit_seconds"] == 5.0
     assert set(values) == {
         "metrics_version",
@@ -90,9 +89,7 @@ def test_the_snapshot_serialises_each_versioned_field():
         "decision_counts",
         "utility",
         "mean_wait_seconds",
-        "intervention_latency_seconds_sum",
         "intervention_latency_count",
-        "monitor_latency_seconds_sum",
         "monitor_decision_count",
         "detection_interval",
         "harm_before_detection",
@@ -142,8 +139,10 @@ def test_monitor_decisions_accumulate_counts_and_intervention_latency():
         "REPLACE": 0,
         "ESCALATE": 1,
     }
-    assert snapshot.intervention_latency_seconds_sum == 0.5
     assert snapshot.intervention_latency_count == 2
+    performance = metrics.performance_snapshot()
+    assert performance.intervention_latency_seconds_sum == 0.5
+    assert performance.intervention_latency_seconds_mean == 0.25
 
 
 def decision(kind: DecisionType, latency: float) -> MonitorDecision:
@@ -166,9 +165,12 @@ def test_the_first_decision_that_is_not_an_allowance_is_the_detection():
     assert snapshot.detection_interval == 2
     assert snapshot.harm_before_detection == 7.0
     assert snapshot.monitor_decision_count == 4
-    # Every decision counts towards the monitor latency.
-    assert snapshot.monitor_latency_seconds_sum == pytest.approx(0.6)
-    assert snapshot.intervention_latency_seconds_sum == pytest.approx(0.4)
+    performance = metrics.performance_snapshot()
+    assert performance.performance_version == PERFORMANCE_VERSION == 1
+    assert performance.monitor_latency_seconds_sum == pytest.approx(0.6)
+    assert performance.monitor_latency_seconds_mean == pytest.approx(0.15)
+    assert performance.intervention_latency_seconds_sum == pytest.approx(0.4)
+    assert performance.intervention_latency_seconds_mean == pytest.approx(0.2)
 
 
 def test_an_undetected_episode_reports_no_detection():

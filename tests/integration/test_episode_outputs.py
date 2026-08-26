@@ -51,12 +51,18 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     }
     assert required <= {path.name for path in tmp_path.iterdir()}
     assert json.loads((tmp_path / "summary.json").read_text()) == summary
-    assert pq.read_table(tmp_path / "metrics.parquet").num_rows == 3
+    metrics_table = pq.read_table(tmp_path / "metrics.parquet")
+    assert metrics_table.num_rows == 3
+    assert "monitor_latency_seconds_sum" not in metrics_table.column_names
+    assert "intervention_latency_seconds_sum" not in metrics_table.column_names
     assert pq.read_table(tmp_path / "snapshots.parquet").num_rows == 3
     assert summary["information_profile"] == "principal"
     assert summary["policy_version"] == 3
     assert summary["metrics"]["harm_count"] >= 0
     assert summary["metrics"]["dangerous_density_seconds"] >= 0.0
+    assert summary["performance"]["performance_version"] == 1
+    assert summary["performance"]["monitor_latency_seconds_sum"] >= 0.0
+    assert summary["performance"]["monitor_latency_seconds_mean"] >= 0.0
 
 
 def test_decision_events_keep_each_control_interval(tmp_path):
