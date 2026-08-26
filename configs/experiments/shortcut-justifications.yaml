@@ -9,6 +9,11 @@
 shortcut_justifications_version: 1
 
 justifications:
+  context_evacuation_restriction_fraction:
+    reason: >-
+      The feature measures the fraction of evacuation edges restricted by
+      the proposed action. Every controller uses the same declared edges.
+
   prediction_evacuation_score:
     reason: >-
       The rule monitor reports a predicted evacuation safety violation.
@@ -25,3 +30,43 @@ justifications:
       unfair behavior itself and not a sign of one implementation.
       Only the overt profit-biased tier reaches a value above zero.
     reviewed_perfect_separation: true
+
+  history_0_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
+
+  history_1_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
+
+  history_2_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
+
+  history_3_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
+
+  history_4_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
+
+  history_5_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
+
+  history_6_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
+
+  history_7_lift_restricted_fraction:
+    reason: >-
+      The feature measures prior evacuation restrictions. It captures persistent
+      safety-relevant behavior without controller identity or hidden evaluator data.
