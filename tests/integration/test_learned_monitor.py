@@ -8,8 +8,10 @@ evidence the run leaves behind.
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir
 from avalanche.control import DecisionType
@@ -18,7 +20,9 @@ from avalanche.monitors.calibration import calibrate
 from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.learned import LEARNED_PROCESS_RISK
 from avalanche.monitors.perceptron import (
+    TrainedModel,
     TrainingConfig,
+    build_network,
     feature_matrix,
     save_model,
     train_perceptron,
@@ -51,6 +55,33 @@ def model_path(tmp_path_factory) -> Path:
     model.metadata["split"] = assignment.as_dict()
     directory = tmp_path_factory.mktemp("model")
     return save_model(model, directory / "monitor.pt")
+
+
+@pytest.fixture
+def ablation_model_path(tmp_path) -> Path:
+    """Save one model that depends on a state feature."""
+    config = TrainingConfig(hidden_sizes=())
+    network = build_network(len(FEATURE_NAMES), ())
+    visibility = FEATURE_NAMES.index("state_visibility")
+    with torch.no_grad():
+        network[0].weight.zero_()
+        network[0].weight[0, visibility] = 0.001
+        network[0].bias.fill_(-1.0)
+    model = TrainedModel(
+        network=network,
+        feature_names=FEATURE_NAMES,
+        feature_mean=np.zeros(len(FEATURE_NAMES), dtype=np.float32),
+        feature_deviation=np.ones(len(FEATURE_NAMES), dtype=np.float32),
+        config=config,
+        metadata={
+            "model_version": 2,
+            "model_kind": "perceptron",
+            "feature_version": 2,
+            "information_profile": "principal",
+            "calibration": {"threshold": 0.5, "temperature": 1.0},
+        },
+    )
+    return save_model(model, tmp_path / "ablation.pt")
 
 
 def resolve(model_path: Path, controller: str) -> ResolvedConfig:
@@ -122,6 +153,26 @@ def test_a_blocked_proposal_names_the_learned_reason(model_path, tmp_path):
     assert all(
         LEARNED_PROCESS_RISK in event["payload"]["reason_codes"] for event in blocked
     )
+
+
+def test_an_ablation_changes_the_recorded_monitor_decisions(
+    ablation_model_path, tmp_path
+):
+    complete = resolve(ablation_model_path, "honest.yaml")
+    complete = ResolvedConfig.model_validate(
+        {**complete.model_dump(), "episode_duration_seconds": 120.0}
+    )
+    ablated_values = complete.model_dump()
+    ablated_values["monitor"]["feature_blocks"] = ["action"]
+    ablated = ResolvedConfig.model_validate(ablated_values)
+    complete_summary = run_episode(complete, tmp_path / "complete")
+    ablated_summary = run_episode(ablated, tmp_path / "ablated")
+    assert complete_summary["metrics"]["decision_counts"]["BLOCK"] > 0
+    assert ablated_summary["metrics"]["decision_counts"]["BLOCK"] == 0
+    reference = json.loads(
+        (tmp_path / "ablated" / "model-reference.json").read_text()
+    )
+    assert reference["feature_blocks"] == ["action"]
 
 
 def test_two_runs_of_one_configuration_agree(model_path, tmp_path):

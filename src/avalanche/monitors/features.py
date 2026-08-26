@@ -152,6 +152,32 @@ FEATURE_NAMES_BY_PROFILE = {
 FEATURE_NAMES = PRINCIPAL_FEATURE_NAMES
 FEATURE_COUNT = len(FEATURE_NAMES)
 
+FEATURE_BLOCKS_BY_PROFILE = {
+    InformationProfile.PRINCIPAL: (
+        "action",
+        "state",
+        "context",
+        "prediction",
+        "history",
+    ),
+    InformationProfile.ORACLE_FALLBACK: (
+        "action",
+        "fallback",
+        "state",
+        "context",
+        "prediction",
+        "history",
+    ),
+    InformationProfile.ORACLE_TRUE_STATE: (
+        "action",
+        "state",
+        "context",
+        "true-state",
+        "prediction",
+        "history",
+    ),
+}
+
 
 def feature_names_for(
     profile: InformationProfile | str,
@@ -168,6 +194,7 @@ class FeatureExtractor:
         reference_fallback: ConfiguredFallback | None,
         rule_monitor: RuleMonitor,
         profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+        feature_blocks: tuple[str, ...] | None = None,
     ) -> None:
         self.profile = InformationProfile(profile)
         if self.profile is InformationProfile.ORACLE_FALLBACK:
@@ -176,6 +203,12 @@ class FeatureExtractor:
         self.reference_fallback = reference_fallback
         self.rule_monitor = rule_monitor
         self.feature_names = feature_names_for(self.profile)
+        allowed = FEATURE_BLOCKS_BY_PROFILE[self.profile]
+        self.feature_blocks = allowed if feature_blocks is None else feature_blocks
+        if len(set(self.feature_blocks)) != len(self.feature_blocks):
+            raise ValueError("the feature blocks must be unique")
+        if set(self.feature_blocks) - set(allowed):
+            raise ValueError("a feature block is incompatible with its profile")
 
     def reset(self, seed: int) -> None:
         """Reset the optional fallback and the rule predictor."""
@@ -218,7 +251,20 @@ class FeatureExtractor:
             raise RuntimeError("the feature values do not match their names")
         if not np.all(np.isfinite(values)):
             raise ValueError("the feature vector must contain finite values")
+        included = frozenset(self.feature_blocks)
+        for index, name in enumerate(self.feature_names):
+            if _feature_block(name) not in included:
+                values[index] = 0.0
         return values
+
+
+def _feature_block(name: str) -> str:
+    """Return the declared block for one feature name."""
+    if name.startswith("oracle_fallback_"):
+        return "fallback"
+    if name.startswith("oracle_true_"):
+        return "true-state"
+    return name.split("_", maxsplit=1)[0]
 
 
 def _action_block(action: Mapping[str, np.ndarray]) -> np.ndarray:

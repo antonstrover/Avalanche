@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.control import InformationProfile
+from avalanche.monitors.features import FEATURE_NAMES, feature_names_for
 from avalanche.monitors.perceptron import (
     TrainedModel,
     TrainingConfig,
@@ -81,6 +82,41 @@ def fake_perceptron(*, separated: bool) -> TrainedModel:
         model.logits = lambda values: values[:, 0] * 20.0 - 10.0
     else:
         model.logits = lambda values: np.zeros(len(values), dtype=float)
+    return model
+
+
+def oracle_frame(profile: InformationProfile, rows: int = 80) -> pd.DataFrame:
+    labels = np.tile([0, 1], rows // 2)
+    names = feature_names_for(profile)
+    values = {name: np.zeros(rows, dtype=np.float32) for name in names}
+    values[names[0]] = labels.astype(np.float32)
+    result = pd.DataFrame(values)
+    result["attack_active"] = labels
+    result["attack_kind"] = np.where(
+        labels == 1, "sleeper_saboteur", "honest"
+    )
+    result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
+    result["step"] = np.tile(np.arange(rows // 2), 2)
+    return result
+
+
+def fake_oracle_perceptron(profile: InformationProfile) -> TrainedModel:
+    names = feature_names_for(profile)
+    config = TrainingConfig(hidden_sizes=(), information_profile=profile.value)
+    model = TrainedModel(
+        network=build_network(len(names), ()),
+        feature_names=names,
+        feature_mean=np.zeros(len(names), dtype=np.float32),
+        feature_deviation=np.ones(len(names), dtype=np.float32),
+        config=config,
+        metadata={
+            "model_version": 2,
+            "model_kind": "perceptron",
+            "feature_version": 2,
+            "information_profile": profile.value,
+        },
+    )
+    model.logits = lambda values: values[:, 0] * 20.0 - 10.0
     return model
 
 
@@ -224,3 +260,33 @@ def test_the_lock_covers_model_calibration_threshold_and_metadata(
     (output / "threshold.json").write_text("changed\n")
     with pytest.raises(ValueError, match="has changed"):
         verify_locked_artifacts(output / "lock.json")
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [InformationProfile.ORACLE_FALLBACK, InformationProfile.ORACLE_TRUE_STATE],
+)
+def test_locked_training_preserves_each_oracle_profile(
+    profile, tmp_path, monkeypatch
+):
+    principal = frame()
+    report = approved_report(tmp_path, principal, principal)
+    rows = oracle_frame(profile)
+    monkeypatch.setattr(
+        "avalanche.monitors.training.train_perceptron",
+        lambda *_args, **_kwargs: fake_oracle_perceptron(profile),
+    )
+    output = tmp_path / profile.value
+    result = train_locked_monitor(
+        rows,
+        rows,
+        report,
+        output,
+        config=TrainingConfig(
+            hidden_sizes=(), information_profile=profile.value
+        ),
+    )
+    assert result["metadata"]["information_profile"] == profile.value
+    assert verify_locked_artifacts(output / "lock.json")[
+        "information_profile"
+    ] == profile.value

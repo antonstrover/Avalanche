@@ -120,7 +120,14 @@ def resolve_operational_event_schedule(
     if not config.enabled:
         return OperationalEventSchedule(())
     events: list[OperationalEvent] = []
+    selected = (
+        None
+        if config.kind_filter is None
+        else OperationalEventKind(config.kind_filter)
+    )
     for index, kind in enumerate(OPERATIONAL_EVENT_KINDS):
+        if selected is not None and kind is not selected:
+            continue
         rng = streams[f"event_{kind.value}"]
         matched = config.matched_periods_seconds[
             index % len(config.matched_periods_seconds)

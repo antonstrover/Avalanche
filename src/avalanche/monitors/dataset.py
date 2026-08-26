@@ -25,6 +25,7 @@ from avalanche.config import ResolvedConfig, load_and_merge, run_id
 from avalanche.config.models import ControllerConfig
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
+    InformationProfile,
     Monitor,
     MonitorDecision,
     MonitorProposal,
@@ -39,7 +40,11 @@ from avalanche.controllers.factory import (
 )
 from avalanche.controllers.honest import HONEST_POLICY_VERSION
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
-from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION, FeatureExtractor
+from avalanche.monitors.features import (
+    FEATURE_VERSION,
+    FeatureExtractor,
+    feature_names_for,
+)
 from avalanche.monitors.outcome import AllowMonitor
 from avalanche.monitors.rules import RuleMonitor
 
@@ -77,6 +82,7 @@ class RecordingMonitor:
         self.inner = inner
         self.extractor = extractor
         self.rows = rows
+        self.information_profile = extractor.profile.value
 
     def reset(self, seed: int) -> None:
         """Reset the inner monitor and the feature extractor."""
@@ -150,8 +156,13 @@ def label_attack_activity(
     return labelled
 
 
-def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
+def run_entry(
+    entry: DatasetEntry,
+    horizon: int,
+    information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+) -> pd.DataFrame:
     """Run one episode and return its labelled rows."""
+    profile = InformationProfile(information_profile)
     resolved = resolve_entry(entry)
     mountain_path = Path(resolved.mountain.path)
     if not mountain_path.is_absolute():
@@ -180,6 +191,7 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
             env.topology,
             evacuation_edges=resolved.controller.evacuation_edges,
         ),
+        profile=profile,
     )
     monitor = RecordingMonitor(AllowMonitor(), extractor, rows)
     env.configure_adjudicator(
@@ -232,7 +244,7 @@ def run_entry(entry: DatasetEntry, horizon: int) -> pd.DataFrame:
     frame.insert(15, "dataset_version", DATASET_VERSION)
     frame.insert(16, "feature_version", FEATURE_VERSION)
     frame.insert(17, "policy_version", resolved.controller.policy_version)
-    frame.insert(18, "information_profile", "principal")
+    frame.insert(18, "information_profile", profile.value)
     frame.insert(19, "resolved_config_checksum", _resolved_checksum(resolved))
     frame.insert(20, "pair_context_checksum", pair_context_checksum(entry))
     frame["_evaluator_harm_count"] = evaluator_harm
@@ -383,6 +395,7 @@ def generate_dataset(
     *,
     workers: int = 1,
     limit: int | None = None,
+    information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> Path:
     """Run the declared matrix and write one labelled Parquet file."""
     manifest = load_and_merge(manifest_path)
@@ -393,6 +406,7 @@ def generate_dataset(
         entries,
         workers=workers,
         source_manifest=manifest,
+        information_profile=information_profile,
     )
 
 
@@ -403,30 +417,49 @@ def generate_dataset_entries(
     *,
     workers: int = 1,
     source_manifest: dict[str, Any] | None = None,
+    information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> Path:
     """Run a declared entry subset and write its dataset artifacts."""
     manifest = source_manifest or load_and_merge(manifest_path)
     horizon = int(manifest.get("harm_horizon_intervals", 5))
     _validate_pairs(entries)
-    frames = _run_entries(entries, horizon, workers)
+    profile = InformationProfile(information_profile)
+    frames = _run_entries(entries, horizon, workers, profile)
     if not frames:
         raise ValueError("the dataset entry subset must not be empty")
     frame = pd.concat(frames, ignore_index=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(output_path, index=False)
-    _write_manifest_summary(frame, entries, output_path, manifest_path, manifest)
+    _write_manifest_summary(
+        frame,
+        entries,
+        output_path,
+        manifest_path,
+        manifest,
+        profile,
+    )
     return output_path
 
 
 def _run_entries(
-    entries: Sequence[DatasetEntry], horizon: int, workers: int
+    entries: Sequence[DatasetEntry],
+    horizon: int,
+    workers: int,
+    information_profile: InformationProfile,
 ) -> list[pd.DataFrame]:
     """Run each entry, in one process or in a pool."""
     if workers <= 1:
-        return [run_entry(entry, horizon) for entry in entries]
+        return [run_entry(entry, horizon, information_profile) for entry in entries]
     # ponytail: a plain pool. The sweep executor of the next stage supersedes it.
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(run_entry, entries, [horizon] * len(entries)))
+        return list(
+            pool.map(
+                run_entry,
+                entries,
+                [horizon] * len(entries),
+                [information_profile] * len(entries),
+            )
+        )
 
 
 def _validate_pairs(entries: Sequence[DatasetEntry]) -> None:
@@ -470,6 +503,7 @@ def _write_manifest_summary(
     output_path: Path,
     source_path: Path,
     source_manifest: dict[str, Any],
+    information_profile: InformationProfile,
 ) -> None:
     """Record what the dataset holds beside the rows."""
     resolved_configs = []
@@ -488,13 +522,13 @@ def _write_manifest_summary(
     known_harm = frame.loc[frame[HARM_MASK] == 1, HARM_LABEL]
     summary = {
         "dataset_version": DATASET_VERSION,
-        "feature_names": list(FEATURE_NAMES),
+        "feature_names": list(feature_names_for(information_profile)),
         "feature_version": FEATURE_VERSION,
         "policy_version": HONEST_POLICY_VERSION,
         "observation_version": 1,
         "proposal_version": 1,
         "audit_version": 1,
-        "information_profile": "principal",
+        "information_profile": information_profile.value,
         "row_count": int(len(frame)),
         "run_count": len(entries),
         "pair_count": len({entry.pair_id for entry in entries}),

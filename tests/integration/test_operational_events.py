@@ -83,6 +83,20 @@ def test_each_mountain_supports_all_events_near_matched_periods():
         )
 
 
+def test_each_kind_filter_schedules_only_its_declared_event():
+    topology = load_topology(MOUNTAINS[0])
+    complete = resolve_operational_event_schedule(
+        event_config(), topology, streams(93)
+    )
+    complete_records = {event.kind: event.complete() for event in complete.events}
+    for kind in OPERATIONAL_EVENT_KINDS:
+        values = event_config().model_copy(update={"kind_filter": kind.value})
+        filtered = resolve_operational_event_schedule(values, topology, streams(93))
+        assert len(filtered.events) == 1
+        assert filtered.events[0].kind is kind
+        assert filtered.events[0].complete() == complete_records[kind]
+
+
 def test_each_experiment_family_enables_honest_events():
     for path in FAMILIES:
         scenario = ScenarioConfig.model_validate(load_yaml(path)["scenario"])
