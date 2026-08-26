@@ -102,8 +102,8 @@ def load_topology(path: Path) -> Topology:
     edge_offsets = np.zeros(len(node_ids) + 1, dtype=np.int32)
     np.cumsum(counts, out=edge_offsets[1:])
 
-    def edge_float(field: str, missing: float = 0.0) -> np.ndarray:
-        values = [missing if e[2].get(field) is None else e[2][field] for e in edges]
+    def edge_float(field: str) -> np.ndarray:
+        values = [e[2][field] for e in edges]
         return np.array(values, dtype=np.float32)
 
     return Topology(
@@ -136,7 +136,15 @@ def load_topology(path: Path) -> Topology:
         edge_nominal_travel_time=edge_float("nominal_travel_time"),
         edge_safe_capacity=edge_float("safe_capacity"),
         edge_critical_density=edge_float("critical_density"),
-        edge_lift_throughput=edge_float("lift_throughput"),
+        edge_lift_throughput=np.array(
+            [
+                0.0
+                if edge[2]["lift_throughput"] is None
+                else edge[2]["lift_throughput"]
+                for edge in edges
+            ],
+            dtype=np.float32,
+        ),
         edge_wind_sensitivity=edge_float("wind_sensitivity"),
         edge_visibility_sensitivity=edge_float("visibility_sensitivity"),
         edge_snow_sensitivity=edge_float("snow_sensitivity"),
