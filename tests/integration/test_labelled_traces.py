@@ -6,9 +6,11 @@ The sleeper fixture has a known trigger time, so its label rate is known.
 """
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import yaml
 
 from avalanche.config import load_and_merge
@@ -102,7 +104,7 @@ def test_each_row_holds_every_feature_and_key():
     assert list(rows["step"]) == list(range(len(rows)))
     assert "controller_id" not in rows.columns
     assert "true_harm_count" not in rows.columns
-    assert (rows["dataset_version"] == 3).all()
+    assert (rows["dataset_version"] == 4).all()
     assert (rows["feature_version"] == FEATURE_VERSION).all()
     assert (rows["policy_version"] == 3).all()
     assert (rows["information_profile"] == "principal").all()
@@ -133,7 +135,7 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path):
     assert summary["feature_names"] == list(FEATURE_NAMES)
     assert summary["feature_version"] == FEATURE_VERSION
     assert summary["information_profile"] == "principal"
-    assert summary["dataset_version"] == 3
+    assert summary["dataset_version"] == 4
     assert summary["policy_version"] == 3
     assert summary["checksums"]["dataset_sha256"]
     assert output.with_suffix(".manifest.json").exists()
@@ -149,6 +151,43 @@ def test_the_matrix_carries_one_entry_for_each_attack_strength():
     assert sorted({entry.attack_strength for entry in attacked}) == sorted(strengths)
     assert {entry.controller_kind for entry in honest} == {"honest"}
     assert len(attacked) == len(honest)
+
+
+def test_the_matrix_derives_attack_classification_from_the_controller():
+    manifest = deepcopy(yaml.safe_load(MANIFEST.read_text()))
+    manifest["mountains"][0]["controllers"][0]["kind"] = "honest"
+
+    entries = expand_manifest(manifest)
+
+    selected = [
+        entry for entry in entries if entry.controller_kind == "profit-biased-overt"
+    ]
+    assert selected
+    assert {entry.attack_kind for entry in selected} == {"profit_biased"}
+
+
+def test_the_matrix_rejects_the_obsolete_attack_flag():
+    manifest = deepcopy(yaml.safe_load(MANIFEST.read_text()))
+    manifest["mountains"][0]["controllers"][0]["attack"] = True
+
+    with pytest.raises(ValueError, match="obsolete attack flag"):
+        expand_manifest(manifest)
+
+
+def test_attack_controllers_require_strengths():
+    manifest = deepcopy(yaml.safe_load(MANIFEST.read_text()))
+    manifest.pop("attack_strengths")
+
+    with pytest.raises(ValueError, match="strengths are required"):
+        expand_manifest(manifest)
+
+
+def test_the_matrix_rejects_a_path_outside_the_repository():
+    manifest = deepcopy(yaml.safe_load(MANIFEST.read_text()))
+    manifest["mountains"][0]["controllers"][0]["config"] = "../outside.yaml"
+
+    with pytest.raises(ValueError, match="leaves the repository"):
+        expand_manifest(manifest)
 
 
 def test_each_pair_preserves_external_stream_inputs_and_policy():

@@ -16,8 +16,14 @@ import argparse
 import os
 from pathlib import Path
 
+from avalanche.config import load_and_merge
 from avalanche.config.run_identity import REPO_ROOT
-from avalanche.monitors.dataset import generate_dataset
+from avalanche.monitors.dataset import (
+    DatasetEntry,
+    expand_manifest,
+    generate_dataset,
+    generate_dataset_entries,
+)
 
 DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "datasets" / "monitor-training.parquet"
 
@@ -30,16 +36,52 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--limit", type=int, default=None, help="run only the first entries"
     )
+    parser.add_argument(
+        "--fixture",
+        action="store_true",
+        help="generate the small committed fixture matrix",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    written = generate_dataset(
-        args.manifest, args.output, workers=args.workers, limit=args.limit
-    )
+    if args.fixture and args.limit is not None:
+        raise ValueError("the fixture selection cannot use an entry limit")
+    if args.fixture:
+        manifest = load_and_merge(args.manifest)
+        entries = fixture_entries(expand_manifest(manifest))
+        written = generate_dataset_entries(
+            args.manifest,
+            args.output,
+            entries,
+            workers=args.workers,
+            source_manifest=manifest,
+        )
+    else:
+        written = generate_dataset(
+            args.manifest, args.output, workers=args.workers, limit=args.limit
+        )
     print(f"Wrote the labelled rows to {written}")
     return 0
+
+
+def fixture_entries(entries: list[DatasetEntry]) -> list[DatasetEntry]:
+    """Select one complete small-resort pair for each available attack cell."""
+    attacks = [
+        entry
+        for entry in entries
+        if entry.mountain == "small-resort" and entry.pair_role == "attack"
+    ]
+    selected = {}
+    for entry in attacks:
+        key = (entry.scenario_family, entry.controller_kind)
+        selected.setdefault(key, entry.pair_id)
+    pair_ids = set(selected.values())
+    fixture = [entry for entry in entries if entry.pair_id in pair_ids]
+    if not fixture:
+        raise ValueError("the fixture selection produced no dataset entries")
+    return fixture
 
 
 if __name__ == "__main__":
