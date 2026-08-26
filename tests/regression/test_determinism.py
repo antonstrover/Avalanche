@@ -2,17 +2,25 @@
 
 import json
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
+import torch
 
 from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
 from avalanche.config.models import PopulationConfig
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig, neutral_action
 from avalanche.experiments import run_episode as write_episode
+from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.perceptron import (
+    TrainedModel,
+    TrainingConfig,
+    build_network,
+    save_model,
+)
 from avalanche.sim import MountainSim, population_from_starts
 
 FIXTURE = (
@@ -45,14 +53,36 @@ METRIC_NAMES = {
     "decision_counts",
     "utility",
     "mean_wait_seconds",
-    "intervention_latency_seconds_sum",
     "intervention_latency_count",
-    "monitor_latency_seconds_sum",
     "monitor_decision_count",
     "detection_interval",
     "harm_before_detection",
     "intervention_cost",
 }
+DETERMINISTIC_SUMMARY_FIELDS = (
+    "run_id",
+    "episode_id",
+    "seed",
+    "terminated",
+    "truncated",
+    "simulation_time",
+    "step",
+    "state_checksum",
+    "metrics",
+    "attack_assessment",
+    "information_profile",
+    "policy_version",
+    "policy_variant",
+)
+
+
+def deterministic_result(result: Any) -> dict[str, Any]:
+    """Return every deterministic field from one run result."""
+    if isinstance(result, dict):
+        return {name: result[name] for name in DETERMINISTIC_SUMMARY_FIELDS}
+    if is_dataclass(result) and not isinstance(result, type):
+        return {field.name: getattr(result, field.name) for field in fields(result)}
+    raise TypeError("a deterministic result must be a mapping or a data class")
 
 
 @dataclass(frozen=True)
@@ -254,9 +284,7 @@ def test_full_episodes_repeat_each_checksum_and_final_metric():
     first = run_episode(resolved)
     second = run_episode(resolved)
 
-    assert first.checksums == second.checksums
-    assert first.metrics == second.metrics
-    assert first.schedules == second.schedules
+    assert deterministic_result(first) == deterministic_result(second)
     assert set(first.metrics) == METRIC_NAMES
     assert len(first.checksums) == int(
         EPISODE_DURATION_SECONDS / CONTROL_INTERVAL_SECONDS
@@ -278,10 +306,7 @@ def test_controller_draws_cannot_change_external_schedules_or_results():
     baseline = run_episode(resolved)
     disturbed = run_episode(resolved, controller_draws=True)
 
-    assert baseline.schedules["weather"] == disturbed.schedules["weather"]
-    assert baseline.schedules["failures"] == disturbed.schedules["failures"]
-    assert baseline.checksums == disturbed.checksums
-    assert baseline.metrics == disturbed.metrics
+    assert deterministic_result(baseline) == deterministic_result(disturbed)
 
 
 # The attack fixtures. Each run keeps the fixture trigger and a small population.
@@ -397,11 +422,7 @@ def test_two_attack_runs_repeat_every_recorded_output(attack_fixture, tmp_path):
     first = run_attack_episode(resolved, tmp_path / "first")
     second = run_attack_episode(resolved, tmp_path / "second")
 
-    assert first.checksums == second.checksums
-    assert first.metrics == second.metrics
-    assert first.assessment == second.assessment
-    assert first.schedules == second.schedules
-    assert first.events == second.events
+    assert deterministic_result(first) == deterministic_result(second)
     assert first.assessment is not None
     assert first.assessment["kind"] == attack_fixture["kind"]
 
@@ -464,3 +485,59 @@ def test_another_root_seed_changes_one_external_variable(attack_fixture):
     other = resolved.model_copy(update={"seed": resolved.seed + 1})
 
     assert _population_bytes(resolved) != _population_bytes(other)
+
+
+def _always_unsafe_model(path: Path) -> Path:
+    """Save one learned model that forces each intervention."""
+    config = TrainingConfig(hidden_sizes=())
+    network = build_network(len(FEATURE_NAMES), ())
+    with torch.no_grad():
+        network[0].weight.zero_()
+        network[0].bias.fill_(40.0)
+    model = TrainedModel(
+        network=network,
+        feature_names=FEATURE_NAMES,
+        feature_mean=np.zeros(len(FEATURE_NAMES), dtype=np.float32),
+        feature_deviation=np.ones(len(FEATURE_NAMES), dtype=np.float32),
+        config=config,
+        metadata={
+            "model_version": 2,
+            "model_kind": "perceptron",
+            "feature_version": 2,
+            "information_profile": "principal",
+            "calibration": {"threshold": 0.5, "temperature": 1.0},
+        },
+    )
+    return save_model(model, path)
+
+
+def _learned_monitor_config(model_path: Path) -> ResolvedConfig:
+    """Return one short run with a forced learned intervention."""
+    values = load_and_merge(
+        CONFIGS / "mountain" / "small.yaml",
+        CONFIGS / "scenarios" / "family-calm.yaml",
+        CONFIGS / "controllers" / "small-resort" / "honest.yaml",
+        CONFIGS / "monitors" / "learned.yaml",
+    )
+    values["monitor"]["model_path"] = str(model_path)
+    values["monitor"]["decision_threshold"] = 0.0
+    values["population"]["skier_count"] = 64
+    values["episode_duration_seconds"] = 120.0
+    values["snapshot_interval_seconds"] = 120.0
+    return ResolvedConfig.model_validate(values)
+
+
+def test_active_learned_monitor_runs_keep_each_simulated_result(tmp_path):
+    model_path = _always_unsafe_model(tmp_path / "monitor.pt")
+    resolved = _learned_monitor_config(model_path)
+
+    first = write_episode(resolved, tmp_path / "first")
+    second = write_episode(resolved, tmp_path / "second")
+
+    assert first["metrics"]["decision_counts"]["BLOCK"] > 0
+    assert second["metrics"]["decision_counts"]["BLOCK"] > 0
+    assert deterministic_result(first) == deterministic_result(second)
+    for summary in (first, second):
+        assert summary["performance"]["performance_version"] == 1
+        assert summary["performance"]["monitor_latency_seconds_sum"] > 0.0
+        assert summary["performance"]["intervention_latency_seconds_sum"] > 0.0
