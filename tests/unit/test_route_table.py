@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from avalanche.sim import build_route_table, load_topology, walk_route
+from avalanche.sim.population import ABILITY_NAMES
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -33,7 +34,7 @@ def table(topology):
 
 
 def test_the_table_has_one_entry_for_each_pair(topology, table):
-    shape = (topology.node_count, topology.node_count)
+    shape = (len(ABILITY_NAMES), topology.node_count, topology.node_count)
     assert table.next_edge.shape == shape
     assert table.travel_time.shape == shape
     assert table.next_edge.dtype == np.int32
@@ -42,38 +43,46 @@ def test_the_table_has_one_entry_for_each_pair(topology, table):
 def test_the_known_shortest_path_is_correct(topology, table):
     source = topology.node_index[KNOWN_ROUTE[0]]
     destination = topology.node_index[KNOWN_ROUTE[-1]]
-    route = walk_route(table, topology, source, destination)
+    ability = ABILITY_NAMES.index("beginner")
+    route = walk_route(table, topology, source, destination, ability=ability)
 
     nodes = [KNOWN_ROUTE[0]] + [
         topology.node_ids[topology.edge_destination[edge]] for edge in route
     ]
     assert tuple(nodes) == KNOWN_ROUTE
-    assert table.travel_time[source, destination] == pytest.approx(KNOWN_TIME)
+    assert table.travel_time[ability, source, destination] == pytest.approx(KNOWN_TIME)
 
 
 def test_an_unreachable_pair_has_no_edge(topology, table):
     # The exit has no outgoing edge, so no node is reachable from it.
     source = topology.node_index["base_exit"]
     destination = topology.node_index["lift2_top"]
-    assert table.next_edge[source, destination] == -1
-    assert np.isinf(table.travel_time[source, destination])
+    ability = ABILITY_NAMES.index("advanced")
+    assert table.next_edge[ability, source, destination] == -1
+    assert np.isinf(table.travel_time[ability, source, destination])
     with pytest.raises(ValueError):
-        walk_route(table, topology, source, destination)
+        walk_route(table, topology, source, destination, ability=ability)
 
 
 def test_a_node_is_not_its_own_next_hop(table):
-    assert np.all(np.diagonal(table.next_edge) == -1)
-    assert np.all(np.diagonal(table.travel_time) == 0.0)
+    assert np.all(np.diagonal(table.next_edge, axis1=1, axis2=2) == -1)
+    assert np.all(np.diagonal(table.travel_time, axis1=1, axis2=2) == 0.0)
 
 
 def test_each_walked_route_ends_at_its_destination(topology, table):
-    for source in range(topology.node_count):
-        for destination in range(topology.node_count):
-            if source == destination or table.next_edge[source, destination] == -1:
-                continue
-            route = walk_route(table, topology, source, destination)
-            assert topology.edge_destination[route[-1]] == destination
-            cost = topology.edge_nominal_travel_time[route].sum()
-            assert cost == pytest.approx(
-                table.travel_time[source, destination], rel=1e-5
-            )
+    for ability in range(len(ABILITY_NAMES)):
+        for source in range(topology.node_count):
+            for destination in range(topology.node_count):
+                if (
+                    source == destination
+                    or table.next_edge[ability, source, destination] == -1
+                ):
+                    continue
+                route = walk_route(
+                    table, topology, source, destination, ability=ability
+                )
+                assert topology.edge_destination[route[-1]] == destination
+                cost = topology.edge_nominal_travel_time[route].sum()
+                assert cost == pytest.approx(
+                    table.travel_time[ability, source, destination], rel=1e-5
+                )

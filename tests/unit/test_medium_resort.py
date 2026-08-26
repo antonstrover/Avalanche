@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from avalanche.sim import build_graph, build_route_table, load_topology, validate_graph
+from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES, NODE_TYPE_NAMES
 
 FIXTURE = (
@@ -25,6 +26,7 @@ ENTRANCE = NODE_TYPE_NAMES.index("entrance")
 PISTE = EDGE_TYPE_NAMES.index("piste")
 LIFT = EDGE_TYPE_NAMES.index("lift")
 BLUE = DIFFICULTY_NAMES.index("blue")
+ADVANCED = ABILITY_NAMES.index("advanced")
 
 
 @pytest.fixture(scope="module")
@@ -73,7 +75,7 @@ def test_every_node_reaches_every_exit(topology, routes):
     unreachable = [
         (topology.node_ids[others[row]], topology.node_ids[exits[column]])
         for row, column in np.argwhere(
-            ~np.isfinite(routes.travel_time[np.ix_(others, exits)])
+            ~np.isfinite(routes.travel_time[ADVANCED][np.ix_(others, exits)])
         )
     ]
     assert unreachable == []
@@ -81,7 +83,7 @@ def test_every_node_reaches_every_exit(topology, routes):
 
 def test_every_node_is_reachable_from_an_entrance(topology, routes):
     entrances = np.flatnonzero(topology.node_type == ENTRANCE)
-    reached = np.isfinite(routes.travel_time[entrances]).any(axis=0)
+    reached = np.isfinite(routes.travel_time[ADVANCED, entrances]).any(axis=0)
     reached[entrances] = True
     assert [topology.node_ids[i] for i in np.flatnonzero(~reached)] == []
 

@@ -6,15 +6,19 @@ A movement step selects a group of skiers with a boolean mask.
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from avalanche.config.models import PopulationConfig
+from avalanche.sim.ability import ABILITY_NAMES
 from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import NODE_TYPE_NAMES, Topology
 
-ABILITY_NAMES = ("beginner", "intermediate", "advanced")
 CUSTOMER_GROUP_NAMES = ("standard", "premium")
+
+if TYPE_CHECKING:
+    from avalanche.sim.routes import RouteTable
 
 ENTRANCE_NODE = NODE_TYPE_NAMES.index("entrance")
 EXIT_NODE = NODE_TYPE_NAMES.index("exit")
@@ -102,15 +106,20 @@ def empty_population(count: int) -> SkierArrays:
 
 
 def sample_population(
-    rng: np.random.Generator, topology: Topology, config: PopulationConfig
+    rng: np.random.Generator,
+    topology: Topology,
+    routes: RouteTable,
+    config: PopulationConfig,
 ) -> SkierArrays:
     """Return a new sampled population of the size in the configuration.
 
     The order of the draws is part of the seed contract.
     A change of the order changes every run with the same seed.
-    The order is the arrival time, the entry node, the destination,
-    the ability, the risk tolerance, the customer group, and the compliance.
+    The order is the arrival time, the entry node, the provisional destination,
+    the ability, the risk tolerance, the customer group, the compliance,
+    and the safe destination selector.
     The ability and the customer group use separate independent draws.
+    Each destination is an exit reachable for the skier's ability.
 
     Each skier waits in the kind `PENDING` at its entry node.
     The skiers keep the ascending arrival order, which `start_arrivals` needs.
@@ -125,7 +134,7 @@ def sample_population(
     count = int(config.skier_count)
     arrival_time = np.sort(rng.uniform(0.0, config.arrival_window_seconds, count))
     entry = rng.choice(entrances, size=count)
-    destination = rng.choice(exits, size=count)
+    provisional_destination = rng.choice(exits, size=count)
     ability = rng.choice(len(ABILITY_NAMES), size=count, p=config.ability_weights)
     risk_tolerance = rng.uniform(0.0, 1.0, count)
     group = rng.choice(
@@ -134,6 +143,27 @@ def sample_population(
     compliance = np.clip(
         rng.normal(config.compliance_mean, config.compliance_spread, count), 0.0, 1.0
     )
+    destination_selector = rng.random(count)
+    destination = provisional_destination.copy()
+    for entry_node in entrances:
+        for ability_index in range(len(ABILITY_NAMES)):
+            members = (entry == entry_node) & (ability == ability_index)
+            if not np.any(members):
+                continue
+            reachable = exits[
+                np.isfinite(routes.travel_time[ability_index, entry_node, exits])
+            ]
+            if reachable.size == 0:
+                raise ValueError(
+                    f"the {ABILITY_NAMES[ability_index]} ability has no safe exit "
+                    f"from the entrance {topology.node_ids[entry_node]!r}"
+                )
+            unsafe = members & ~np.isin(provisional_destination, reachable)
+            choices = np.minimum(
+                (destination_selector[unsafe] * reachable.size).astype(np.int64),
+                reachable.size - 1,
+            )
+            destination[unsafe] = reachable[choices]
 
     pop = empty_population(count)
     pop.location_kind[:] = LocationKind.PENDING

@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from avalanche.sim.ability import ABILITY_NAMES, ability_allows_edges
 from avalanche.sim.population import (
-    ABILITY_NAMES,
     CUSTOMER_GROUP_NAMES,
     SkierArrays,
     group_rank,
@@ -344,12 +344,26 @@ def select_next_edges(
 
     # The draw takes one number for each skier at a node, in the ascending
     # skier order, so the run is deterministic.
-    advice = state.advice_edge[nodes, pop.ability[travelling]]
+    abilities = pop.ability[travelling]
+    advice = state.advice_edge[nodes, abilities]
     message = state.crowd_messages[nodes, pop.group[travelling]]
     effective_compliance = np.clip(pop.compliance[travelling] + message, 0.0, 1.0)
     follow = rng.random(nodes.size) < effective_compliance
-    advised = np.where(follow & open_mask(advice, state), advice, NO_EDGE)
-    next_edge = np.where(advised != NO_EDGE, advised, routes.next_edge[nodes, dests])
+    safe_advice = np.zeros(advice.size, dtype=np.bool_)
+    proposed = np.flatnonzero(advice != NO_EDGE)
+    proposed_edges = advice[proposed]
+    onward_nodes = topology.edge_destination[proposed_edges]
+    safe_advice[proposed] = (
+        ability_allows_edges(topology, abilities[proposed], proposed_edges)
+        & (topology.edge_source[proposed_edges] == nodes[proposed])
+        & np.isfinite(
+            routes.travel_time[abilities[proposed], onward_nodes, dests[proposed]]
+        )
+    )
+    # TODO: Model lift downloads before this viability check can allow safe recovery.
+    advised = np.where(follow & safe_advice & open_mask(advice, state), advice, NO_EDGE)
+    fallback = routes.next_edge[abilities, nodes, dests]
+    next_edge = np.where(advised != NO_EDGE, advised, fallback)
 
     open_edge = open_mask(next_edge, state)
     starters = travelling[open_edge]
@@ -407,7 +421,7 @@ def update_stranded(
         return np.empty(0, dtype=np.int64)
     nodes = pop.location_index[members]
     destinations = pop.destination[members]
-    next_edges = routes.next_edge[nodes, destinations]
+    next_edges = routes.next_edge[pop.ability[members], nodes, destinations]
     blocked = ~open_mask(next_edges, state)
     blocked_members = members[blocked]
     clear_members = members[~blocked]

@@ -183,7 +183,7 @@ edges:
   - source: ridge_junction
     destination: mid_junction
     edge_type: piste
-    difficulty: red
+    difficulty: blue
     length: 420.0
     nominal_travel_time: 210.0
     safe_capacity: 200

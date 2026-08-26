@@ -20,6 +20,7 @@ from avalanche.sim import (
     population_from_starts,
     walk_route,
 )
+from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.routes import NO_EDGE
 
 FIXTURE = (
@@ -41,6 +42,7 @@ def build_scenario(seed):
     """
     topology = load_topology(FIXTURE)
     routes = build_route_table(topology)
+    ability = ABILITY_NAMES.index("beginner")
     choose = random.Random(seed)
 
     starts = [
@@ -56,7 +58,8 @@ def build_scenario(seed):
     reachable = [
         start
         for start in starts
-        if start == destination or routes.next_edge[start, destination] != NO_EDGE
+        if start == destination
+        or routes.next_edge[ability, start, destination] != NO_EDGE
     ]
     chosen = [choose.choice(reachable) for _ in range(choose.randint(2, MAX_SKIERS))]
     pop = population_from_starts(starts=chosen, destinations=destination)
@@ -64,7 +67,7 @@ def build_scenario(seed):
     used = {
         edge
         for start in chosen
-        for edge in walk_route(routes, topology, start, destination)
+        for edge in walk_route(routes, topology, start, destination, ability=ability)
     }
     spare = sorted(set(range(topology.edge_count)) - used)
     return pop, choose.choice(spare)
@@ -151,7 +154,13 @@ def test_a_closed_edge_on_the_route_accepts_no_skier(seed):
     routes = build_route_table(topology)
     start = topology.node_index["base_village"]
     destination = topology.node_index["base_exit"]
-    closed_edge = walk_route(routes, topology, start, destination)[0]
+    closed_edge = walk_route(
+        routes,
+        topology,
+        start,
+        destination,
+        ability=ABILITY_NAMES.index("beginner"),
+    )[0]
 
     sim = MountainSim(FIXTURE)
     sim.reset(seed)
