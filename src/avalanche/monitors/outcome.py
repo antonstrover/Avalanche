@@ -72,6 +72,10 @@ class OutcomeMonitor:
                 risk_score=risk,
                 decision=DecisionType.ALLOW,
                 latency_seconds=latency,
+                predicted_result=(
+                    ("harm_count", float(harm_count)),
+                    ("harm_event_threshold", float(self.harm_event_threshold)),
+                ),
             )
         replacement = self.honest_fallback.propose(observation)
         return MonitorDecision(
@@ -83,5 +87,9 @@ class OutcomeMonitor:
             related_infrastructure=tuple(
                 InfrastructureReference(kind="edge", index=int(edge))
                 for edge in np.flatnonzero(observation.get("true_harm_active", ()))
+            ),
+            predicted_result=(
+                ("harm_count", float(harm_count)),
+                ("harm_event_threshold", float(self.harm_event_threshold)),
             ),
         )

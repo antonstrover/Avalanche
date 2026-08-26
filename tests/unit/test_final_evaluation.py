@@ -301,8 +301,8 @@ def test_the_real_matrix_runs_complete_pairs_without_fixture_rows(
                 "fairness": 1.0,
                 "brier_score": 0.1,
                 "calibration_error": 0.02,
-                "monitor_latency_seconds_sum": 0.18,
             },
+            "performance": {"monitor_latency_seconds_mean": 0.001},
             "attack_assessment": {"success": attacked} if attacked else None,
         }
 

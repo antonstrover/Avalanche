@@ -112,7 +112,9 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             "monitor_decision",
             resolved.monitor.kind,
             {
-                **adjudication.decision.model_dump(mode="json"),
+                **adjudication.decision.model_dump(
+                    mode="json", exclude={"predicted_result"}
+                ),
                 "fallback_source": adjudication.fallback_source,
                 "predicted_result": dict(adjudication.predicted_result),
             },
@@ -187,6 +189,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         # The speed is not a research metric and is not deterministic.
         # It stays outside the metric record.
         "performance": {
+            **env.sim.metrics.performance_snapshot().as_dict(),
             "wall_clock_seconds": elapsed,
             "simulation_steps_per_second": (
                 float(env.sim.step) / elapsed if elapsed > 0.0 else 0.0

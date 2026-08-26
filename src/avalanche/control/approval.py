@@ -7,6 +7,7 @@ from avalanche.control.types import (
     ActionProposal,
     ImmutableAction,
     MonitorDecision,
+    PredictedResult,
 )
 
 
@@ -26,7 +27,7 @@ class ApprovalRequest:
     proposal: ActionProposal
     decision: MonitorDecision
     safe_fallback: ImmutableAction
-    predicted_result: tuple[tuple[str, object], ...]
+    predicted_result: PredictedResult
     deadline_epoch_seconds: float = 0.0
 
 

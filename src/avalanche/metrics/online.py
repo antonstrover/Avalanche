@@ -10,7 +10,8 @@ from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 4
+METRICS_VERSION = 5
+PERFORMANCE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -28,11 +29,9 @@ class MetricSnapshot:
     group_mean_wait_times: tuple[float, ...]
     fairness: float
     decision_counts: dict[str, int]
-    intervention_latency_seconds_sum: float
     intervention_latency_count: int
     utility: float = 0.0
     mean_wait_seconds: float = 0.0
-    monitor_latency_seconds_sum: float = 0.0
     monitor_decision_count: int = 0
     detection_interval: int = -1
     harm_before_detection: float = -1.0
@@ -41,6 +40,21 @@ class MetricSnapshot:
         self,
     ) -> dict[str, int | float | tuple[float, ...] | dict[str, int]]:
         """Return the metric fields with stable names."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PerformanceSnapshot:
+    """Hold measured performance values outside deterministic metrics."""
+
+    performance_version: int
+    monitor_latency_seconds_sum: float
+    monitor_latency_seconds_mean: float
+    intervention_latency_seconds_sum: float
+    intervention_latency_seconds_mean: float
+
+    def as_dict(self) -> dict[str, int | float]:
+        """Return each performance field with a stable name."""
         return asdict(self)
 
 
@@ -157,8 +171,6 @@ class OnlineMetrics:
             fairness,
             scalar_utility,
             scalar_wait,
-            self.intervention_latency_seconds_sum,
-            self.monitor_latency_seconds_sum,
         )
         if any(not isfinite(float(value)) for value in values):
             raise ValueError("an online metric is not finite")
@@ -176,9 +188,7 @@ class OnlineMetrics:
             utility=scalar_utility,
             mean_wait_seconds=scalar_wait,
             decision_counts=dict(self.decision_counts),
-            intervention_latency_seconds_sum=self.intervention_latency_seconds_sum,
             intervention_latency_count=self.intervention_latency_count,
-            monitor_latency_seconds_sum=self.monitor_latency_seconds_sum,
             monitor_decision_count=self.monitor_decision_count,
             detection_interval=(
                 -1 if self.detection_interval is None else self.detection_interval
@@ -187,5 +197,29 @@ class OnlineMetrics:
                 -1.0
                 if self.harm_before_detection is None
                 else self.harm_before_detection
+            ),
+        )
+
+    def performance_snapshot(self) -> PerformanceSnapshot:
+        """Return measured latency values with deterministic denominators."""
+        values = (
+            self.monitor_latency_seconds_sum,
+            self.intervention_latency_seconds_sum,
+        )
+        if any(not isfinite(value) for value in values):
+            raise ValueError("a performance value is not finite")
+        return PerformanceSnapshot(
+            performance_version=PERFORMANCE_VERSION,
+            monitor_latency_seconds_sum=self.monitor_latency_seconds_sum,
+            monitor_latency_seconds_mean=(
+                self.monitor_latency_seconds_sum / self.monitor_decision_count
+                if self.monitor_decision_count
+                else 0.0
+            ),
+            intervention_latency_seconds_sum=self.intervention_latency_seconds_sum,
+            intervention_latency_seconds_mean=(
+                self.intervention_latency_seconds_sum / self.intervention_latency_count
+                if self.intervention_latency_count
+                else 0.0
             ),
         )

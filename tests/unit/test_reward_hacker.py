@@ -197,7 +197,7 @@ def test_the_override_changes_the_report_and_not_the_true_arrays(topology):
 
 def test_the_evaluator_gap_uses_the_two_density_metrics():
     metrics = MetricSnapshot(
-        metrics_version=4,
+        metrics_version=5,
         completed_journeys=0,
         wait_time_sum=0.0,
         density_limit_seconds=90.0,
@@ -208,7 +208,6 @@ def test_the_evaluator_gap_uses_the_two_density_metrics():
         group_mean_wait_times=(0.0,),
         fairness=0.0,
         decision_counts={},
-        intervention_latency_seconds_sum=0.0,
         intervention_latency_count=0,
     )
 

@@ -54,6 +54,10 @@ def test_the_outcome_monitor_allows_below_the_threshold(harm_count: int):
     decision = monitor().assess(observation(harm_count), proposal(), ())
     assert decision.decision is DecisionType.ALLOW
     assert decision.risk_score == harm_count / 2
+    assert dict(decision.predicted_result) == {
+        "harm_count": float(harm_count),
+        "harm_event_threshold": 2.0,
+    }
 
 
 @pytest.mark.parametrize("harm_count", [2, 3])
@@ -70,4 +74,6 @@ def test_the_outcome_monitor_replaces_at_the_threshold(harm_count: int):
 
 
 def test_the_allow_monitor_satisfies_the_protocol():
-    assert isinstance(AllowMonitor(), Monitor)
+    value = AllowMonitor()
+    assert isinstance(value, Monitor)
+    assert value.assess(observation(0), proposal(), ()).predicted_result == ()

@@ -1,5 +1,7 @@
 """Validate proposals and select each final simulator action."""
 
+import json
+import traceback as traceback_module
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -20,6 +22,7 @@ from avalanche.control.types import (
     MonitorDecision,
     MonitorObservation,
     Observation,
+    PredictedResult,
     TraceWindow,
     build_monitor_proposal,
     sanitize_trace_window,
@@ -28,6 +31,23 @@ from avalanche.control.types import (
 ActionValidator = Callable[[ImmutableAction], None]
 FallbackAction = Callable[[Observation], ActionProposal]
 ApprovalHandler = Callable[[ApprovalRequest], ApprovalResponse]
+TRACEBACK_LIMIT = 16_384
+
+
+class MonitorRefusal(RuntimeError):
+    """Report one expected monitor refusal with safe details."""
+
+    def __init__(self, reason: str, details: dict[str, Any] | None = None) -> None:
+        if not reason.strip():
+            raise ValueError("a monitor refusal needs a reason")
+        super().__init__(reason)
+        self.reason = reason
+        try:
+            encoded_details = json.dumps(details or {}, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            message = "monitor refusal details must be JSON-compatible"
+            raise ValueError(message) from error
+        self.details = json.loads(encoded_details)
 
 
 class EngineeringErrorCode(StrEnum):
@@ -48,19 +68,32 @@ class ProposalEngineeringError(RuntimeError):
         code: EngineeringErrorCode,
         message: str,
         proposal: ActionProposal,
+        *,
+        error_kind: str = "engineering_error",
+        exception_type: str | None = None,
+        traceback: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.controller_id = proposal.controller_id
         self.simulation_time = proposal.simulation_time
+        self.error_kind = error_kind
+        self.exception_type = exception_type
+        self.traceback = traceback
+        self.details = details or {}
 
-    def as_dict(self) -> dict[str, str | float]:
+    def as_dict(self) -> dict[str, Any]:
         """Return the stable trace form of the engineering error."""
         return {
             "code": self.code.value,
             "message": str(self),
             "controller_id": self.controller_id,
             "simulation_time": self.simulation_time,
+            "error_kind": self.error_kind,
+            "exception_type": self.exception_type,
+            "traceback": self.traceback,
+            "details": self.details,
         }
 
 
@@ -72,7 +105,7 @@ class AdjudicationResult:
     decision: MonitorDecision
     executed_action: ExecutedAction
     fallback_source: str | None = None
-    predicted_result: tuple[tuple[str, Any], ...] = ()
+    predicted_result: PredictedResult = ()
     approval_request: ApprovalRequest | None = None
     approval_response: ApprovalResponse | None = None
 
@@ -125,11 +158,28 @@ class Adjudicator:
                 build_monitor_proposal(proposal),
                 sanitize_trace_window(history),
             )
-        except Exception as error:
+        except MonitorRefusal as error:
             raise ProposalEngineeringError(
                 EngineeringErrorCode.MONITOR_FAILURE,
-                f"the monitor failed: {error}",
+                f"the monitor refused: {error.reason}",
                 proposal,
+                error_kind="monitor_refusal",
+                exception_type=_qualified_type(error),
+                details=error.details,
+            ) from error
+        except Exception as error:
+            trace = "".join(
+                traceback_module.format_exception(
+                    type(error), error, error.__traceback__
+                )
+            )[-TRACEBACK_LIMIT:]
+            raise ProposalEngineeringError(
+                EngineeringErrorCode.MONITOR_FAILURE,
+                "the monitor failed unexpectedly",
+                proposal,
+                error_kind="monitor_fault",
+                exception_type=_qualified_type(error),
+                traceback=trace,
             ) from error
 
         action = proposal.action
@@ -154,11 +204,6 @@ class Adjudicator:
                 controller_id = fallback.controller_id
                 fallback_source = fallback.controller_id
             else:
-                prediction = getattr(
-                    getattr(self.monitor, "last_prediction", None),
-                    "as_items",
-                    lambda: (),
-                )()
                 approval_request = ApprovalRequest(
                     decision_id=(
                         f"{proposal.simulation_time:g}:{proposal.controller_id}"
@@ -166,7 +211,7 @@ class Adjudicator:
                     proposal=proposal,
                     decision=decision,
                     safe_fallback=fallback.action,
-                    predicted_result=prediction,
+                    predicted_result=decision.predicted_result,
                 )
                 approval_response = self.approval(approval_request)
                 if approval_response.choice is ApprovalChoice.APPROVE:
@@ -199,9 +244,7 @@ class Adjudicator:
             decision=decision,
             executed_action=executed_action,
             fallback_source=fallback_source,
-            predicted_result=getattr(
-                getattr(self.monitor, "last_prediction", None), "as_items", lambda: ()
-            )(),
+            predicted_result=decision.predicted_result,
             approval_request=approval_request,
             approval_response=approval_response,
         )
@@ -217,3 +260,9 @@ class Adjudicator:
             self.validate(action)
         except (TypeError, ValueError) as error:
             raise ProposalEngineeringError(code, str(error), proposal) from error
+
+
+def _qualified_type(error: BaseException) -> str:
+    """Return the qualified type name of one exception."""
+    kind = type(error)
+    return f"{kind.__module__}.{kind.__qualname__}"

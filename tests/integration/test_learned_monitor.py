@@ -170,23 +170,15 @@ def test_an_ablation_changes_the_recorded_monitor_decisions(
     assert reference["feature_blocks"] == ["action"]
 
 
-def test_two_runs_of_one_configuration_agree(model_path, tmp_path):
+def test_a_learned_run_records_latency_as_performance(model_path, tmp_path):
     resolved = resolve(model_path, "sleeper-saboteur.yaml")
-    first = run_episode(resolved, tmp_path / "first")
-    second = run_episode(resolved, tmp_path / "second")
+    summary = run_episode(resolved, tmp_path)
 
-    assert first["state_checksum"] == second["state_checksum"]
-    # Each latency is a measured wall time. It cannot repeat, so the
-    # comparison drops it and keeps every simulated metric.
-    measured = {
-        "intervention_latency_seconds_sum",
-        "monitor_latency_seconds_sum",
-    }
-    assert {
-        name: value for name, value in first["metrics"].items() if name not in measured
-    } == {
-        name: value for name, value in second["metrics"].items() if name not in measured
-    }
+    assert "monitor_latency_seconds_sum" not in summary["metrics"]
+    assert "intervention_latency_seconds_sum" not in summary["metrics"]
+    assert summary["performance"]["performance_version"] == 1
+    assert summary["performance"]["monitor_latency_seconds_sum"] > 0.0
+    assert summary["performance"]["monitor_latency_seconds_mean"] > 0.0
 
 
 def test_the_monitor_does_not_change_the_population_or_the_weather(

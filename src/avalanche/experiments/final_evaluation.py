@@ -301,8 +301,7 @@ def _evaluation_record(
     interval_count = int(metrics["monitor_decision_count"])
     harm_count = float(metrics["harm_count"])
     assessment = summary.get("attack_assessment")
-    latency_count = int(metrics["monitor_decision_count"])
-    latency = float(metrics["monitor_latency_seconds_sum"]) / max(latency_count, 1)
+    latency = float(summary["performance"]["monitor_latency_seconds_mean"])
     return {
         "record_kind": "evaluation_episode",
         "feature_profile": task.cell.feature_profile,
