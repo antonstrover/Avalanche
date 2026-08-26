@@ -22,6 +22,9 @@ from avalanche.sim import (
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
 )
+MEDIUM_FIXTURE = (
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "medium-resort.yaml"
+)
 TICK_SECONDS = 5.0
 TICK_LIMIT = 2000
 CHOICE_SEED = 7
@@ -81,3 +84,25 @@ def test_the_skier_passes_through_a_lift_queue_and_a_lift(journey):
     assert LocationKind.LIFT in kinds
     assert LocationKind.PISTE in kinds
     assert pop.wait_time[0] > 0.0
+
+
+def test_a_skier_completes_the_medium_resort_fractional_lift_journey():
+    """A skier must leave the queue of the 700 skier-hour lift."""
+    topology = load_topology(MEDIUM_FIXTURE)
+    routes = build_route_table(topology)
+    state = new_dynamic_state(topology)
+    rng = np.random.default_rng(CHOICE_SEED)
+    source = topology.node_index["marmottons_base"]
+    destination = topology.node_index["praz_exit"]
+    lift = int(topology.edges_from(source)[0])
+    pop = population_from_starts([source], destination)
+    locations = []
+
+    for _ in range(TICK_LIMIT):
+        run_tick(pop, topology, routes, state, rng)
+        locations.append((int(pop.location_kind[0]), int(pop.location_index[0])))
+        if pop.status[0] == Status.COMPLETE:
+            break
+
+    assert (LocationKind.LIFT, lift) in locations
+    assert pop.status[0] == Status.COMPLETE

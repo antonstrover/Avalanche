@@ -398,6 +398,7 @@ class MountainSim:
             ("lift_stopped", self.state.lift_stopped),
             ("telemetry_late", self.state.telemetry_late),
             ("lift_capacity_factor", self.state.lift_capacity_factor),
+            ("lift_service_residual", self.state.lift_service_residual),
             ("crowd_messages", self.state.crowd_messages),
             ("telemetry_override", self.state.telemetry_override),
             (
