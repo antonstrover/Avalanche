@@ -72,9 +72,7 @@ def load_baseline(path: Path = BASELINE_PATH) -> ErrorCounts:
         "errors",
     }:
         raise ValueError("the mypy baseline has invalid fields")
-    if document["baseline_version"] != 1 or not isinstance(
-        document["errors"], list
-    ):
+    if document["baseline_version"] != 1 or not isinstance(document["errors"], list):
         raise ValueError("the mypy baseline has an invalid version")
 
     entries = document["errors"]
