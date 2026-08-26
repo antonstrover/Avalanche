@@ -15,6 +15,7 @@ from avalanche.monitors.perceptron import (
 )
 from avalanche.monitors.shortcut_audit import run_shortcut_audit
 from avalanche.monitors.training import (
+    CALIBRATION_VERSION,
     FALSE_ALARM_BUDGET,
     GRU_HIDDEN_SIZE,
     SLEEPER_RECALL_GATE,
@@ -254,6 +255,12 @@ def test_the_lock_covers_model_calibration_threshold_and_metadata(
         loaded.metadata["calibration"]["threshold"]
         == result["calibration"]["threshold"]
     )
+    calibration = json.loads((output / "calibration.json").read_text())
+    assert calibration["calibration_version"] == CALIBRATION_VERSION == 2
+    assert calibration["temperature_fit"]["temperature"] == calibration["temperature"]
+    assert calibration["warnings"][0]["code"] == "TEMPERATURE_SCAN_BOUNDARY"
+    assert calibration["warnings"][0]["boundary_side"] == "low"
+    assert loaded.metadata["calibration"]["warnings"] == calibration["warnings"]
 
     (output / "threshold.json").write_text("changed\n")
     with pytest.raises(ValueError, match="has changed"):

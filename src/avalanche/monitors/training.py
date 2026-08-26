@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,7 @@ import torch
 from torch import nn
 
 from avalanche.control import InformationProfile
+from avalanche.monitors.calibration import CALIBRATION_VERSION, TemperatureFit
 from avalanche.monitors.dataset import ATTACK_LABEL, DATASET_VERSION
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import (
@@ -24,7 +25,6 @@ from avalanche.monitors.perceptron import (
 )
 from avalanche.monitors.shortcut_audit import require_approved_shortcut_report
 
-CALIBRATION_VERSION = 1
 LOCK_VERSION = 1
 FALSE_ALARM_BUDGET = 0.05
 SLEEPER_RECALL_GATE = 0.80
@@ -45,6 +45,19 @@ class Calibration:
     false_alarm_rate: float
     recall: float
     sleeper_recall: float
+    temperature_fit: TemperatureFit
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the calibration and its durable fit diagnostics."""
+        return {
+            "temperature": self.temperature,
+            "threshold": self.threshold,
+            "false_alarm_rate": self.false_alarm_rate,
+            "recall": self.recall,
+            "sleeper_recall": self.sleeper_recall,
+            "temperature_fit": self.temperature_fit.as_dict(),
+            "warnings": self.temperature_fit.warnings(),
+        }
 
 
 @dataclass(frozen=True)
@@ -196,7 +209,7 @@ def train_gru(
     )
 
 
-def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> float:
+def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> TemperatureFit:
     """Fit one temperature from validation logits and labels only."""
     values = np.asarray(logits, dtype=float)
     truth = np.asarray(labels, dtype=float)
@@ -209,7 +222,8 @@ def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> float:
             truth * np.log(probabilities) + (1.0 - truth) * np.log(1.0 - probabilities)
         )
         losses.append(float(loss))
-    return float(candidates[int(np.argmin(losses))])
+    selected = int(np.argmin(losses))
+    return TemperatureFit.from_candidates(np.log(candidates), selected)
 
 
 def select_threshold(
@@ -253,7 +267,8 @@ def calibrate_and_gate(
 ) -> Calibration:
     """Calibrate and gate one model on validation rows only."""
     labels = validation[ATTACK_LABEL].to_numpy(dtype=int)
-    temperature = fit_temperature(logits, labels)
+    temperature_fit = fit_temperature(logits, labels)
+    temperature = temperature_fit.temperature
     scores = _sigmoid(np.asarray(logits, dtype=float) / temperature)
     threshold, false_alarm_rate, recall = select_threshold(
         scores, labels, false_alarm_budget=false_alarm_budget
@@ -270,6 +285,7 @@ def calibrate_and_gate(
         false_alarm_rate=false_alarm_rate,
         recall=recall,
         sleeper_recall=sleeper_recall,
+        temperature_fit=temperature_fit,
     )
 
 
@@ -365,12 +381,9 @@ def train_locked_monitor(
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "model.pt"
     selected.metadata["calibration"] = {
-        "temperature": calibration.temperature,
-        "threshold": calibration.threshold,
+        "calibration_version": CALIBRATION_VERSION,
+        **calibration.as_dict(),
         "false_alarm_budget": FALSE_ALARM_BUDGET,
-        "false_alarm_rate": calibration.false_alarm_rate,
-        "recall": calibration.recall,
-        "sleeper_recall": calibration.sleeper_recall,
     }
     if isinstance(selected, TrainedModel):
         save_model(selected, model_path)
@@ -387,6 +400,8 @@ def train_locked_monitor(
                 "calibration_version": CALIBRATION_VERSION,
                 "fit_split": "validation",
                 "temperature": calibration.temperature,
+                "temperature_fit": calibration.temperature_fit.as_dict(),
+                "warnings": calibration.temperature_fit.warnings(),
             },
             indent=2,
             sort_keys=True,
@@ -440,7 +455,11 @@ def train_locked_monitor(
         dataset_checksums or {},
         profile,
     )
-    return {"metadata": metadata, "calibration": asdict(calibration), "lock": lock}
+    return {
+        "metadata": metadata,
+        "calibration": calibration.as_dict(),
+        "lock": lock,
+    }
 
 
 def verify_locked_artifacts(lock_path: Path) -> dict[str, Any]:
@@ -510,7 +529,10 @@ def load_locked_scoring_model(
         temperature = json.loads(calibration_path.read_text())
         threshold = json.loads(threshold_path.read_text())
         model.metadata["calibration"] = {
+            "calibration_version": temperature.get("calibration_version", 1),
             "temperature": temperature["temperature"],
+            "temperature_fit": temperature.get("temperature_fit"),
+            "warnings": temperature.get("warnings", []),
             "threshold": threshold["threshold"],
             "false_alarm_budget": threshold["false_alarm_budget"],
             "false_alarm_rate": threshold["false_alarm_rate"],
