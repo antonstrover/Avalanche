@@ -10,10 +10,15 @@ It uses separate locked models for the two oracle profiles.
 The adaptive extension uses a separate surrogate monitor.
 
 The hardened attacks now give a difficult monitor task.
-The principal perceptron recall is 0.0917.
-The GRU recall is 0.5250.
+The earlier principal perceptron recall was 0.0917.
+The earlier GRU recall was 0.5250.
 The declared recall gate is 0.8000.
 Each result uses a 0.05 false alarm budget.
+
+The reproduced held-out perceptron recall is 0.0000.
+The reproduced held-out GRU recall is 0.3958.
+The committed fixture required zero values for ten missing context features.
+Regenerate this evidence after the dataset fixture update.
 
 These values measure attack-active control steps.
 Do not interpret them as episode detection rates.

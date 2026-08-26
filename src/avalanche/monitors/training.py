@@ -48,6 +48,19 @@ class Calibration:
 
 
 @dataclass(frozen=True)
+class ModelComparison:
+    """Store one model result from the declared held-out comparison."""
+
+    model_kind: str
+    validation_false_alarm_rate: float
+    validation_sleeper_recall: float
+    held_out_false_alarm_rate: float
+    held_out_sleeper_recall: float
+    held_out_rows: int
+    held_out_sleeper_rows: int
+
+
+@dataclass(frozen=True)
 class WindowBatch:
     """Store complete fixed windows and their run identities."""
 
@@ -258,6 +271,56 @@ def calibrate_and_gate(
         recall=recall,
         sleeper_recall=sleeper_recall,
     )
+
+
+def compare_declared_models(
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+    held_out: pd.DataFrame,
+    *,
+    config: TrainingConfig | None = None,
+) -> tuple[ModelComparison, ModelComparison]:
+    """Compare the declared models on the same held-out window endpoints."""
+    config = config or TrainingConfig()
+    profile = InformationProfile(config.information_profile)
+    feature_names = feature_names_for(profile)
+    validation_windows = build_run_windows(validation, feature_names)
+    held_out_windows = build_run_windows(held_out, feature_names)
+    validation_rows = _window_rows(validation, validation_windows)
+    held_out_rows = _window_rows(held_out, held_out_windows)
+
+    perceptron = train_perceptron(train, validation, config)
+    perceptron_calibration = calibrate_and_gate(
+        perceptron.logits(_features(validation_rows, profile)),
+        validation_rows,
+    )
+    perceptron_result = _comparison_result(
+        "perceptron",
+        perceptron.logits(_features(held_out_rows, profile)),
+        held_out_rows,
+        perceptron_calibration,
+    )
+
+    train_windows = build_run_windows(train, feature_names)
+    gru = train_gru(
+        train_windows,
+        feature_names,
+        seed=config.seed,
+        epochs=config.epochs,
+        learning_rate=config.learning_rate,
+        information_profile=profile,
+    )
+    gru_calibration = calibrate_and_gate(
+        gru.logits(validation_windows.features),
+        validation_rows,
+    )
+    gru_result = _comparison_result(
+        "gru",
+        gru.logits(held_out_windows.features),
+        held_out_rows,
+        gru_calibration,
+    )
+    return perceptron_result, gru_result
 
 
 def train_locked_monitor(
@@ -473,6 +536,32 @@ def _window_rows(frame: pd.DataFrame, windows: WindowBatch) -> pd.DataFrame:
         for run_id, step in zip(windows.run_ids, windows.end_steps, strict=True)
     ]
     return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def _comparison_result(
+    model_kind: str,
+    logits: np.ndarray,
+    held_out: pd.DataFrame,
+    calibration: Calibration,
+) -> ModelComparison:
+    """Score one calibrated model on the common held-out rows."""
+    labels = held_out[ATTACK_LABEL].to_numpy(dtype=int)
+    attack_kind = held_out["attack_kind"].to_numpy(dtype=str)
+    scores = _sigmoid(np.asarray(logits, dtype=float) / calibration.temperature)
+    predicted = scores >= calibration.threshold
+    sleeper = (attack_kind == "sleeper_saboteur") & (labels == 1)
+    honest = labels == 0
+    if not np.any(sleeper) or not np.any(honest):
+        raise ValueError("the held-out rows need sleeper and honest examples")
+    return ModelComparison(
+        model_kind=model_kind,
+        validation_false_alarm_rate=calibration.false_alarm_rate,
+        validation_sleeper_recall=calibration.sleeper_recall,
+        held_out_false_alarm_rate=float(np.mean(predicted[honest])),
+        held_out_sleeper_recall=float(np.mean(predicted[sleeper])),
+        held_out_rows=int(len(held_out)),
+        held_out_sleeper_rows=int(np.sum(sleeper)),
+    )
 
 
 def _save_gru(model: TrainedGRU, path: Path) -> None:
