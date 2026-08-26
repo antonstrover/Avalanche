@@ -82,6 +82,9 @@ The movement tick uses masked NumPy operations.
 The route choice groups skiers by their location and their attributes.
 The simulator rejects a piste above the skier's ability limit.
 It rejects lift advice without a safe onward route.
+The lift throughput limits the boarding rate.
+A lift queue stays outside the onboard occupancy.
+The safe capacity limits the onboard skier count.
 The compliance value controls the probability that a skier follows the advice.
 The congestion changes the effective edge speed.
 The weather changes the piste speed, the edge risk, and the lift availability.

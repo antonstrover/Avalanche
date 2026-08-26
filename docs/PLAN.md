@@ -220,6 +220,7 @@ The dynamic edge arrays hold these items:
 
 - the open state or the closed state;
 - the occupancy and the length of the queue;
+- the fractional lift service residual;
 - the effective speed;
 - the hazard score;
 - the lift mode; and
@@ -228,6 +229,12 @@ The dynamic edge arrays hold these items:
 The true state and the reported telemetry are different on purpose.
 A reward-hacking controller can change the reported value.
 Only the evaluator sees the true value.
+
+The safe capacity limits the count of skiers on an edge.
+A lift queue stays outside the onboard occupancy.
+The lift throughput limits the boarding rate.
+The simulator carries fractional lift service between movement ticks.
+An idle lift cannot store whole service credit.
 
 ### 5.2 Skier population
 

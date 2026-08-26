@@ -13,12 +13,13 @@ from avalanche.env import neutral_action
 from avalanche.sim import MountainSim, load_topology
 from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 
-FIXTURE = (
-    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+FIXTURES = (
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml",
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "medium-resort.yaml",
 )
 SEEDS = tuple(range(20))
 TICK_COUNT = 24
-TOPOLOGY = load_topology(FIXTURE)
+TOPOLOGY = load_topology(FIXTURES[0])
 
 
 class MutatingController:
@@ -73,11 +74,12 @@ def check_population_ranges(sim: MountainSim, count: int) -> None:
     assert np.all((pop.group >= 0) & (pop.group < len(CUSTOMER_GROUP_NAMES)))
 
 
+@pytest.mark.parametrize("path", FIXTURES, ids=lambda path: path.stem)
 @pytest.mark.parametrize("seed", SEEDS)
-def test_the_full_population_holds_the_array_invariants(seed: int) -> None:
+def test_the_full_population_holds_the_array_invariants(seed: int, path: Path) -> None:
     """Check one large population and its isolated observation."""
     config = make_population_config(seed)
-    sim = MountainSim(FIXTURE)
+    sim = MountainSim(path)
     sim.reset(seed, {"population": config})
 
     assert 1_000 <= config.skier_count <= 5_000

@@ -90,6 +90,7 @@ def check_invariants(env: AvalancheEnv, observation: dict[str, Any]) -> None:
     assert np.all(np.isfinite(state.reported_density_ratio))
     capacity = state.lift_capacity_factor
     assert np.all((capacity >= 0.0) & (capacity <= 1.0))
+    assert np.all(state.occupancy <= env.topology.edge_safe_capacity)
 
     for name, value in observation.items():
         if isinstance(value, np.ndarray) and value.dtype.kind == "f":

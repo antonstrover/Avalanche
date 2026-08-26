@@ -44,6 +44,7 @@ class DynamicState:
     Weather and failure closures stay in separate arrays.
     `occupancy` holds the count of skiers on each edge.
     `queue_length` holds the count of waiting skiers of each edge.
+    `lift_service_residual` holds unused fractional service for each lift.
     `speed_factor` scales the advance of a skier on each edge.
     `advice_edge[node, ability]` is the edge that the advice offers at one node.
     `crowd_messages[node, customer_group]` changes the compliance at one node.
@@ -84,6 +85,9 @@ class DynamicState:
         default_factory=lambda: np.zeros(0, dtype=np.bool_)
     )
     lift_capacity_factor: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    lift_service_residual: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.float64)
     )
     crowd_messages: np.ndarray = field(
@@ -156,6 +160,7 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         lift_stopped=np.zeros(topology.edge_count, dtype=np.bool_),
         telemetry_late=np.zeros(topology.edge_count, dtype=np.bool_),
         lift_capacity_factor=np.ones(topology.edge_count, dtype=np.float64),
+        lift_service_residual=np.zeros(topology.edge_count, dtype=np.float64),
         crowd_messages=np.zeros(
             (topology.node_count, len(CUSTOMER_GROUP_NAMES)), dtype=np.float64
         ),
@@ -244,27 +249,47 @@ def serve_lift_queues(
     """Move the served skiers from a lift queue onto the lift.
 
     The lift throughput is a count of skiers in each hour.
-    The service of one tick is that rate times the tick length.
-    The service takes a whole skier, so the capacity truncates to an integer.
+    The residual carries fractional service between ticks.
+    Closed or stopped lifts do not add service.
+    Each tick discards unused whole service credit.
+    The safe capacity limits the onboard skier count.
     The queue ticket gives the order of the service, which is first in and first out.
     """
-    queued = np.flatnonzero(pop.location_kind == LocationKind.QUEUE)
-    if queued.size == 0:
-        return
-
-    edges = pop.location_index[queued]
-    members, rank = group_rank(edges, pop.queue_ticket[queued])
-    capacity = (
-        (topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR)
+    lift = topology.edge_type == LIFT_EDGE
+    operational = lift & ~effective_closed(state) & ~state.lift_stopped
+    state.lift_service_residual[operational] += (
+        (
+            topology.edge_lift_throughput[operational].astype(np.float64)
+            / SECONDS_IN_HOUR
+        )
         * tick_seconds
-        * state.lift_capacity_factor
+        * state.lift_capacity_factor[operational]
     )
-    capacity[effective_closed(state)] = 0.0
-    served = queued[members][rank < capacity[edges[members]].astype(np.int64)]
 
-    pop.location_kind[served] = LocationKind.LIFT
-    pop.progress[served] = 0.0
-    pop.queue_ticket[served] = -1
+    queued = np.flatnonzero(pop.location_kind == LocationKind.QUEUE)
+    if queued.size > 0:
+        edges = pop.location_index[queued]
+        members, rank = group_rank(edges, pop.queue_ticket[queued])
+        service = np.floor(state.lift_service_residual).astype(np.int64)
+        service[~operational] = 0
+        room = np.maximum(
+            topology.edge_safe_capacity.astype(np.int64) - state.occupancy,
+            0,
+        )
+        boarding_limit = np.minimum(service, room)
+        served = queued[members][rank < boarding_limit[edges[members]]]
+
+        served_edges = pop.location_index[served]
+        served_count = np.bincount(served_edges, minlength=topology.edge_count).astype(
+            np.int64
+        )
+        state.lift_service_residual -= served_count
+
+        pop.location_kind[served] = LocationKind.LIFT
+        pop.progress[served] = 0.0
+        pop.queue_ticket[served] = -1
+
+    state.lift_service_residual -= np.floor(state.lift_service_residual)
 
 
 def advance_on_edges(
@@ -327,7 +352,8 @@ def select_next_edges(
     A piste edge at its safe capacity accepts no new skier.
     The refused skiers wait at the node and try again in the next tick.
     The skier index gives the order of the admission, so the run is deterministic.
-    A lift edge takes no limit, because the queue and the throughput bound it.
+    A lift queue has no admission limit.
+    Lift service applies the onboard limit before boarding.
     """
     at_node = np.flatnonzero(
         (pop.location_kind == LocationKind.NODE) & (pop.status == Status.ACTIVE)

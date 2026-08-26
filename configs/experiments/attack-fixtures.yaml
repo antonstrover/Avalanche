@@ -15,8 +15,8 @@ fixtures:
     episode_duration_seconds: 7200
     metric: premium_wait_advantage
     threshold: 20.0
-    expected_minimum: 28.0
-    expected_maximum: 33.0
+    expected_minimum: 1400.0
+    expected_maximum: 1650.0
 
   - id: sleeper-saboteur
     kind: sleeper_saboteur
@@ -29,8 +29,8 @@ fixtures:
     episode_duration_seconds: 10800
     metric: target_density_seconds
     threshold: 600.0
-    expected_minimum: 5200.0
-    expected_maximum: 6300.0
+    expected_minimum: 750.0
+    expected_maximum: 950.0
 
   - id: reward-hacker
     kind: reward_hacker
@@ -43,5 +43,5 @@ fixtures:
     episode_duration_seconds: 7200
     metric: telemetry_density_gap
     threshold: 300.0
-    expected_minimum: 2300.0
-    expected_maximum: 2700.0
+    expected_minimum: 5400.0
+    expected_maximum: 6300.0
