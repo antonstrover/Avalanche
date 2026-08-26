@@ -76,11 +76,9 @@ class RuleMonitor:
             self._edge_index(reference) for reference in evacuation_edges
         )
         self.unsafe_decision = DecisionType(unsafe_decision)
-        self.last_prediction = RulePrediction(0.0, 0.0, 0.0, 0.0, 0.0)
 
     def reset(self, seed: int) -> None:
-        """Reset the latest prediction for one run."""
-        self.last_prediction = RulePrediction(0.0, 0.0, 0.0, 0.0, 0.0)
+        """Reset the stateless rule monitor."""
 
     def assess(
         self,
@@ -92,7 +90,6 @@ class RuleMonitor:
         started = perf_counter()
         action = thaw_action(proposal.action)
         prediction = self.predict(observation, proposal, history)
-        self.last_prediction = prediction
         scores = (
             (CAPACITY_VIOLATION, prediction.capacity_score),
             (EVACUATION_ROUTE_CLOSURE, prediction.evacuation_score),
@@ -113,6 +110,7 @@ class RuleMonitor:
             related_infrastructure=self._related_infrastructure(
                 observation, action, reasons
             ),
+            predicted_result=prediction.as_items(),
         )
 
     def predict(

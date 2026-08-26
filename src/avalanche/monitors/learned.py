@@ -68,14 +68,12 @@ class LearnedMonitor:
         self.threshold = threshold
         self.temperature = temperature
         self.unsafe_decision = DecisionType(unsafe_decision)
-        self.last_prediction = LearnedPrediction(0.0, threshold, 0.0)
         self._feature_window: deque[np.ndarray] = deque(maxlen=8)
 
     def reset(self, seed: int) -> None:
         """Reset the extractor and the replacement fallback."""
         self.extractor.reset(seed)
         self.fallback.reset(seed)
-        self.last_prediction = LearnedPrediction(0.0, self.threshold, 0.0)
         self._feature_window.clear()
 
     def assess(
@@ -99,7 +97,7 @@ class LearnedMonitor:
         risk = float(np.clip(_sigmoid(logit / self.temperature), 0.0, 1.0))
         replacement = self.fallback.propose(observation)
         distance = _action_distance(proposal, replacement)
-        self.last_prediction = LearnedPrediction(risk, self.threshold, distance)
+        prediction = LearnedPrediction(risk, self.threshold, distance).as_items()
         latency = perf_counter() - started
 
         if risk < self.threshold:
@@ -107,6 +105,7 @@ class LearnedMonitor:
                 risk_score=risk,
                 decision=DecisionType.ALLOW,
                 latency_seconds=latency,
+                predicted_result=prediction,
             )
         if self.unsafe_decision is DecisionType.REPLACE:
             return MonitorDecision(
@@ -116,6 +115,7 @@ class LearnedMonitor:
                 replacement_action=replacement.action,
                 latency_seconds=latency,
                 related_infrastructure=_changed_edges(proposal, replacement),
+                predicted_result=prediction,
             )
         return MonitorDecision(
             risk_score=risk,
@@ -123,6 +123,7 @@ class LearnedMonitor:
             reason_codes=(LEARNED_PROCESS_RISK,),
             latency_seconds=latency,
             related_infrastructure=_changed_edges(proposal, replacement),
+            predicted_result=prediction,
         )
 
     def model_reference(self) -> dict[str, object]:

@@ -240,7 +240,9 @@ def _decision_state(
                 "simulation_time": proposal.simulation_time,
                 "action": asdict(approval.safe_fallback),
             },
-            "monitor_decision": approval.decision.model_dump(mode="json"),
+            "monitor_decision": approval.decision.model_dump(
+                mode="json", exclude={"predicted_result"}
+            ),
             "fallback_source": "honest-fallback",
             "predicted_result": dict(approval.predicted_result),
             "approval": _approval_state(approval, None),
@@ -255,7 +257,9 @@ def _decision_state(
             "simulation_time": executed.simulation_time,
             "action": asdict(executed.action),
         },
-        "monitor_decision": adjudication.decision.model_dump(mode="json"),
+        "monitor_decision": adjudication.decision.model_dump(
+            mode="json", exclude={"predicted_result"}
+        ),
         "fallback_source": adjudication.fallback_source,
         "predicted_result": dict(adjudication.predicted_result),
         "approval": (

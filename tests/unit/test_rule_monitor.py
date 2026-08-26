@@ -62,6 +62,13 @@ def test_a_safe_action_triggers_no_rule():
     decision = assess(neutral_action(TOPOLOGY))
     assert decision.decision is DecisionType.ALLOW
     assert decision.reason_codes == ()
+    assert tuple(name for name, _ in decision.predicted_result) == (
+        "capacity_score",
+        "evacuation_score",
+        "unfair_allocation_score",
+        "telemetry_score",
+        "dangerous_sequence_score",
+    )
 
 
 def test_the_capacity_rule_checks_projected_demand():

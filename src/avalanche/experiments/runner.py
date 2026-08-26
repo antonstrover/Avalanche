@@ -112,7 +112,9 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             "monitor_decision",
             resolved.monitor.kind,
             {
-                **adjudication.decision.model_dump(mode="json"),
+                **adjudication.decision.model_dump(
+                    mode="json", exclude={"predicted_result"}
+                ),
                 "fallback_source": adjudication.fallback_source,
                 "predicted_result": dict(adjudication.predicted_result),
             },

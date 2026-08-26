@@ -23,6 +23,7 @@ def test_each_decision_type_round_trips(decision: DecisionType):
         reason_codes=("TEST_REASON",),
         replacement_action=replacement,
         latency_seconds=0.01,
+        predicted_result=(("risk", 0.5), ("limit", 0.75)),
     )
 
     restored = MonitorDecision.model_validate_json(value.model_dump_json())
@@ -43,6 +44,24 @@ def test_the_decision_rejects_a_negative_latency():
             risk_score=0.0,
             decision=DecisionType.ALLOW,
             latency_seconds=-0.1,
+        )
+
+
+@pytest.mark.parametrize(
+    "prediction",
+    [
+        (("", 0.0),),
+        (("risk", 0.0), ("risk", 1.0)),
+        (("risk", float("nan")),),
+        (("risk", float("inf")),),
+    ],
+)
+def test_the_decision_rejects_an_invalid_prediction(prediction):
+    with pytest.raises(ValidationError):
+        MonitorDecision(
+            risk_score=0.0,
+            decision=DecisionType.ALLOW,
+            predicted_result=prediction,
         )
 
 

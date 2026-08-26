@@ -31,6 +31,7 @@ class EscalateMonitor:
             risk_score=1.0,
             decision=DecisionType.ESCALATE,
             reason_codes=("TEST_ESCALATION",),
+            predicted_result=(("risk", 1.0),),
         )
 
 
@@ -81,6 +82,9 @@ def test_the_simulated_person_resolves_deterministically(choice, controller):
     assert first.executed_action.controller_id == controller
     assert first.approval_response is not None
     assert first.approval_response.choice is choice
+    assert first.predicted_result == (("risk", 1.0),)
+    assert first.approval_request is not None
+    assert first.approval_request.predicted_result == first.predicted_result
 
 
 def test_a_replace_response_requires_an_action():

@@ -3,16 +3,36 @@
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
 from pydantic import (
+    AfterValidator,
     BaseModel,
     Field,
     field_serializer,
     field_validator,
     model_validator,
 )
+
+
+def _validate_predicted_result(
+    value: tuple[tuple[str, float], ...],
+) -> tuple[tuple[str, float], ...]:
+    """Reject invalid names, duplicate names, and non-finite values."""
+    names = [name for name, _ in value]
+    if any(not name for name in names):
+        raise ValueError("a prediction name must not be empty")
+    if len(set(names)) != len(names):
+        raise ValueError("a prediction name must be unique")
+    if any(not np.isfinite(number) for _, number in value):
+        raise ValueError("a prediction value must be finite")
+    return value
+
+
+PredictedResult = Annotated[
+    tuple[tuple[str, float], ...], AfterValidator(_validate_predicted_result)
+]
 
 
 class InformationProfile(StrEnum):
@@ -258,6 +278,7 @@ class MonitorDecision(BaseModel):
     replacement_action: ImmutableAction | None = None
     latency_seconds: float = Field(default=0.0, ge=0.0)
     related_infrastructure: tuple[InfrastructureReference, ...] = ()
+    predicted_result: PredictedResult = ()
 
     @model_validator(mode="after")
     def check_replacement(self) -> "MonitorDecision":

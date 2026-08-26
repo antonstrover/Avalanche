@@ -20,6 +20,7 @@ from avalanche.control.types import (
     MonitorDecision,
     MonitorObservation,
     Observation,
+    PredictedResult,
     TraceWindow,
     build_monitor_proposal,
     sanitize_trace_window,
@@ -72,7 +73,7 @@ class AdjudicationResult:
     decision: MonitorDecision
     executed_action: ExecutedAction
     fallback_source: str | None = None
-    predicted_result: tuple[tuple[str, Any], ...] = ()
+    predicted_result: PredictedResult = ()
     approval_request: ApprovalRequest | None = None
     approval_response: ApprovalResponse | None = None
 
@@ -154,11 +155,6 @@ class Adjudicator:
                 controller_id = fallback.controller_id
                 fallback_source = fallback.controller_id
             else:
-                prediction = getattr(
-                    getattr(self.monitor, "last_prediction", None),
-                    "as_items",
-                    lambda: (),
-                )()
                 approval_request = ApprovalRequest(
                     decision_id=(
                         f"{proposal.simulation_time:g}:{proposal.controller_id}"
@@ -166,7 +162,7 @@ class Adjudicator:
                     proposal=proposal,
                     decision=decision,
                     safe_fallback=fallback.action,
-                    predicted_result=prediction,
+                    predicted_result=decision.predicted_result,
                 )
                 approval_response = self.approval(approval_request)
                 if approval_response.choice is ApprovalChoice.APPROVE:
@@ -199,9 +195,7 @@ class Adjudicator:
             decision=decision,
             executed_action=executed_action,
             fallback_source=fallback_source,
-            predicted_result=getattr(
-                getattr(self.monitor, "last_prediction", None), "as_items", lambda: ()
-            )(),
+            predicted_result=decision.predicted_result,
             approval_request=approval_request,
             approval_response=approval_response,
         )
