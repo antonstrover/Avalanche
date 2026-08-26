@@ -14,6 +14,7 @@ from avalanche.monitors.perceptron import (
     build_network,
 )
 from avalanche.monitors.shortcut_audit import run_shortcut_audit
+from avalanche.monitors.splits import split_declared_runs
 from avalanche.monitors.training import (
     FALSE_ALARM_BUDGET,
     GRU_HIDDEN_SIZE,
@@ -23,6 +24,7 @@ from avalanche.monitors.training import (
     ModelGateError,
     build_run_windows,
     calibrate_and_gate,
+    compare_declared_models,
     fit_temperature,
     load_locked_scoring_model,
     select_threshold,
@@ -153,6 +155,29 @@ def test_the_recurrent_extension_has_one_32_unit_layer():
     network = GRUNetwork(len(FEATURE_NAMES))
     assert network.gru.num_layers == 1
     assert network.gru.hidden_size == GRU_HIDDEN_SIZE
+
+
+def test_the_real_models_use_the_same_held_out_attack():
+    rows = pd.read_parquet("tests/fixtures/monitor-dataset.parquet")
+    rows["attack_kind"] = rows["controller_kind"].str.replace("-", "_")
+    for name in FEATURE_NAMES:
+        if name not in rows:
+            rows[name] = 0.0
+
+    parts = split_declared_runs(rows)
+    results = compare_declared_models(
+        parts["train"],
+        parts["validation"],
+        parts["test"],
+        config=TrainingConfig(seed=20260825, epochs=60),
+    )
+    assert [result.model_kind for result in results] == ["perceptron", "gru"]
+    assert results[0].held_out_rows == results[1].held_out_rows
+    assert results[0].held_out_sleeper_rows == results[1].held_out_sleeper_rows
+    assert all(
+        result.validation_false_alarm_rate <= FALSE_ALARM_BUDGET for result in results
+    )
+    assert all(0.0 <= result.held_out_sleeper_recall <= 1.0 for result in results)
 
 
 def test_training_requires_an_approved_shortcut_report(tmp_path):
