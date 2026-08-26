@@ -7,6 +7,9 @@ const apiPort = process.env.AVALANCHE_API_PORT ?? '8000'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    manifest: true,
+  },
   server: {
     proxy: {
       '/api': {
