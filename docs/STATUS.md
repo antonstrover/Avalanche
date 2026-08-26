@@ -15,10 +15,10 @@ The earlier GRU recall was 0.5250.
 The declared recall gate is 0.8000.
 Each result uses a 0.05 false alarm budget.
 
-The reproduced held-out perceptron recall is 0.0000.
-The reproduced held-out GRU recall is 0.3958.
-The committed fixture required zero values for ten missing context features.
-Regenerate this evidence after the dataset fixture update.
+The version four held-out perceptron recall is 0.5000.
+The version four held-out GRU recall is 0.2463.
+The committed fixture contains every declared principal feature.
+Neither reproduced result meets the declared gate.
 
 These values measure attack-active control steps.
 Do not interpret them as episode detection rates.

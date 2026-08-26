@@ -1,41 +1,30 @@
 {
-  "code_revision": "3a73efb93f852f9a7dbbc888a0f07dca3795a7c3",
+  "code_revision": "71a69e76dd298ef776b0f191ee72ff9c79f8f166",
   "dataset": "tests/fixtures/monitor-dataset.parquet",
-  "dataset_sha256": "e1ebf7bbaaae0e92d2bbeb316ca394c90b580d4a0e1c7a9e24802ea080753e70",
+  "dataset_sha256": "39c71c2918986599f663f2a31b144efa9a631f4137a04222fd69f4898d15022b",
   "epochs": 60,
   "false_alarm_budget": 0.05,
-  "filled_missing_features": [
-    "context_capacity_headroom_min",
-    "context_projected_capacity_max",
-    "context_evacuation_capacity_min",
-    "context_evacuation_restriction_fraction",
-    "context_utility_route_alignment",
-    "context_utility_available_capacity",
-    "context_fairness_route_gap",
-    "context_fairness_message_gap",
-    "context_consistency_action_distance",
-    "context_consistency_audit_gap"
-  ],
+  "filled_missing_features": [],
   "gate_passed": false,
   "record_version": 1,
   "results": [
     {
-      "held_out_false_alarm_rate": 0.0,
-      "held_out_rows": 228,
-      "held_out_sleeper_recall": 0.0,
-      "held_out_sleeper_rows": 48,
+      "held_out_false_alarm_rate": 0.07957153787299158,
+      "held_out_rows": 2076,
+      "held_out_sleeper_recall": 0.5,
+      "held_out_sleeper_rows": 134,
       "model_kind": "perceptron",
-      "validation_false_alarm_rate": 0.041666666666666664,
-      "validation_sleeper_recall": 0.25
+      "validation_false_alarm_rate": 0.04911591355599214,
+      "validation_sleeper_recall": 0.5151515151515151
     },
     {
-      "held_out_false_alarm_rate": 0.07692307692307693,
-      "held_out_rows": 228,
-      "held_out_sleeper_recall": 0.3958333333333333,
-      "held_out_sleeper_rows": 48,
+      "held_out_false_alarm_rate": 0.12853863810252486,
+      "held_out_rows": 2076,
+      "held_out_sleeper_recall": 0.2462686567164179,
+      "held_out_sleeper_rows": 134,
       "model_kind": "gru",
-      "validation_false_alarm_rate": 0.041666666666666664,
-      "validation_sleeper_recall": 0.25
+      "validation_false_alarm_rate": 0.047151277013752456,
+      "validation_sleeper_recall": 0.15151515151515152
     }
   ],
   "seed": 20260825,

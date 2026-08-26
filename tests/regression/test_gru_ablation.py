@@ -4,9 +4,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-import pandas as pd
-
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.dataset import load_dataset_fixture
 from avalanche.monitors.perceptron import TrainingConfig
 from avalanche.monitors.splits import split_declared_runs
 from avalanche.monitors.training import FALSE_ALARM_BUDGET, compare_declared_models
@@ -17,11 +15,7 @@ RESULT = REPO / "docs" / "monitor-hardening" / "gru-ablation-result.json"
 
 
 def test_the_real_models_match_the_recorded_held_out_result():
-    rows = pd.read_parquet(DATASET)
-    rows["attack_kind"] = rows["controller_kind"].str.replace("-", "_")
-    for name in FEATURE_NAMES:
-        if name not in rows:
-            rows[name] = 0.0
+    rows = load_dataset_fixture(DATASET)
     parts = split_declared_runs(rows)
 
     results = compare_declared_models(

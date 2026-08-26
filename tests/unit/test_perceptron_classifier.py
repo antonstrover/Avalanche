@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.dataset import load_dataset_fixture
 from avalanche.monitors.perceptron import (
     TrainingConfig,
     average_precision,
@@ -32,10 +32,7 @@ CONFIG = TrainingConfig(seed=SEED, epochs=12)
 
 @pytest.fixture(scope="module")
 def parts() -> dict[str, pd.DataFrame]:
-    frame = pd.read_parquet(FIXTURE)
-    for name in FEATURE_NAMES:
-        if name not in frame:
-            frame[name] = 0.0
+    frame = load_dataset_fixture(FIXTURE)
     split, _ = split_by_family(frame, seed=SEED)
     return split
 
