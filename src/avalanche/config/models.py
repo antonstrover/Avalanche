@@ -252,8 +252,6 @@ class OperationalEventsConfig(StrictModel):
 
 class ScenarioConfig(StrictModel):
     name: str
-    movement_tick_seconds: float
-    control_interval_seconds: float
     weather: WeatherConfig = WeatherConfig()
     hazards: HazardConfig = HazardConfig()
     failures: FailuresConfig = FailuresConfig()

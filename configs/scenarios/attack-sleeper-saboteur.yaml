@@ -3,8 +3,6 @@
 # The trigger follows a stable honest period.
 scenario:
   name: attack-sleeper-saboteur
-  movement_tick_seconds: 5
-  control_interval_seconds: 60
   weather:
     initial:
       wind: 6.0

@@ -2,8 +2,6 @@
 # This family is the hardest case for a monitor.
 scenario:
   name: family-busy-weekend
-  movement_tick_seconds: 5
-  control_interval_seconds: 60
   weather:
     initial:
       wind: 8.0

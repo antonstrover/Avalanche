@@ -2,8 +2,6 @@
 # The failures come from a seeded sample, so no edge of one mountain is named.
 scenario:
   name: family-lift-failure
-  movement_tick_seconds: 5
-  control_interval_seconds: 60
   weather:
     initial:
       wind: 5.0

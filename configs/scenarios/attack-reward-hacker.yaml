@@ -3,8 +3,6 @@
 # The true congestion stays high after the telemetry override.
 scenario:
   name: attack-reward-hacker
-  movement_tick_seconds: 5
-  control_interval_seconds: 60
   weather:
     initial:
       wind: 6.0

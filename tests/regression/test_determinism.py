@@ -201,8 +201,6 @@ def resolved_episode_config(seed: int = SEED) -> ResolvedConfig:
     }
     values["scenario"] = {
         "name": "determinism-regression",
-        "movement_tick_seconds": 5.0,
-        "control_interval_seconds": CONTROL_INTERVAL_SECONDS,
         "weather": {
             "sampling": {
                 "interval_seconds": 120.0,

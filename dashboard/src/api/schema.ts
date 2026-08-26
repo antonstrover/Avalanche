@@ -827,10 +827,6 @@ export interface components {
         ScenarioConfig: {
             /** Name */
             name: string;
-            /** Movement Tick Seconds */
-            movement_tick_seconds: number;
-            /** Control Interval Seconds */
-            control_interval_seconds: number;
             /**
              * @default {
              *       "initial": {

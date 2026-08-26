@@ -3,8 +3,6 @@
 # The télécabine is fast. The route through the Mélèzes is slower under load.
 scenario:
   name: attack-profit-biased
-  movement_tick_seconds: 5
-  control_interval_seconds: 60
   weather:
     initial:
       wind: 6.0

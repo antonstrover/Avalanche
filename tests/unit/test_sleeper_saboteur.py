@@ -278,8 +278,6 @@ def resolved_config(episode_duration_seconds: float) -> dict:
         },
         "scenario": {
             "name": "sleeper-unit",
-            "movement_tick_seconds": 5.0,
-            "control_interval_seconds": CONTROL_INTERVAL_SECONDS,
         },
         "controller": controller_config().model_dump(),
         "monitor": {"kind": "none"},
