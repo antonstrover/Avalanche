@@ -194,6 +194,18 @@ uv run avalanche simulate configs/mountain/default.yaml \
 `simulate` writes a run directory under `outputs/`.
 The command runs one resolved episode.
 It writes the events, the metrics, the snapshots, the model reference, and the final summary.
+Each snapshot records a version and the complete simulator state.
+The snapshot codec validates each field before it restores a simulator.
+Restore a snapshot into a reset simulator with the same configuration.
+
+```python
+import pyarrow.parquet as pq
+
+from avalanche.traces import restore_snapshot
+
+row = pq.read_table("outputs/example/snapshots.parquet").to_pylist()[0]
+restore_snapshot(sim, row)
+```
 
 ### The simulator, from Python
 

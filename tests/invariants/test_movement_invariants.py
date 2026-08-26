@@ -22,6 +22,7 @@ from avalanche.sim import (
 )
 from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.routes import NO_EDGE
+from avalanche.traces import encode_snapshot, restore_snapshot
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -98,6 +99,28 @@ def check_one_valid_state(sim):
 
     finished = pop.location_kind == LocationKind.FINISHED
     assert np.all(finished == (pop.status == Status.COMPLETE))
+
+
+def test_snapshot_restoration_keeps_the_population_invariants():
+    """Restore one moving population without changing its valid states."""
+    population, _ = build_scenario(4)
+    original = MountainSim(FIXTURE)
+    original.reset(4)
+    original.population = population
+    original.tick()
+    row = encode_snapshot(
+        original,
+        run_id="invariant",
+        episode_id="episode-0",
+        seed=4,
+    )
+    restored = MountainSim(FIXTURE)
+    restored.reset(4)
+
+    restore_snapshot(restored, row)
+
+    assert len(restored.population) == len(original.population)
+    check_one_valid_state(restored)
 
 
 @pytest.mark.parametrize("seed", SEEDS)

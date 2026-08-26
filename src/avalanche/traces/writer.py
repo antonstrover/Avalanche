@@ -5,12 +5,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from avalanche.metrics import MetricSnapshot
 from avalanche.sim.engine import MountainSim
+from avalanche.traces.snapshots import encode_snapshot
 
 EVENT_SCHEMA_VERSION = 1
 
@@ -87,30 +87,13 @@ class TraceWriter:
 
     def record_snapshot(self, sim: MountainSim) -> None:
         """Buffer one typed replay snapshot."""
-        population = sim.population
-        state = sim.state
         self.snapshot_rows.append(
-            {
-                "run_id": self.run_id,
-                "episode_id": self.episode_id,
-                "seed": self.seed,
-                "simulation_time": sim.simulation_time,
-                "step": sim.step,
-                "state_checksum": sim.state_checksum(),
-                "skier_count": len(population),
-                "edge_count": int(state.occupancy.size),
-                "location_kind_i8": _bytes(population.location_kind, "i1"),
-                "location_index_i32": _bytes(population.location_index, "<i4"),
-                "progress_f32": _bytes(population.progress, "<f4"),
-                "status_i8": _bytes(population.status, "i1"),
-                "destination_i32": _bytes(population.destination, "<i4"),
-                "ability_i8": _bytes(population.ability, "i1"),
-                "group_i8": _bytes(population.group, "i1"),
-                "arrival_time_f64": _bytes(population.arrival_time, "<f8"),
-                "edge_closed_i8": _bytes(state.closed, "i1"),
-                "edge_occupancy_i32": _bytes(state.occupancy, "<i4"),
-                "edge_queue_i32": _bytes(state.queue_length, "<i4"),
-            }
+            encode_snapshot(
+                sim,
+                run_id=self.run_id,
+                episode_id=self.episode_id,
+                seed=self.seed,
+            )
         )
 
     def close(
@@ -143,8 +126,3 @@ class TraceWriter:
         (self.output_dir / "model-reference.json").write_text(
             json.dumps(model_reference, indent=2, sort_keys=True), encoding="utf-8"
         )
-
-
-def _bytes(values: np.ndarray, dtype: str) -> bytes:
-    """Return contiguous bytes with one declared portable dtype."""
-    return np.asarray(values, dtype=np.dtype(dtype)).tobytes()
