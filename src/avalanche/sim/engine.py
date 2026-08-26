@@ -78,6 +78,17 @@ DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
 
 
+def _spawn_random_streams(seed: int) -> dict[str, np.random.Generator]:
+    """Create each independent random stream for one run."""
+    return dict(
+        zip(
+            STREAM_NAMES,
+            np.random.default_rng(seed).spawn(len(STREAM_NAMES)),
+            strict=True,
+        )
+    )
+
+
 class MountainSim:
     """The mountain simulator of one run.
 
@@ -123,13 +134,7 @@ class MountainSim:
 
         # 1. Make the independent random streams from the run seed.
         # A change of one part must not change the numbers of another part.
-        self.streams = dict(
-            zip(
-                STREAM_NAMES,
-                np.random.default_rng(seed).spawn(len(STREAM_NAMES)),
-                strict=True,
-            )
-        )
+        self.streams = _spawn_random_streams(seed)
 
         # 2. Load the immutable topology and the route table.
         self.topology = load_topology(self.mountain_path)

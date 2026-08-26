@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import torch
 
+import avalanche.sim.engine as engine
 from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir
 from avalanche.control import DecisionType
 from avalanche.experiments import run_episode
@@ -28,6 +29,7 @@ from avalanche.monitors.perceptron import (
     train_perceptron,
 )
 from avalanche.monitors.splits import split_by_family
+from avalanche.sim import MountainSim
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "configs"
@@ -81,11 +83,15 @@ def ablation_model_path(tmp_path) -> Path:
     return save_model(model, tmp_path / "ablation.pt")
 
 
-def resolve(model_path: Path, controller: str) -> ResolvedConfig:
+def resolve(
+    model_path: Path,
+    controller: str,
+    scenario: str = "family-calm.yaml",
+) -> ResolvedConfig:
     """Resolve one short episode under the learned monitor."""
     merged = load_and_merge(
         CONFIGS / "mountain" / "small.yaml",
-        CONFIGS / "scenarios" / "family-calm.yaml",
+        CONFIGS / "scenarios" / scenario,
         CONFIGS / "controllers" / "small-resort" / controller,
         CONFIGS / "monitors" / "learned.yaml",
     )
@@ -98,6 +104,82 @@ def resolve(model_path: Path, controller: str) -> ResolvedConfig:
         # The short episode needs an early trigger.
         attack["trigger"]["time_seconds"] = 300.0
     return ResolvedConfig.model_validate(merged)
+
+
+def _monitor_isolation_pair(model_path: Path) -> tuple[ResolvedConfig, ResolvedConfig]:
+    """Return paired monitor configurations with sampled external inputs."""
+    monitored = resolve(
+        model_path,
+        "reward-hacker.yaml",
+        "family-busy-weekend.yaml",
+    )
+    monitored_values = monitored.model_dump()
+    monitored_values["monitor"]["decision_threshold"] = 0.0
+    monitored = ResolvedConfig.model_validate(monitored_values)
+    unmonitored_values = monitored.model_dump()
+    unmonitored_values["monitor"] = {"kind": "none"}
+    unmonitored = ResolvedConfig.model_validate(unmonitored_values)
+    return monitored, unmonitored
+
+
+def _reset_external_inputs(resolved: ResolvedConfig) -> MountainSim:
+    """Reset one simulator with every external input from a run."""
+    sim = MountainSim(REPO / resolved.mountain.path)
+    sim.reset(
+        resolved.seed,
+        {
+            "population": resolved.population,
+            "weather": resolved.scenario.weather,
+            "failures": resolved.scenario.failures,
+            "operational_events": resolved.scenario.operational_events,
+        },
+    )
+    return sim
+
+
+def _assert_same_external_inputs(left: MountainSim, right: MountainSim) -> None:
+    """Compare each population sample and each resolved external schedule."""
+    left_population = dict(left.population.checksum_fields())
+    right_population = dict(right.population.checksum_fields())
+    assert left_population.keys() == right_population.keys(), (
+        "population fields changed"
+    )
+    for name, values in left_population.items():
+        np.testing.assert_array_equal(
+            values,
+            right_population[name],
+            err_msg=f"population.{name}",
+        )
+
+    np.testing.assert_array_equal(
+        left.weather.as_array(),
+        right.weather.as_array(),
+        err_msg="weather.initial",
+    )
+    assert left.weather_schedule is not None
+    assert right.weather_schedule is not None
+    assert left.failure_schedule is not None
+    assert right.failure_schedule is not None
+    assert left.operational_event_schedule is not None
+    assert right.operational_event_schedule is not None
+    for name, left_schedule, right_schedule in (
+        (
+            "weather.transitions",
+            left.weather_schedule.transitions,
+            right.weather_schedule.transitions,
+        ),
+        (
+            "failures.events",
+            left.failure_schedule.events,
+            right.failure_schedule.events,
+        ),
+        (
+            "operational_events.events",
+            left.operational_event_schedule.events,
+            right.operational_event_schedule.events,
+        ),
+    ):
+        assert left_schedule == right_schedule, f"external.{name} changed"
 
 
 def test_the_learned_monitor_runs_through_the_adjudicator(model_path, tmp_path):
@@ -181,26 +263,44 @@ def test_a_learned_run_records_latency_as_performance(model_path, tmp_path):
     assert summary["performance"]["monitor_latency_seconds_mean"] > 0.0
 
 
-def test_the_monitor_does_not_change_the_population_or_the_weather(
+def test_monitor_draws_do_not_change_an_external_input(model_path, monkeypatch):
+    """Monitor draws must not change a sampled external input."""
+    monitored, _ = _monitor_isolation_pair(model_path)
+    plain = _reset_external_inputs(monitored)
+    spawn_random_streams = engine._spawn_random_streams
+
+    def disturbed_streams(seed: int) -> dict[str, np.random.Generator]:
+        streams = spawn_random_streams(seed)
+        streams["monitor"].uniform(size=64)
+        return streams
+
+    monkeypatch.setattr(engine, "_spawn_random_streams", disturbed_streams)
+    disturbed = _reset_external_inputs(monitored)
+
+    _assert_same_external_inputs(plain, disturbed)
+
+
+def test_a_monitor_change_keeps_each_external_input_and_can_change_an_outcome(
     model_path, tmp_path
 ):
-    """A change of monitor must not move an external input, per PLAN section 6.1."""
-    monitored = resolve(model_path, "honest.yaml")
-    unmonitored = resolve(model_path, "honest.yaml")
-    unmonitored = ResolvedConfig.model_validate(
-        {
-            **unmonitored.model_dump(),
-            "monitor": {"kind": "none"},
-        }
+    """A monitor change must keep external inputs and can change an outcome."""
+    monitored, unmonitored = _monitor_isolation_pair(model_path)
+    monitored_context = monitored.model_dump()
+    unmonitored_context = unmonitored.model_dump()
+    monitored_context.pop("monitor")
+    unmonitored_context.pop("monitor")
+    assert monitored_context == unmonitored_context
+
+    _assert_same_external_inputs(
+        _reset_external_inputs(monitored),
+        _reset_external_inputs(unmonitored),
     )
 
     first = run_episode(monitored, tmp_path / "monitored")
     second = run_episode(unmonitored, tmp_path / "unmonitored")
 
-    assert (
-        first["metrics"]["completed_journeys"]
-        == second["metrics"]["completed_journeys"]
-    )
+    assert first["metrics"]["decision_counts"]["BLOCK"] > 0
+    assert first["state_checksum"] != second["state_checksum"]
 
 
 def test_a_learned_monitor_without_a_model_path_raises_an_error():
