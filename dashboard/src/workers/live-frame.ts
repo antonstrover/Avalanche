@@ -245,9 +245,9 @@ function liveDecision(value: unknown): LiveDecision | null {
         if (!Array.isArray(item.reason_codes) || !item.reason_codes.every((code) => typeof code === "string")) {
             throw new Error("the monitor reason codes are invalid");
         }
-        const references = item.related_infrastructure ?? [];
+        const references = item.related_infrastructure;
         if (!Array.isArray(references)) {
-            throw new Error("the monitor infrastructure is invalid");
+            throw new Error("the monitor related_infrastructure field is invalid");
         }
         monitor = {
             risk_score: number(item.risk_score, "monitor risk"),
@@ -452,7 +452,18 @@ export function decodeFrame(
     }
     if (version !== STREAM_VERSION && envelope.payload) {
         // An older frame carries no attack state. The scene then shows no divergence.
-        record(envelope.payload.display, "legacy display").attack = { ...NO_ATTACK };
+        const legacyDisplay = record(envelope.payload.display, "legacy display");
+        legacyDisplay.attack = { ...NO_ATTACK };
+        if (legacyDisplay.decision !== null) {
+            const legacyDecision = record(legacyDisplay.decision, "legacy decision");
+            const legacyMonitor = legacyDecision.monitor_decision;
+            if (legacyMonitor !== null) {
+                const monitor = record(legacyMonitor, "legacy monitor decision");
+                if (monitor.related_infrastructure === undefined) {
+                    monitor.related_infrastructure = [];
+                }
+            }
+        }
     }
     if (version === 3 && envelope.payload) {
         const legacyDisplay = record(envelope.payload.display, "legacy display");
