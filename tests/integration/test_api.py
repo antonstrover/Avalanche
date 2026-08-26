@@ -94,6 +94,9 @@ def test_config_options_serves_each_validated_configuration_choice():
     small = next(item for item in body["mountains"] if item["id"] == "small-resort")
     assert small["mountain"]["node_count"] == 10
     assert len(small["topology"]["edges"]) == 12
+    for mountain in body["mountains"]:
+        assert mountain["mountain"]["node_count"] == len(mountain["topology"]["nodes"])
+        assert mountain["mountain"]["edge_count"] == len(mountain["topology"]["edges"])
 
 
 def test_openapi_document_is_generated():
@@ -146,6 +149,23 @@ def test_the_api_rejects_rule_monitor_replacement():
 
     assert response.status_code == 422
     assert "rule monitor cannot use a REPLACE" in response.text
+
+
+@pytest.mark.parametrize(("field", "loaded"), [("node_count", 10), ("edge_count", 12)])
+def test_the_api_rejects_an_unverified_mountain_count(field, loaded):
+    resolved = client.post(
+        "/api/config-options/resolve",
+        json={"mountain": "small-resort", "controller": "none", "skier_count": 20},
+    ).json()
+    resolved["mountain"][field] = loaded + 1
+
+    response = client.post("/api/sessions", json={"config": resolved})
+
+    assert response.status_code == 422
+    assert resolved["mountain"]["path"] in response.text
+    assert field in response.text
+    assert str(loaded + 1) in response.text
+    assert str(loaded) in response.text
 
 
 def test_live_configuration_resolution_rejects_an_unknown_choice():

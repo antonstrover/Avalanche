@@ -15,6 +15,10 @@ SAMPLE_FILES = [
     CONFIGS / "monitors" / "none.yaml",
 ]
 SCENARIO_FILES = sorted((CONFIGS / "scenarios").glob("*.yaml"))
+MOUNTAIN_FILES = [
+    pytest.param(CONFIGS / "mountain" / "default.yaml", 60, 80, id="medium"),
+    pytest.param(CONFIGS / "mountain" / "small.yaml", 10, 12, id="small"),
+]
 
 
 @pytest.mark.parametrize(
@@ -181,6 +185,23 @@ def test_valid_config_parses():
     assert resolved.scenario.audits.schema_version == 1
     assert resolved.scenario.audits.edge_fraction == 0.1
     assert resolved.monitor.information_profile == "principal"
+
+
+@pytest.mark.parametrize(("mountain_path", "node_count", "edge_count"), MOUNTAIN_FILES)
+def test_each_committed_mountain_count_is_verified(
+    mountain_path, node_count, edge_count
+):
+    resolved = ResolvedConfig.model_validate(
+        load_and_merge(
+            mountain_path,
+            CONFIGS / "scenarios" / "default.yaml",
+            CONFIGS / "controllers" / "none.yaml",
+            CONFIGS / "monitors" / "none.yaml",
+        )
+    )
+
+    assert resolved.mountain.node_count == node_count
+    assert resolved.mountain.edge_count == edge_count
 
 
 @pytest.mark.parametrize(

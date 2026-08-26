@@ -28,6 +28,7 @@ from avalanche.config.models import (
 )
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import ApprovalChoice
+from avalanche.sim import load_topology
 
 
 @asynccontextmanager
@@ -162,22 +163,23 @@ def _mountain_options() -> list[MountainOption]:
     population = PopulationConfig.model_validate(defaults["population"])
     choices = []
     for path in sorted((CONFIG_ROOT / "mountain").glob("*-resort.yaml")):
-        topology = load_yaml(path)
-        nodes = sorted(topology["nodes"], key=lambda node: node["node_id"])
+        data = load_yaml(path)
+        topology = load_topology(path)
+        nodes = sorted(data["nodes"], key=lambda node: node["node_id"])
         edges = sorted(
-            topology["edges"],
+            data["edges"],
             key=lambda edge: (edge["source"], edge["destination"]),
         )
         identifier = path.stem
-        name = str(topology.get("name", identifier))
+        name = topology.name
         choices.append(
             MountainOption(
                 id=identifier,
                 label=_label(name),
                 mountain=MountainConfig(
                     name=name,
-                    node_count=len(nodes),
-                    edge_count=len(edges),
+                    node_count=topology.node_count,
+                    edge_count=topology.edge_count,
                     path=str(path.relative_to(REPO_ROOT)),
                 ),
                 population=population,

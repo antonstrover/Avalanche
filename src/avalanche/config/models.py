@@ -1,6 +1,7 @@
 """Typed models for the resolved run configuration."""
 
 from math import isclose, isfinite
+from pathlib import Path
 from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -516,4 +517,26 @@ class ResolvedConfig(StrictModel):
             return self
         if attack.trigger.time_seconds >= self.episode_duration_seconds:
             raise ValueError("the attack trigger must precede the episode end")
+        return self
+
+    @model_validator(mode="after")
+    def check_mountain_counts(self) -> "ResolvedConfig":
+        """Require each declared mountain count to match its topology."""
+        from avalanche.config.loader import ConfigLoadError
+        from avalanche.sim.topology import load_topology
+
+        path = Path(self.mountain.path)
+        try:
+            topology = load_topology(path)
+        except ConfigLoadError as error:
+            raise ValueError(str(error)) from error
+        for field, declared, loaded in (
+            ("node_count", self.mountain.node_count, topology.node_count),
+            ("edge_count", self.mountain.edge_count, topology.edge_count),
+        ):
+            if declared != loaded:
+                raise ValueError(
+                    f"the mountain {path} declares {field} {declared} "
+                    f"but loads {loaded}"
+                )
         return self
