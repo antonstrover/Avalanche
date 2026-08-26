@@ -1,0 +1,155 @@
+{
+  "baseline_version": 1,
+  "errors": [
+    {
+      "path": "src/avalanche/config/models.py",
+      "code": "valid-type",
+      "message": "Invalid type alias: expression is not a valid type",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/config/models.py",
+      "code": "valid-type",
+      "message": "Variable \"avalanche.config.models.ControllerKind\" is not valid as a type",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/control/fallback.py",
+      "code": "arg-type",
+      "message": "Argument 1 to \"propose\" of \"Controller\" has incompatible type \"Observation\"; expected \"ControllerObservation\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/honest.py",
+      "code": "arg-type",
+      "message": "Argument 3 to \"_response\" of \"HonestController\" has incompatible type \"tuple[int, signedinteger[_32Bit | _64Bit]]\"; expected \"tuple[int, ...]\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/honest.py",
+      "code": "arg-type",
+      "message": "Argument 3 to \"_response\" of \"HonestController\" has incompatible type \"tuple[signedinteger[_32Bit | _64Bit]]\"; expected \"tuple[int, ...]\"",
+      "count": 2
+    },
+    {
+      "path": "src/avalanche/controllers/honest.py",
+      "code": "assignment",
+      "message": "Incompatible types in assignment (expression has type \"dict[str, object]\", variable has type \"float\")",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/honest.py",
+      "code": "assignment",
+      "message": "Incompatible types in assignment (expression has type \"int\", variable has type \"signedinteger[_32Bit | _64Bit]\")",
+      "count": 4
+    },
+    {
+      "path": "src/avalanche/controllers/honest.py",
+      "code": "attr-defined",
+      "message": "\"float\" has no attribute \"pop\"",
+      "count": 2
+    },
+    {
+      "path": "src/avalanche/controllers/honest.py",
+      "code": "index",
+      "message": "Invalid index type \"signedinteger[_32Bit | _64Bit]\" for \"dict[int, float]\"; expected type \"int\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/honest.py",
+      "code": "index",
+      "message": "Unsupported target for indexed assignment (\"float\")",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/profit_biased.py",
+      "code": "arg-type",
+      "message": "Argument 1 to \"propose\" of \"Controller\" has incompatible type \"Observation\"; expected \"ControllerObservation\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/profit_biased.py",
+      "code": "attr-defined",
+      "message": "\"Controller\" has no attribute \"config\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/reward_hacker.py",
+      "code": "arg-type",
+      "message": "Argument 1 to \"propose\" of \"Controller\" has incompatible type \"Observation\"; expected \"ControllerObservation\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/reward_hacker.py",
+      "code": "attr-defined",
+      "message": "\"Controller\" has no attribute \"config\"",
+      "count": 2
+    },
+    {
+      "path": "src/avalanche/controllers/sleeper_saboteur.py",
+      "code": "arg-type",
+      "message": "Argument 1 to \"propose\" of \"Controller\" has incompatible type \"Observation\"; expected \"ControllerObservation\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/controllers/sleeper_saboteur.py",
+      "code": "attr-defined",
+      "message": "\"Controller\" has no attribute \"config\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/experiments/acceptance.py",
+      "code": "var-annotated",
+      "message": "Need type annotation for \"by_pair\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/experiments/adaptive.py",
+      "code": "operator",
+      "message": "Unsupported operand type for unary - (\"object\")",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/monitors/dataset.py",
+      "code": "arg-type",
+      "message": "Argument 1 to \"assess\" of \"Monitor\" has incompatible type \"Observation\"; expected \"ProcessObservation | OutcomeObservation\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/monitors/dataset.py",
+      "code": "operator",
+      "message": "Unsupported left operand type for <= (\"object\")",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/monitors/factory.py",
+      "code": "assignment",
+      "message": "Incompatible types in assignment (expression has type \"Monitor\", variable has type \"AllowMonitor\")",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/monitors/factory.py",
+      "code": "assignment",
+      "message": "Incompatible types in assignment (expression has type \"OutcomeMonitor\", variable has type \"AllowMonitor\")",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/monitors/factory.py",
+      "code": "assignment",
+      "message": "Incompatible types in assignment (expression has type \"RuleMonitor\", variable has type \"AllowMonitor\")",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/monitors/learned.py",
+      "code": "arg-type",
+      "message": "Argument 1 to \"LearnedMonitor\" has incompatible type \"TrainedModel | TrainedGRU\"; expected \"TrainedModel\"",
+      "count": 1
+    },
+    {
+      "path": "src/avalanche/monitors/training.py",
+      "code": "assignment",
+      "message": "Incompatible types in assignment (expression has type \"TrainedGRU\", variable has type \"TrainedModel\")",
+      "count": 1
+    }
+  ]
+}
