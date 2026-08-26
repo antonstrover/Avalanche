@@ -2,6 +2,10 @@
 
 ## Current state
 
+The implementation work for Stages 1 through 8 has merged.
+The current state does not satisfy every stage exit criterion.
+Stage 9 remains blocked by simulator and evidence defects.
+
 The simulator, controllers, monitors, matched dataset, and locked training gate exist.
 The honest controller produces continuous actions from reported operating conditions.
 Each attack has an overt tier and a stealth tier.
@@ -46,5 +50,6 @@ Use `--evaluation-seed-limit 2` for the bounded proof run.
 
 ## Next action
 
-Lock the current GRU as the failed baseline.
+Fix the simulator and evidence defects from the readiness review.
+Keep the current GRU as the failed baseline.
 Then run the two-seed proof before the full acceptance sweep.
