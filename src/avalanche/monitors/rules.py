@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -136,7 +136,7 @@ class RuleMonitor:
         reasons: tuple[str, ...],
     ) -> tuple[InfrastructureReference, ...]:
         """Return each infrastructure item named by an active rule."""
-        references: set[tuple[str, int]] = set()
+        references: set[tuple[Literal["edge", "node"], int]] = set()
         if CAPACITY_VIOLATION in reasons:
             reported_load = np.asarray(
                 observation["reported_edge_occupancy"], dtype=float
