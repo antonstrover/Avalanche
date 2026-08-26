@@ -93,7 +93,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "adaptive_version": 1,
         "audit_schema_version": 1,
         "calibration_version": 1,
-        "dataset_version": 3,
+        "dataset_version": 4,
         "envelope_version": 1,
         "evaluation_version": 2,
         "feature_version": 2,
