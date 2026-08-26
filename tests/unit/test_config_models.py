@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from avalanche.config import ResolvedConfig, load_and_merge
+from avalanche.config.models import IntervalsConfig, MonitorConfig, PopulationConfig
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
@@ -13,6 +14,163 @@ SAMPLE_FILES = [
     CONFIGS / "controllers" / "honest.yaml",
     CONFIGS / "monitors" / "none.yaml",
 ]
+SCENARIO_FILES = sorted((CONFIGS / "scenarios").glob("*.yaml"))
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"skier_count": 0}, "skier_count"),
+        ({"skier_count": -1}, "skier_count"),
+        ({"arrival_window_seconds": -1.0}, "arrival_window_seconds"),
+        ({"arrival_window_seconds": float("inf")}, "arrival_window_seconds"),
+        ({"arrival_window_seconds": float("nan")}, "arrival_window_seconds"),
+        ({"ability_weights": (-0.1, 0.6, 0.5)}, "ability weight"),
+        ({"ability_weights": (float("inf"), 0.0, 0.0)}, "ability weight"),
+        ({"ability_weights": (float("nan"), 0.5, 0.5)}, "ability weight"),
+        ({"ability_weights": (0.2, 0.3, 0.4)}, "ability weights"),
+        ({"customer_group_weights": (-0.1, 1.1)}, "customer group weight"),
+        (
+            {"customer_group_weights": (float("inf"), 0.0)},
+            "customer group weight",
+        ),
+        (
+            {"customer_group_weights": (float("nan"), 1.0)},
+            "customer group weight",
+        ),
+        ({"customer_group_weights": (0.4, 0.5)}, "customer group weights"),
+        ({"compliance_mean": -0.1}, "compliance_mean"),
+        ({"compliance_mean": 1.1}, "compliance_mean"),
+        ({"compliance_mean": float("inf")}, "compliance_mean"),
+        ({"compliance_mean": float("nan")}, "compliance_mean"),
+        ({"compliance_spread": -0.1}, "compliance_spread"),
+        ({"compliance_spread": float("inf")}, "compliance_spread"),
+        ({"compliance_spread": float("nan")}, "compliance_spread"),
+    ],
+)
+def test_invalid_population_values_are_rejected(changes, message):
+    values = {"skier_count": 10, **changes}
+    with pytest.raises(ValidationError, match=message):
+        PopulationConfig.model_validate(values)
+
+
+@pytest.mark.parametrize("compliance_mean", [0.0, 1.0])
+def test_population_boundary_values_are_accepted(compliance_mean):
+    population = PopulationConfig(
+        skier_count=1,
+        arrival_window_seconds=0.0,
+        ability_weights=(0.0, 1.0, 0.0),
+        customer_group_weights=(1.0, 0.0),
+        compliance_mean=compliance_mean,
+        compliance_spread=0.0,
+    )
+
+    assert population.arrival_window_seconds == 0.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("movement_tick_seconds", 0.0),
+        ("movement_tick_seconds", -1.0),
+        ("movement_tick_seconds", float("inf")),
+        ("movement_tick_seconds", float("nan")),
+        ("control_interval_seconds", 0.0),
+        ("control_interval_seconds", -1.0),
+        ("control_interval_seconds", float("inf")),
+        ("control_interval_seconds", float("nan")),
+    ],
+)
+def test_invalid_interval_values_are_rejected(field, value):
+    values = {
+        "movement_tick_seconds": 5.0,
+        "control_interval_seconds": 60.0,
+        field: value,
+    }
+    with pytest.raises(ValidationError, match=field):
+        IntervalsConfig.model_validate(values)
+
+
+def test_a_fractional_control_interval_is_rejected():
+    with pytest.raises(ValidationError, match=r"12\.0.*5\.0"):
+        IntervalsConfig(
+            movement_tick_seconds=5.0,
+            control_interval_seconds=12.0,
+        )
+
+
+def test_an_overflowing_interval_ratio_is_rejected():
+    with pytest.raises(ValidationError, match="whole movement ticks"):
+        IntervalsConfig(
+            movement_tick_seconds=1e-300,
+            control_interval_seconds=1e300,
+        )
+
+
+def test_a_nondefault_exact_interval_multiple_is_accepted():
+    intervals = IntervalsConfig(
+        movement_tick_seconds=2.5,
+        control_interval_seconds=7.5,
+    )
+
+    assert intervals.movement_ticks_per_control_interval == 3
+
+
+def test_an_interval_difference_within_tolerance_is_accepted():
+    intervals = IntervalsConfig(
+        movement_tick_seconds=5.0,
+        control_interval_seconds=60.0 + 5e-10,
+    )
+
+    assert intervals.movement_ticks_per_control_interval == 12
+
+
+def test_legacy_scenario_intervals_are_rejected():
+    data = load_and_merge(*SAMPLE_FILES)
+    data["scenario"]["movement_tick_seconds"] = 5.0
+    data["scenario"]["control_interval_seconds"] = 60.0
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        ResolvedConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("scenario_path", SCENARIO_FILES, ids=lambda path: path.stem)
+def test_each_scenario_uses_the_canonical_intervals(scenario_path):
+    data = load_and_merge(
+        SAMPLE_FILES[0],
+        SAMPLE_FILES[1],
+        scenario_path,
+        *SAMPLE_FILES[2:],
+    )
+
+    assert (
+        not {
+            "movement_tick_seconds",
+            "control_interval_seconds",
+        }
+        & data["scenario"].keys()
+    )
+    resolved = ResolvedConfig.model_validate(data)
+    assert resolved.intervals.movement_tick_seconds == 5.0
+    assert resolved.intervals.control_interval_seconds == 60.0
+
+
+@pytest.mark.parametrize("decision", ["BLOCK", "ESCALATE"])
+def test_a_rule_monitor_accepts_each_supported_decision(decision):
+    monitor = MonitorConfig(kind="rules", unsafe_decision=decision)
+
+    assert monitor.unsafe_decision == decision
+
+
+def test_a_rule_monitor_rejects_a_replacement_decision():
+    with pytest.raises(ValidationError, match="rule monitor cannot use a REPLACE"):
+        MonitorConfig(kind="rules", unsafe_decision="REPLACE")
+
+
+def test_a_learned_monitor_accepts_a_replacement_decision():
+    monitor = MonitorConfig(kind="learned", unsafe_decision="REPLACE")
+
+    assert monitor.unsafe_decision == "REPLACE"
 
 
 def test_valid_config_parses():

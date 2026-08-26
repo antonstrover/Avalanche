@@ -169,6 +169,9 @@ Select **Start live session** to stream the selected population.
 
 The configuration files are composable.
 A command needs the mountain, the scenario, the controller, and the monitor.
+The `intervals.movement_tick_seconds` value defines the movement tick.
+The `intervals.control_interval_seconds` value defines the control interval.
+A scenario must not define another interval.
 
 ```bash
 uv run avalanche validate-config configs/mountain/default.yaml \

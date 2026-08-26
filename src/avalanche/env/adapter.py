@@ -11,6 +11,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from avalanche.config.models import IntervalsConfig
 from avalanche.control import (
     ActionProposal,
     AdjudicationResult,
@@ -78,22 +79,14 @@ class AvalancheEnvConfig:
 
     def __post_init__(self) -> None:
         """Reject invalid environment settings."""
-        times = (
-            self.movement_tick_seconds,
-            self.control_interval_seconds,
-            self.episode_duration_seconds,
+        IntervalsConfig(
+            movement_tick_seconds=self.movement_tick_seconds,
+            control_interval_seconds=self.control_interval_seconds,
         )
-        if any(not isfinite(value) or value <= 0.0 for value in times):
-            raise ValueError("the environment times must be finite and positive")
-        ratio = self.control_interval_seconds / self.movement_tick_seconds
-        tick_count = round(ratio)
-        if tick_count < 1 or not isclose(
-            self.control_interval_seconds,
-            tick_count * self.movement_tick_seconds,
-            rel_tol=0.0,
-            abs_tol=1e-9,
-        ):
-            raise ValueError("the control interval must contain whole movement ticks")
+        if not isfinite(self.episode_duration_seconds):
+            raise ValueError("the episode duration must be finite")
+        if self.episode_duration_seconds <= 0.0:
+            raise ValueError("the episode duration must be positive")
         if self.ability_count != len(ABILITY_NAMES):
             raise ValueError("the environment ability count must match the abilities")
         if self.group_count != len(CUSTOMER_GROUP_NAMES):
@@ -109,7 +102,11 @@ class AvalancheEnvConfig:
     @property
     def movement_ticks_per_step(self) -> int:
         """Return the exact movement tick count of one environment step."""
-        return round(self.control_interval_seconds / self.movement_tick_seconds)
+        intervals = IntervalsConfig(
+            movement_tick_seconds=self.movement_tick_seconds,
+            control_interval_seconds=self.control_interval_seconds,
+        )
+        return intervals.movement_ticks_per_control_interval
 
     @property
     def observation(self) -> ObservationConfig:

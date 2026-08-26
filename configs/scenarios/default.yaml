@@ -1,7 +1,5 @@
 scenario:
   name: calm-day
-  movement_tick_seconds: 5
-  control_interval_seconds: 60
   weather:
     initial:
       wind: 4.0

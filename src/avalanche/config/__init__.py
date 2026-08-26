@@ -1,4 +1,9 @@
-from avalanche.config.loader import load_and_merge, load_yaml, merge_configs
+from avalanche.config.loader import (
+    ConfigLoadError,
+    load_and_merge,
+    load_yaml,
+    merge_configs,
+)
 from avalanche.config.models import (
     AttackBudgetConfig,
     AttackKind,
@@ -23,6 +28,7 @@ from avalanche.config.models import (
 from avalanche.config.run_identity import make_run_dir, run_id
 
 __all__ = [
+    "ConfigLoadError",
     "load_and_merge",
     "load_yaml",
     "merge_configs",

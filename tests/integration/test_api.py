@@ -124,6 +124,28 @@ def test_live_configuration_resolution_combines_every_selected_part():
     assert resolved["monitor"]["kind"] == "none"
     assert resolved["seed"] == 17
     assert resolved["population"]["skier_count"] == 20
+    assert resolved["intervals"] == {
+        "movement_tick_seconds": 5.0,
+        "control_interval_seconds": 60.0,
+    }
+    assert "movement_tick_seconds" not in resolved["scenario"]
+    assert "control_interval_seconds" not in resolved["scenario"]
+
+
+def test_the_api_rejects_rule_monitor_replacement():
+    resolved = client.post(
+        "/api/config-options/resolve",
+        json={"mountain": "small-resort", "controller": "none", "skier_count": 20},
+    ).json()
+    resolved["monitor"] = {
+        "kind": "rules",
+        "unsafe_decision": "REPLACE",
+    }
+
+    response = client.post("/api/sessions", json={"config": resolved})
+
+    assert response.status_code == 422
+    assert "rule monitor cannot use a REPLACE" in response.text
 
 
 def test_live_configuration_resolution_rejects_an_unknown_choice():

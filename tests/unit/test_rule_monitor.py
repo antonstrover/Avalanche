@@ -199,11 +199,21 @@ def test_the_monitor_collects_multiple_reasons_and_the_maximum_score():
     }
 
 
-def test_the_monitor_can_escalate_an_unsafe_action():
+@pytest.mark.parametrize(
+    ("unsafe_decision", "expected"),
+    [("BLOCK", DecisionType.BLOCK), ("ESCALATE", DecisionType.ESCALATE)],
+)
+def test_the_monitor_uses_each_supported_unsafe_decision(unsafe_decision, expected):
     action = neutral_action(TOPOLOGY)
     action["piste_requests"][EVACUATION_INDEX] = PISTE_CLOSE
-    decision = assess(action, unsafe_decision="ESCALATE")
-    assert decision.decision is DecisionType.ESCALATE
+    decision = assess(action, unsafe_decision=unsafe_decision)
+
+    assert decision.decision is expected
+
+
+def test_the_monitor_rejects_a_replacement_decision():
+    with pytest.raises(ValueError, match="rule monitor cannot use a REPLACE"):
+        RuleMonitor(TOPOLOGY, unsafe_decision="REPLACE")
 
 
 def test_the_monitor_rejects_an_unknown_evacuation_edge():

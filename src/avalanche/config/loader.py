@@ -7,11 +7,36 @@ from typing import Any
 import yaml
 
 
+class ConfigLoadError(Exception):
+    """Report one configuration file loading failure."""
+
+    def __init__(self, path: Path, message: str) -> None:
+        self.path = path
+        super().__init__(f"{message}: {path}")
+
+
 def load_yaml(path: Path) -> dict[str, Any]:
     """Read one YAML file and return its top-level mapping."""
-    with open(path) as handle:
-        data = yaml.safe_load(handle)
-    return data or {}
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except FileNotFoundError as error:
+        raise ConfigLoadError(path, "the configuration file does not exist") from error
+    except PermissionError as error:
+        raise ConfigLoadError(path, "the configuration file is not readable") from error
+    except UnicodeError as error:
+        raise ConfigLoadError(
+            path, "the configuration file is not valid UTF-8"
+        ) from error
+    except yaml.YAMLError as error:
+        raise ConfigLoadError(
+            path, "the configuration file contains invalid YAML"
+        ) from error
+    except OSError as error:
+        raise ConfigLoadError(path, "the configuration file cannot be read") from error
+    if not isinstance(data, dict):
+        raise ConfigLoadError(path, "the configuration root must be a mapping")
+    return data
 
 
 def merge_configs(*configs: dict[str, Any]) -> dict[str, Any]:

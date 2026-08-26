@@ -32,8 +32,6 @@ def small_config() -> ResolvedConfig:
         "movement_tick_seconds": 5.0,
         "control_interval_seconds": 5.0,
     }
-    values["scenario"]["movement_tick_seconds"] = 5.0
-    values["scenario"]["control_interval_seconds"] = 5.0
     values["controller"]["balanced_lifts"] = None
     values["controller"]["evacuation_edges"] = []
     values["episode_duration_seconds"] = 10.0
