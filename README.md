@@ -79,6 +79,7 @@ It has two routes down to each village, and one deliberate bottleneck.
 It has one upper bowl that drains through a single traverse.
 Each skier travels from an entrance to a sampled destination.
 The movement tick uses masked NumPy operations.
+Each skier starts on the first movement boundary at or after its arrival time.
 The route choice groups skiers by their location and their attributes.
 The simulator rejects a piste above the skier's ability limit.
 It rejects lift advice without a safe onward route.

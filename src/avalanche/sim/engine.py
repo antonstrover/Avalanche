@@ -217,7 +217,7 @@ class MountainSim:
 
         pop = self.population
         # 1. Start the scheduled arrivals.
-        start_arrivals(pop, self.simulation_time, self.tick_seconds)
+        start_arrivals(pop, self.simulation_time)
         # 2. Update the weather and the scheduled failures.
         self._update_weather()
         self._update_failures()
