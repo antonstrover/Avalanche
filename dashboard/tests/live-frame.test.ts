@@ -26,9 +26,57 @@ const display: DisplayState = {
     attack: { kind: "reward_hacker", active: true, targets: [1], divergent_edges: [1] },
 };
 
-function packedFrame(sequence = 0): ArrayBuffer {
+function decisionDisplay(
+    references: unknown,
+    includeReferences = true,
+): Record<string, unknown> {
+    const action = {
+        route_weights: [[]],
+        piste_requests: [],
+        lift_capacity: [],
+        lift_capacity_enabled: [],
+        crowd_messages: [[]],
+        telemetry_overrides: [],
+        telemetry_override_enabled: [],
+    };
+    const monitor = {
+        risk_score: 0,
+        decision: "ALLOW",
+        reason_codes: [],
+        replacement_action: null,
+        latency_seconds: 0.001,
+        ...(includeReferences ? { related_infrastructure: references } : {}),
+    };
+    return {
+        ...display,
+        decision: {
+            proposal: {
+                controller_id: "honest",
+                simulation_time: 0,
+                action,
+                explanation: "Keep the current action.",
+                evidence: {},
+            },
+            executed_action: {
+                controller_id: "honest",
+                simulation_time: 0,
+                action,
+            },
+            monitor_decision: monitor,
+            fallback_source: null,
+            predicted_result: {},
+            approval: null,
+        },
+    };
+}
+
+function packedFrame(
+    sequence = 0,
+    frameDisplay: unknown = display,
+    version = 5,
+): ArrayBuffer {
     const packed = encode({
-        version: 5,
+        version,
         type: sequence === 0 ? "snapshot" : "frame",
         session_id: "session-1",
         sequence,
@@ -40,7 +88,7 @@ function packedFrame(sequence = 0): ArrayBuffer {
             location_kind: new Uint8Array([1, 5]),
             location_index: new Uint8Array(new Int32Array([0, 0]).buffer),
             progress: new Uint8Array(new Float32Array([0.5, 0]).buffer),
-            display,
+            display: frameDisplay,
         },
     });
     return packed.buffer.slice(packed.byteOffset, packed.byteOffset + packed.byteLength) as ArrayBuffer;
@@ -139,6 +187,46 @@ describe("live frame handling", () => {
         expect(() => decodeFrame(buffer, "session-1", "topology-1", 0)).toThrow(
             "the frame has an invalid array length",
         );
+    });
+
+    it("accepts an empty infrastructure reference array", () => {
+        const result = decodeFrame(
+            packedFrame(0, decisionDisplay([])),
+            "session-1",
+            "topology-1",
+            100,
+        );
+
+        expect(
+            result.frame?.display.decision?.monitor_decision?.related_infrastructure,
+        ).toEqual([]);
+    });
+
+    it.each([
+        ["missing", decisionDisplay([], false)],
+        ["null", decisionDisplay(null)],
+    ])("rejects a %s infrastructure reference field", (_name, frameDisplay) => {
+        expect(() =>
+            decodeFrame(
+                packedFrame(0, frameDisplay),
+                "session-1",
+                "topology-1",
+                100,
+            ),
+        ).toThrow("the monitor related_infrastructure field is invalid");
+    });
+
+    it("adds an empty reference array to an older frame", () => {
+        const result = decodeFrame(
+            packedFrame(0, decisionDisplay([], false), 4),
+            "session-1",
+            "topology-1",
+            100,
+        );
+
+        expect(
+            result.frame?.display.decision?.monitor_decision?.related_infrastructure,
+        ).toEqual([]);
     });
 
     it("interpolates one edge and hides a pending skier", () => {

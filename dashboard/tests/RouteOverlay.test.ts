@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import data from "../src/mountain/resort.json";
 import {
+    referenceLabel,
     referenceSelection,
     routeEdges,
 } from "../src/mountain/routeOverlayState";
@@ -37,5 +38,12 @@ describe("RouteOverlay", () => {
 
         expect(selection?.index).toBe(0);
         expect(["piste", "lift"]).toContain(selection?.kind);
+    });
+
+    it("uses a stable fallback for an invalid reference", () => {
+        const reference = { kind: "edge" as const, index: 1000 };
+
+        expect(referenceSelection(reference, model)).toBeNull();
+        expect(referenceLabel(reference, model)).toBe("Edge 1000");
     });
 });

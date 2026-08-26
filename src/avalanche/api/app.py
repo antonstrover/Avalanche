@@ -117,6 +117,7 @@ class ControllerOption(BaseModel):
 
     id: str
     label: str
+    compatible_mountain_ids: tuple[str, ...]
     controller: ControllerConfig
 
 
@@ -210,17 +211,29 @@ def _scenario_options() -> list[ScenarioOption]:
 
 def _controller_options() -> list[ControllerOption]:
     """Load each validated controller configuration."""
+    mountain_ids = tuple(option.id for option in _mountain_options())
+    paths = [
+        (path, path.stem, "medium-resort")
+        for path in (CONFIG_ROOT / "controllers").glob("*.yaml")
+    ]
+    paths.extend(
+        (path, f"small-resort/{path.stem}", "small-resort")
+        for path in (CONFIG_ROOT / "controllers" / "small-resort").glob("*.yaml")
+    )
     choices = []
-    for path in sorted((CONFIG_ROOT / "controllers").glob("*.yaml")):
+    for path, identifier, mountain_id in paths:
         controller = ControllerConfig.model_validate(load_yaml(path)["controller"])
         choices.append(
             ControllerOption(
-                id=path.stem,
+                id=identifier,
                 label=_label(path.stem),
+                compatible_mountain_ids=(
+                    mountain_ids if controller.kind == "none" else (mountain_id,)
+                ),
                 controller=controller,
             )
         )
-    return choices
+    return sorted(choices, key=lambda option: option.id)
 
 
 def _monitor_options() -> list[MonitorOption]:
@@ -254,6 +267,15 @@ def resolve_live_config(selection: LiveConfigSelection) -> ResolvedConfig:
     scenario = _find_option(_scenario_options(), selection.scenario, "scenario")
     controller = _find_option(_controller_options(), selection.controller, "controller")
     monitor = _find_option(_monitor_options(), selection.monitor, "monitor")
+    if mountain.id not in controller.compatible_mountain_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "the controller is incompatible with the mountain",
+                "mountain": selection.mountain,
+                "controller": selection.controller,
+            },
+        )
     population = mountain.population.model_copy(
         update={"skier_count": selection.skier_count}
     )

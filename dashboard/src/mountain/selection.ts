@@ -5,6 +5,11 @@ export type Selection = {
     index: number;
 } | null;
 
+export type FocusRequest = {
+    id: number;
+    selection: Exclude<Selection, null>;
+} | null;
+
 export function selectionLabel(selection: Selection): string {
     return selection ? `${selection.kind}: ${selection.index}` : "nothing selected";
 }

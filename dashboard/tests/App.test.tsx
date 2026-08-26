@@ -11,15 +11,32 @@ vi.mock("../src/mountain/MountainScene", async () => {
     return {
         MountainScene: ({
             onLiveFrame,
+            selection,
+            onSelectionChange,
         }: {
             onLiveFrame: (count: number, display: typeof INITIAL_DISPLAY) => void;
+            selection: { kind: string; index: number } | null;
+            onSelectionChange: (
+                selection: { kind: "building"; index: number },
+            ) => void;
         }) => (
-            <button
-                type="button"
-                onClick={() => onLiveFrame(5000, INITIAL_DISPLAY)}
-            >
-                Emit a live frame
-            </button>
+            <div>
+                <button
+                    type="button"
+                    onClick={() => onLiveFrame(5000, INITIAL_DISPLAY)}
+                >
+                    Emit a live frame
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onSelectionChange({ kind: "building", index: 2 })}
+                >
+                    Select a building
+                </button>
+                <p data-testid="scene-selection">
+                    {selection ? `${selection.kind}: ${selection.index}` : "none"}
+                </p>
+            </div>
         ),
     };
 });
@@ -54,7 +71,14 @@ describe("App shell", () => {
                             },
                         ],
                         scenarios: [{ id: "default", label: "Default" }],
-                        controllers: [{ id: "honest", label: "Honest" }],
+                        controllers: [
+                            {
+                                id: "honest",
+                                label: "Honest",
+                                compatible_mountain_ids: ["medium-resort"],
+                                controller: { kind: "honest" },
+                            },
+                        ],
                         monitors: [{ id: "none", label: "None" }],
                     };
                 } else if (url.endsWith("/api/config-options/resolve")) {
@@ -148,5 +172,13 @@ describe("App shell", () => {
         expect(screen.getByTestId("live-status")).toHaveTextContent("paused");
         expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
         expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
+    });
+
+    it("keeps one shared mountain selection", () => {
+        render(<App />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Select a building" }));
+
+        expect(screen.getByTestId("scene-selection")).toHaveTextContent("building: 2");
     });
 });

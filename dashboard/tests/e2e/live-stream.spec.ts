@@ -65,6 +65,19 @@ test("a monitor rule appears in the decision inspector", async ({ page }) => {
     await expect(page.getByText("EVACUATION_ROUTE_CLOSURE", { exact: true })).toBeVisible();
 });
 
+test("a decision reference selects its mountain item", async ({ page }) => {
+    await page.goto("/");
+    await waitForScene(page);
+    await page.getByRole("button", { name: "Start monitor demo" }).click();
+    const reference = page.locator('[data-testid="related-infrastructure"] button').first();
+    await expect(reference).toBeVisible({ timeout: 15000 });
+
+    await reference.click();
+
+    await expect(reference).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("selection")).not.toHaveText("nothing selected");
+});
+
 test("an escalation is approved before the time limit", async ({ page }) => {
     await page.goto("/");
     await waitForScene(page);

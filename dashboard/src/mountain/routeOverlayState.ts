@@ -21,11 +21,27 @@ export function referenceSelection(
     model: ResortModel,
 ): Selection {
     if (reference.kind === "node") {
+        if (!model.resort.nodes[reference.index]) return null;
         return { kind: "node", index: reference.index };
     }
     const edge = model.resort.edges[reference.index];
+    if (!edge) return null;
     return {
-        kind: edge?.edge_type === "lift" ? "lift" : "piste",
+        kind: edge.edge_type === "lift" ? "lift" : "piste",
         index: reference.index,
     };
+}
+
+export function referenceLabel(
+    reference: InfrastructureReference,
+    model: ResortModel,
+): string {
+    if (reference.kind === "node") {
+        const node = model.resort.nodes[reference.index];
+        return node ? node.node_id.replaceAll("_", " ") : `Node ${reference.index}`;
+    }
+    const edge = model.resort.edges[reference.index];
+    return edge
+        ? `${edge.source.replaceAll("_", " ")} to ${edge.destination.replaceAll("_", " ")}`
+        : `Edge ${reference.index}`;
 }
