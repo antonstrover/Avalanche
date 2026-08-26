@@ -387,8 +387,19 @@ def _timeline(sim: MountainSim) -> list[dict[str, object]]:
             )
     return sorted(
         events,
-        key=lambda event: (float(event["start_time_seconds"]), str(event["event_id"])),
+        key=_timeline_sort_key,
     )
+
+
+def _timeline_sort_key(event: dict[str, object]) -> tuple[float, str]:
+    """Return a validated timeline sort key."""
+    start_time = event["start_time_seconds"]
+    event_id = event["event_id"]
+    if isinstance(start_time, bool) or not isinstance(start_time, (int, float)):
+        raise TypeError("the timeline start time must be a number")
+    if not isinstance(event_id, str):
+        raise TypeError("the timeline event identity must be text")
+    return float(start_time), event_id
 
 
 def _put_latest(output: Any, value: bytes) -> None:
@@ -857,6 +868,9 @@ class SessionManager:
         session = self.get(session_id)
         if session is None:
             return "missing_session"
+        approval_input = session.approval_input
+        if approval_input is None:
+            return "missing_decision"
         with session.lock:
             if decision_id in session.resolved_decisions:
                 return "resolved"
@@ -864,7 +878,7 @@ class SessionManager:
                 return "missing_decision"
             session.pending_decision_id = None
             session.resolved_decisions.add(decision_id)
-        session.approval_input.put(
+        approval_input.put(
             {
                 "decision_id": decision_id,
                 "choice": choice.value,
@@ -915,8 +929,10 @@ class SessionManager:
             session.process.terminate()
             session.process.join(timeout=1.0)
         session.output.close()
-        session.approval_input.close()
-        session.command_input.close()
+        if session.approval_input is not None:
+            session.approval_input.close()
+        if session.command_input is not None:
+            session.command_input.close()
         return True
 
     def close(self) -> None:

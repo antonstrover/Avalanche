@@ -213,10 +213,13 @@ class AvalancheEnv(gym.Env):
         approval: ApprovalHandler | None = None,
     ) -> Adjudicator:
         """Build a validator against the current environment masks."""
+        action_space = self.action_space
+        if not isinstance(action_space, spaces.Dict):
+            raise TypeError("the environment action space must be a dictionary")
         return Adjudicator(
             monitor,
             lambda action: validate_action(
-                thaw_action(action), self.action_space, self._action_masks()
+                thaw_action(action), action_space, self._action_masks()
             ),
             fallback,
             approval,
@@ -270,10 +273,13 @@ class AvalancheEnv(gym.Env):
         self, action: Action
     ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
         """Validate one action and run one complete control interval."""
+        action_space = self.action_space
+        if not isinstance(action_space, spaces.Dict):
+            raise TypeError("the environment action space must be a dictionary")
         masks = self._action_masks()
         proposal = create_action_proposal(
             action,
-            self.action_space,
+            action_space,
             masks,
             simulation_time=self.sim.simulation_time,
         )
@@ -463,7 +469,9 @@ class AvalancheEnv(gym.Env):
             return False
         return bool(np.all(np.isin(status, (Status.COMPLETE, Status.INJURED))))
 
-    def _metrics(self) -> dict[str, float | int | tuple[float, ...]]:
+    def _metrics(
+        self,
+    ) -> dict[str, float | int | tuple[float, ...] | dict[str, int]]:
         """Return the current named metrics."""
         metrics = self.sim.metrics.snapshot(self.sim.population).as_dict()
         metrics["intervention_cost"] = self._cumulative_intervention_cost

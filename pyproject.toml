@@ -44,3 +44,20 @@ packages = ["src/avalanche"]
 # Two test directories can hold one file name with this import mode.
 addopts = "--import-mode=importlib"
 consider_namespace_packages = true
+
+[[tool.mypy.overrides]]
+module = [
+    "msgpack",
+    "msgpack.*",
+    "networkx",
+    "networkx.*",
+    "pandas",
+    "pandas.*",
+    "pyarrow",
+    "pyarrow.*",
+    "scipy",
+    "scipy.*",
+    "yaml",
+    "yaml.*",
+]
+ignore_missing_imports = true

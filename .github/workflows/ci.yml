@@ -42,6 +42,9 @@ jobs:
           fi
           exit "${code:-0}"
 
+      - name: Check mypy baseline
+        run: uv run python scripts/check_mypy_baseline.py
+
   dashboard:
     name: Dashboard tests and build
     runs-on: ubuntu-latest
@@ -70,3 +73,7 @@ jobs:
       - name: Build
         working-directory: dashboard
         run: npm run build --if-present
+
+      - name: Check initial bundle size
+        working-directory: dashboard
+        run: npm run check:size
