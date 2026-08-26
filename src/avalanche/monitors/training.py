@@ -1,4 +1,4 @@
-"""Train, calibrate, gate, and lock the principal monitor."""
+"""Train, calibrate, gate, and lock one declared monitor profile."""
 
 import hashlib
 import json
@@ -141,6 +141,7 @@ def train_gru(
     seed: int = 20260825,
     epochs: int = 40,
     learning_rate: float = 1e-3,
+    information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> TrainedGRU:
     """Train the declared one-layer recurrent extension."""
     torch.manual_seed(seed)
@@ -160,6 +161,7 @@ def train_gru(
         loss = loss_function(network(tensor), targets)
         loss.backward()
         optimiser.step()
+    profile = InformationProfile(information_profile)
     return TrainedGRU(
         network=network,
         feature_names=feature_names,
@@ -169,7 +171,7 @@ def train_gru(
             "model_version": MODEL_VERSION,
             "model_kind": "gru",
             "feature_version": FEATURE_VERSION,
-            "information_profile": "principal",
+            "information_profile": profile.value,
             "window_length": WINDOW_LENGTH,
             "gru_layers": 1,
             "gru_hidden_size": GRU_HIDDEN_SIZE,
@@ -267,15 +269,14 @@ def train_locked_monitor(
     config: TrainingConfig | None = None,
     dataset_checksums: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Train the principal model and lock every accepted artifact."""
+    """Train one declared model and lock every accepted artifact."""
     shortcut = require_approved_shortcut_report(shortcut_report_path)
     config = config or TrainingConfig()
-    if config.information_profile != InformationProfile.PRINCIPAL.value:
-        raise ValueError("locked training requires the principal information profile")
-    feature_names = feature_names_for(InformationProfile.PRINCIPAL)
+    profile = InformationProfile(config.information_profile)
+    feature_names = feature_names_for(profile)
     perceptron = train_perceptron(train, validation, config)
     calibration = calibrate_and_gate(
-        perceptron.logits(_features(validation)), validation
+        perceptron.logits(_features(validation, profile)), validation
     )
     selected: TrainedModel | TrainedGRU = perceptron
     model_kind = "perceptron"
@@ -283,7 +284,12 @@ def train_locked_monitor(
     if calibration.sleeper_recall < SLEEPER_RECALL_GATE:
         train_windows = build_run_windows(train, feature_names)
         validation_windows = build_run_windows(validation, feature_names)
-        gru = train_gru(train_windows, feature_names, seed=config.seed)
+        gru = train_gru(
+            train_windows,
+            feature_names,
+            seed=config.seed,
+            information_profile=profile,
+        )
         window_rows = _window_rows(validation, validation_windows)
         calibration = calibrate_and_gate(
             gru.logits(validation_windows.features), window_rows
@@ -347,7 +353,7 @@ def train_locked_monitor(
         "model_kind": model_kind,
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
-        "information_profile": "principal",
+        "information_profile": profile.value,
         "shortcut_report": str(shortcut_report_path),
         "shortcut_report_approved": shortcut["approved"],
         "dataset_checksums": dict(sorted((dataset_checksums or {}).items())),
@@ -369,6 +375,7 @@ def train_locked_monitor(
             shortcut_report_path,
         ),
         dataset_checksums or {},
+        profile,
     )
     return {"metadata": metadata, "calibration": asdict(calibration), "lock": lock}
 
@@ -450,9 +457,11 @@ def load_locked_scoring_model(
     return model
 
 
-def _features(frame: pd.DataFrame) -> np.ndarray:
-    """Return principal feature values in their declared order."""
-    names = feature_names_for(InformationProfile.PRINCIPAL)
+def _features(
+    frame: pd.DataFrame, information_profile: InformationProfile | str
+) -> np.ndarray:
+    """Return feature values in their declared order."""
+    names = feature_names_for(information_profile)
     return frame.loc[:, list(names)].to_numpy(dtype=np.float32)
 
 
@@ -493,6 +502,7 @@ def _write_lock(
     output_dir: Path,
     paths: tuple[Path, ...],
     dataset_checksums: dict[str, str],
+    information_profile: InformationProfile,
 ) -> dict[str, Any]:
     """Write one checksum lock for every accepted artifact."""
     checksums = {}
@@ -508,7 +518,7 @@ def _write_lock(
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
         "dataset_version": DATASET_VERSION,
-        "information_profile": "principal",
+        "information_profile": information_profile.value,
         "artifact_checksums": dict(sorted(checksums.items())),
         "dataset_checksums": dict(sorted(dataset_checksums.items())),
     }

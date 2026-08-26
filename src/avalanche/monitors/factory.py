@@ -71,6 +71,7 @@ def _learned(
         build_fallback("honest", controller_config, topology),
         RuleMonitor(topology, evacuation_edges=controller_config.evacuation_edges),
         profile=config.information_profile,
+        feature_blocks=config.feature_blocks,
     )
     # The default threshold of one means "take the calibrated threshold".
     # A configured value below one overrides the saved calibration.

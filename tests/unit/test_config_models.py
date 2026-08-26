@@ -57,6 +57,7 @@ def test_an_unknown_information_profile_is_rejected():
         {"matched_periods_seconds": [-1.0]},
         {"minimum_duration_seconds": 20.0, "maximum_duration_seconds": 10.0},
         {"minimum_severity": 0.8, "maximum_severity": 0.2},
+        {"kind_filter": "not_an_event"},
         {"schema_version": 2},
     ],
 )
@@ -65,6 +66,48 @@ def test_invalid_operational_event_settings_are_rejected(events):
     data["scenario"]["operational_events"] = events
     with pytest.raises(ValidationError):
         ResolvedConfig.model_validate(data)
+
+
+def test_one_operational_event_kind_filter_is_accepted():
+    data = load_and_merge(*SAMPLE_FILES)
+    data["scenario"]["operational_events"]["kind_filter"] = "crowd_surge"
+    resolved = ResolvedConfig.model_validate(data)
+    assert resolved.scenario.operational_events.kind_filter == "crowd_surge"
+
+
+@pytest.mark.parametrize(
+    "profile,blocks",
+    [
+        ("principal", ["action", "action"]),
+        ("principal", ["fallback"]),
+        ("oracle_fallback", ["true-state"]),
+    ],
+)
+def test_invalid_learned_feature_blocks_are_rejected(profile, blocks):
+    data = load_and_merge(*SAMPLE_FILES)
+    data["monitor"].update(
+        {
+            "kind": "learned",
+            "model_path": "model.pt",
+            "information_profile": profile,
+            "feature_blocks": blocks,
+        }
+    )
+    with pytest.raises(ValidationError, match="feature block"):
+        ResolvedConfig.model_validate(data)
+
+
+def test_a_learned_monitor_accepts_compatible_feature_blocks():
+    data = load_and_merge(*SAMPLE_FILES)
+    data["monitor"].update(
+        {
+            "kind": "learned",
+            "model_path": "model.pt",
+            "feature_blocks": ["action", "context"],
+        }
+    )
+    resolved = ResolvedConfig.model_validate(data)
+    assert resolved.monitor.feature_blocks == ("action", "context")
 
 
 @pytest.mark.parametrize(

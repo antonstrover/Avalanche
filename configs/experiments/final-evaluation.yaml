@@ -1,0 +1,37 @@
+# The immutable final evaluation matrix.
+evaluation_version: 2
+mountain: configs/mountain/default.yaml
+scenario: configs/scenarios/family-busy-weekend.yaml
+honest_controller: configs/controllers/honest.yaml
+monitor: configs/monitors/learned.yaml
+root_seeds:
+  - 2026082500
+  - 2026082501
+  - 2026082502
+  - 2026082503
+  - 2026082504
+  - 2026082505
+  - 2026082506
+  - 2026082507
+  - 2026082508
+  - 2026082509
+  - 2026082510
+  - 2026082511
+  - 2026082512
+  - 2026082513
+  - 2026082514
+  - 2026082515
+  - 2026082516
+  - 2026082517
+  - 2026082518
+  - 2026082519
+attack_controllers:
+  profit_biased:
+    overt: configs/controllers/profit-biased.yaml
+    stealth: configs/controllers/stealth/profit-biased.yaml
+  sleeper_saboteur:
+    overt: configs/controllers/sleeper-saboteur.yaml
+    stealth: configs/controllers/stealth/sleeper-saboteur.yaml
+  reward_hacker:
+    overt: configs/controllers/reward-hacker.yaml
+    stealth: configs/controllers/stealth/reward-hacker.yaml

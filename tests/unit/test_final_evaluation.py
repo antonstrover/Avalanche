@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -16,11 +17,17 @@ from avalanche.experiments.final_evaluation import (
     HOLDOUT_SLICES,
     POLICY_VARIANTS,
     evaluate_final_records,
+    evaluation_cells,
     evaluation_feature_names,
+    load_evaluation_config,
     paired_bootstrap_interval,
     principal_ablation_matrix,
+    run_evaluation_matrix,
     write_final_evaluation,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+EVALUATION_CONFIG = ROOT / "configs/experiments/final-evaluation.yaml"
 
 
 def final_records(seed_count: int = 2) -> pd.DataFrame:
@@ -41,7 +48,14 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
                 attacked = role == "attack"
                 rows.append(
                     {
+                        "record_kind": "evaluation_episode",
                         "feature_profile": profile,
+                        "information_profile": (
+                            profile.replace("-", "_")
+                            if profile.startswith("oracle-")
+                            else "principal"
+                        ),
+                        "feature_blocks": [],
                         "attack_kind": attack,
                         "attack_tier": tier,
                         "policy_variant": policy,
@@ -50,6 +64,11 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
                         "root_seed": 1000 + root_seed,
                         "pair_id": pair_id,
                         "pair_role": role,
+                        "run_id": f"run-{index}-{root_seed}-{role}",
+                        "code_revision": "abc123",
+                        "resolved_config_checksum": f"config-{index}-{role}",
+                        "pair_context_checksum": f"context-{index}-{root_seed}",
+                        "model_lock_checksum": f"model-{profile}",
                         "attack_success": float(attacked),
                         "harm_before_detection": 4.0 if attacked else 0.0,
                         "detection_time_intervals": 2.0 if attacked else 0.0,
@@ -64,14 +83,13 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
                         "brier_score": 0.1,
                         "calibration_error": 0.02,
                         "monitor_latency_seconds": 0.003,
-                        "simulation_steps_per_second": 500.0,
                     }
                 )
     return pd.DataFrame(rows)
 
 
-def model_lock(tmp_path):
-    model_dir = tmp_path / "model"
+def model_lock(tmp_path, name, information_profile):
+    model_dir = tmp_path / name
     model_dir.mkdir()
     artifact = model_dir / "model.pt"
     artifact.write_bytes(b"locked-model")
@@ -81,13 +99,25 @@ def model_lock(tmp_path):
         "model_version": 2,
         "feature_version": 2,
         "dataset_version": 3,
-        "information_profile": "principal",
+        "information_profile": information_profile,
         "artifact_checksums": {"model.pt": checksum},
         "dataset_checksums": {"dataset_sha256": "abc"},
     }
     path = model_dir / "lock.json"
     path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
     return path
+
+
+def model_locks(tmp_path):
+    return {
+        "principal": model_lock(tmp_path, "model", "principal"),
+        "oracle-fallback": model_lock(
+            tmp_path, "oracle-fallback-model", "oracle_fallback"
+        ),
+        "oracle-true-state": model_lock(
+            tmp_path, "oracle-true-state-model", "oracle_true_state"
+        ),
+    }
 
 
 def test_the_paired_bootstrap_is_deterministic():
@@ -168,7 +198,6 @@ def test_each_cell_reports_every_declared_metric_with_paired_intervals():
         "brier_score",
         "calibration_error",
         "monitor_latency_seconds",
-        "simulation_steps_per_second",
     }
     assert all(metric["pair_count"] == 2 for metric in metrics.values())
 
@@ -181,13 +210,14 @@ def test_each_final_cell_requires_the_declared_root_seed_count():
 
 
 def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
-    lock_path = model_lock(tmp_path)
+    locks = model_locks(tmp_path)
+    lock_path = locks["principal"]
     before = lock_path.parent.joinpath("model.pt").read_bytes()
     output = tmp_path / "evaluation"
     written = write_final_evaluation(
         final_records(),
         output,
-        lock_path,
+        locks,
         required_root_seeds=2,
         bootstrap_resamples=100,
     )
@@ -196,6 +226,7 @@ def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
     assert written["manifest"]["observation_schema_version"] == 1
     assert written["manifest"]["policy_version"] == 3
     assert written["manifest"]["required_root_seeds"] == 2
+    assert set(written["manifest"]["locked_models"]) == set(locks)
     assert written["manifest"]["checksums"]["results_sha256"]
     assert (output / "evaluation-records.json").exists()
     assert (output / "evaluation-results.json").exists()
@@ -204,13 +235,13 @@ def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
 
 
 def test_an_immutable_result_set_rejects_changed_records(tmp_path):
-    lock_path = model_lock(tmp_path)
+    locks = model_locks(tmp_path)
     output = tmp_path / "evaluation"
     rows = final_records()
     write_final_evaluation(
         rows,
         output,
-        lock_path,
+        locks,
         required_root_seeds=2,
         bootstrap_resamples=20,
     )
@@ -220,7 +251,83 @@ def test_an_immutable_result_set_rejects_changed_records(tmp_path):
         write_final_evaluation(
             changed,
             output,
-            lock_path,
+            locks,
             required_root_seeds=2,
             bootstrap_resamples=20,
         )
+
+
+def test_the_real_matrix_keeps_the_bounded_cell_assignment():
+    cells = evaluation_cells()
+    assert len(cells) == 42
+    assert {cell.feature_profile for cell in cells} == {
+        profile.name for profile in FEATURE_PROFILES
+    }
+    assert {cell.policy_variant for cell in cells} == set(POLICY_VARIANTS)
+    assert {cell.event_kind for cell in cells} == set(EVENT_KINDS)
+    assert {cell.holdout_slice for cell in cells} == set(HOLDOUT_SLICES)
+
+
+def test_the_evaluation_configuration_declares_20_unique_seeds():
+    config = load_evaluation_config(EVALUATION_CONFIG)
+    assert len(config["root_seeds"]) == 20
+    assert len(set(config["root_seeds"])) == 20
+    assert config["mountain"] == "configs/mountain/default.yaml"
+    assert config["scenario"] == "configs/scenarios/family-busy-weekend.yaml"
+
+
+def test_the_real_matrix_runs_complete_pairs_without_fixture_rows(
+    tmp_path, monkeypatch
+):
+    locks = model_locks(tmp_path)
+    config = load_evaluation_config(EVALUATION_CONFIG)
+
+    def fake_episode(resolved, output_dir):
+        output_dir.mkdir(parents=True)
+        attacked = resolved.controller.attack is not None
+        seed_variation = float(resolved.seed % 5)
+        return {
+            "run_id": f"run-{resolved.seed}-{resolved.controller.kind}",
+            "metrics": {
+                "detection_interval": 2 if attacked else -1,
+                "monitor_decision_count": 180,
+                "harm_before_detection": 1.0 + seed_variation,
+                "harm_count": 2.0 + seed_variation,
+                "dangerous_density_seconds": 10.0 + seed_variation,
+                "stranded_skiers": 0,
+                "completed_journeys": 100,
+                "mean_wait_seconds": 4.0,
+                "utility": 0.8,
+                "fairness": 1.0,
+                "brier_score": 0.1,
+                "calibration_error": 0.02,
+                "monitor_latency_seconds_sum": 0.18,
+            },
+            "attack_assessment": {"success": attacked} if attacked else None,
+        }
+
+    monkeypatch.setattr(
+        "avalanche.experiments.final_evaluation.run_episode", fake_episode
+    )
+    monkeypatch.setattr(
+        "avalanche.experiments.final_evaluation._code_revision", lambda: "abc123"
+    )
+    records = run_evaluation_matrix(
+        config,
+        locks,
+        tmp_path / "evaluation",
+        root_seeds=config["root_seeds"][:2],
+    )
+    assert len(records) == 42 * 2 * 2
+    assert set(records["record_kind"]) == {"evaluation_episode"}
+    assert set(records["pair_role"]) == {"honest", "attack"}
+    assert all(
+        count == 2
+        for count in records.groupby(["pair_id", "root_seed"]).size().tolist()
+    )
+    assert all(
+        count == 1
+        for count in records.groupby(["pair_id", "root_seed"])["pair_context_checksum"]
+        .nunique()
+        .tolist()
+    )

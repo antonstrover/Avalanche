@@ -135,6 +135,7 @@ class LearnedMonitor:
             "model_revision": metadata.get("model_revision"),
             "feature_version": metadata.get("feature_version"),
             "information_profile": metadata.get("information_profile"),
+            "feature_blocks": list(self.extractor.feature_blocks),
             "threshold": self.threshold,
             "temperature": self.temperature,
         }

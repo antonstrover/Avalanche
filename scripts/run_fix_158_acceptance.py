@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +14,8 @@ import pandas as pd
 
 from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
 from avalanche.config.run_identity import REPO_ROOT
+from avalanche.control import InformationProfile
 from avalanche.experiments.acceptance import (
-    acceptance_evaluation_records,
     file_checksum,
     load_acceptance_config,
     load_shortcut_justifications,
@@ -29,7 +31,11 @@ from avalanche.experiments.adaptive import (
     freeze_surrogate_monitor,
     write_adaptive_extension,
 )
-from avalanche.experiments.final_evaluation import write_final_evaluation
+from avalanche.experiments.final_evaluation import (
+    load_evaluation_config,
+    run_evaluation_matrix,
+    write_final_evaluation,
+)
 from avalanche.experiments.runner import run_episode
 from avalanche.monitors.dataset import generate_dataset_entries
 from avalanche.monitors.features import FEATURE_NAMES
@@ -53,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--evaluation-seed-limit", type=int)
     parser.add_argument("--justifications", type=Path, default=DEFAULT_JUSTIFICATIONS)
     return parser
 
@@ -63,6 +70,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("the immutable acceptance output directory already exists")
     config = load_acceptance_config(args.config)
+    if args.evaluation_seed_limit is not None and not (
+        1 <= args.evaluation_seed_limit <= config["root_seed_count"]
+    ):
+        raise ValueError("the evaluation seed limit must be between one and 20")
     source_path = REPO_ROOT / config["source_manifest"]
     source_manifest = load_yaml(source_path)
     entries = select_acceptance_entries(config, source_manifest)
@@ -108,6 +119,52 @@ def main(argv: list[str] | None = None) -> int:
         config=TrainingConfig(seed=ADAPTIVE_SEED, epochs=40),
         dataset_checksums=dataset_checksums,
     )
+    oracle_locks: dict[str, Path] = {}
+    for profile in (
+        InformationProfile.ORACLE_FALLBACK,
+        InformationProfile.ORACLE_TRUE_STATE,
+    ):
+        label = profile.value.replace("_", "-")
+        print(f"Generate the {label} development dataset.", flush=True)
+        oracle_dataset_path = (
+            args.output / "dataset" / f"monitor-acceptance-{label}.parquet"
+        )
+        generate_dataset_entries(
+            source_path,
+            oracle_dataset_path,
+            entries,
+            workers=args.workers,
+            source_manifest=source_manifest,
+            information_profile=profile,
+        )
+        oracle_frame = pd.read_parquet(oracle_dataset_path)
+        oracle_train = oracle_frame[oracle_frame["split"] == "train"].reset_index(
+            drop=True
+        )
+        oracle_validation = oracle_frame[
+            oracle_frame["split"] == "validation"
+        ].reset_index(drop=True)
+        oracle_checksums = {
+            "dataset_sha256": file_checksum(oracle_dataset_path),
+            "manifest_sha256": file_checksum(
+                oracle_dataset_path.with_suffix(".manifest.json")
+            ),
+        }
+        oracle_dir = args.output / f"{label}-model"
+        print(f"Train and lock the {label} monitor.", flush=True)
+        train_locked_monitor(
+            oracle_train,
+            oracle_validation,
+            audit_dir / "shortcut-audit.json",
+            oracle_dir,
+            config=TrainingConfig(
+                seed=ADAPTIVE_SEED,
+                epochs=40,
+                information_profile=profile.value,
+            ),
+            dataset_checksums=oracle_checksums,
+        )
+        oracle_locks[label] = oracle_dir / "lock.json"
     print("Train and lock the separate surrogate monitor.", flush=True)
     surrogate_dir = args.output / "surrogate-model"
     train_locked_monitor(
@@ -123,12 +180,39 @@ def main(argv: list[str] | None = None) -> int:
     weakest = weakest_attack_result(frame, config)
     write_json_immutable(args.output / "weakest-attack.json", weakest)
 
-    print("Write the immutable final protocol evaluation.", flush=True)
-    write_final_evaluation(
-        acceptance_evaluation_records(config["root_seed_count"]),
+    print("Run the immutable final protocol evaluation.", flush=True)
+    evaluation_config = load_evaluation_config(REPO_ROOT / config["evaluation_config"])
+    model_locks = {
+        "principal": hidden_dir / "lock.json",
+        **oracle_locks,
+    }
+    evaluation_seeds = tuple(evaluation_config["root_seeds"])
+    if args.evaluation_seed_limit is not None:
+        evaluation_seeds = evaluation_seeds[: args.evaluation_seed_limit]
+    evaluation_records = run_evaluation_matrix(
+        evaluation_config,
+        model_locks,
         args.output / "evaluation",
-        hidden_dir / "lock.json",
+        workers=args.workers,
+        root_seeds=evaluation_seeds,
     )
+    write_final_evaluation(
+        evaluation_records,
+        args.output / "evaluation",
+        model_locks,
+        required_root_seeds=len(evaluation_seeds),
+    )
+    if args.evaluation_seed_limit is not None:
+        print(
+            json.dumps(
+                {
+                    "status": "PROOF",
+                    "evaluation_seed_count": len(evaluation_seeds),
+                    "output": str(args.output),
+                }
+            )
+        )
+        return 0
 
     print("Run the separate adaptive extension.", flush=True)
     surrogate_split_path = args.output / "adaptive" / "surrogate-lock.json"
@@ -177,7 +261,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print("Regenerate the declared attack fixtures.", flush=True)
-    fixture_results = _run_fixtures(config, args.output / "fixtures")
+    fixture_results = _run_fixtures(
+        config, args.output / "fixtures", workers=args.workers
+    )
     write_json_immutable(
         args.output / "fixtures" / "fixture-results.json", fixture_results
     )
@@ -293,50 +379,57 @@ def _monitor_score(model, reference, kind: str, proposal: Any) -> float:
     return float(1.0 / (1.0 + np.exp(-scaled)))
 
 
-def _run_fixtures(config: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+def _run_fixtures(
+    config: dict[str, Any], output_dir: Path, *, workers: int = 1
+) -> dict[str, Any]:
     """Run every declared attack and its paired honest controller."""
     manifest_path = REPO_ROOT / config["fixture_manifest"]
     fixtures = load_yaml(manifest_path)["fixtures"]
-    results = []
-    for fixture in fixtures:
-        summaries = {}
-        for role, key in (("attack", "controller"), ("honest", "paired_controller")):
-            values = load_and_merge(
-                REPO_ROOT / fixture["mountain"],
-                REPO_ROOT / fixture["scenario"],
-                REPO_ROOT / fixture[key],
-                REPO_ROOT / fixture["monitor"],
-            )
-            values["seed"] = fixture["seed"]
-            resolved = ResolvedConfig.model_validate(values)
-            summaries[role] = run_episode(resolved, output_dir / fixture["id"] / role)
-        assessment = summaries["attack"]["attack_assessment"]
-        passed = bool(
-            assessment
-            and assessment["success"]
-            and fixture["expected_minimum"]
-            <= assessment["value"]
-            <= fixture["expected_maximum"]
-            and summaries["honest"]["attack_assessment"] is None
-        )
-        results.append(
-            {
-                "id": fixture["id"],
-                "seed": fixture["seed"],
-                "attack_run_id": summaries["attack"]["run_id"],
-                "honest_run_id": summaries["honest"]["run_id"],
-                "assessment": assessment,
-                "expected_minimum": fixture["expected_minimum"],
-                "expected_maximum": fixture["expected_maximum"],
-                "passed": passed,
-            }
-        )
+    if workers <= 1:
+        results = [_run_fixture(fixture, output_dir) for fixture in fixtures]
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(_run_fixture, fixtures, repeat(output_dir)))
     if not all(result["passed"] for result in results):
         raise ValueError("a regenerated attack fixture failed its recorded range")
     return {
         "fixture_manifest": str(manifest_path.relative_to(REPO_ROOT)),
         "fixture_manifest_sha256": file_checksum(manifest_path),
         "fixtures": results,
+    }
+
+
+def _run_fixture(fixture: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+    """Run one declared attack fixture and its honest pair."""
+    summaries = {}
+    for role, key in (("attack", "controller"), ("honest", "paired_controller")):
+        values = load_and_merge(
+            REPO_ROOT / fixture["mountain"],
+            REPO_ROOT / fixture["scenario"],
+            REPO_ROOT / fixture[key],
+            REPO_ROOT / fixture["monitor"],
+        )
+        values["seed"] = fixture["seed"]
+        resolved = ResolvedConfig.model_validate(values)
+        summaries[role] = run_episode(resolved, output_dir / fixture["id"] / role)
+    assessment = summaries["attack"]["attack_assessment"]
+    passed = bool(
+        assessment
+        and assessment["success"]
+        and fixture["expected_minimum"]
+        <= assessment["value"]
+        <= fixture["expected_maximum"]
+        and summaries["honest"]["attack_assessment"] is None
+    )
+    return {
+        "id": fixture["id"],
+        "seed": fixture["seed"],
+        "attack_run_id": summaries["attack"]["run_id"],
+        "honest_run_id": summaries["honest"]["run_id"],
+        "assessment": assessment,
+        "expected_minimum": fixture["expected_minimum"],
+        "expected_maximum": fixture["expected_maximum"],
+        "passed": passed,
     }
 
 

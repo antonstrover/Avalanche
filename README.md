@@ -212,7 +212,17 @@ The dataset keeps each honest and attack run in an explicit pair.
 It splits complete runs before it creates any model window.
 The shortcut audit checks every feature before training.
 The training gate uses validation rows for calibration and threshold selection.
-The locked model records each artifact checksum.
+Each locked model records every artifact checksum.
+The final evaluator runs 1,680 paired Val Tarin episodes.
+
+Run the two-seed proof before the complete evaluation.
+
+```bash
+uv run python scripts/run_fix_158_acceptance.py \
+  --workers 1 \
+  --evaluation-seed-limit 2 \
+  --output outputs/fix-158-proof
+```
 
 Run the bounded final acceptance after a clean test run.
 

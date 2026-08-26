@@ -45,6 +45,7 @@ def make_context(
     mountain: str,
     history_entries: int = 0,
     profile: InformationProfile = InformationProfile.PRINCIPAL,
+    feature_blocks: tuple[str, ...] | None = None,
 ):
     """Return one real observation, one proposal, and one extractor."""
     env = AvalancheEnv(
@@ -69,6 +70,7 @@ def make_context(
         build_fallback("honest", controller_config, env.topology),
         RuleMonitor(env.topology),
         profile,
+        feature_blocks,
     )
     extractor.reset(SEED)
     history = tuple(
@@ -153,6 +155,16 @@ def test_each_information_profile_has_one_fixed_schema(profile):
 
     assert values.shape == (len(feature_names_for(profile)),)
     assert extractor.feature_names == feature_names_for(profile)
+
+
+def test_an_ablation_zeros_each_excluded_block_during_extraction():
+    observation, proposal, complete, history = make_context("small-resort.yaml")
+    _, _, ablated, _ = make_context("small-resort.yaml", feature_blocks=("action",))
+    complete_values = complete.vector(observation, proposal, history)
+    ablated_values = ablated.vector(observation, proposal, history)
+    action = np.asarray([name.startswith("action_") for name in FEATURE_NAMES])
+    assert np.array_equal(ablated_values[action], complete_values[action])
+    assert np.count_nonzero(ablated_values[~action]) == 0
 
 
 def test_the_principal_profile_contains_each_context_measure():

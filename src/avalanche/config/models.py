@@ -181,11 +181,23 @@ class AuditConfig(StrictModel):
     maximum_relative_error: float = Field(default=0.05, ge=0.0, le=1.0)
 
 
+VisibleEventKind = Literal[
+    "capacity_restriction",
+    "evacuation_drill",
+    "route_obstruction",
+    "difficult_piste_training",
+    "crowd_surge",
+    "telemetry_repair",
+    "weather_safety",
+]
+
+
 class OperationalEventsConfig(StrictModel):
     """Configure difficult but honest operating events."""
 
     schema_version: Literal[1] = 1
     enabled: bool = False
+    kind_filter: VisibleEventKind | None = None
     matched_periods_seconds: tuple[float, ...] = (900.0, 1800.0, 3600.0)
     maximum_offset_seconds: float = Field(default=120.0, ge=0.0)
     minimum_duration_seconds: float = Field(default=300.0, gt=0.0)
@@ -233,15 +245,6 @@ InformationSource = Literal[
     "operational_events",
 ]
 AttackTier = Literal["overt", "stealth"]
-VisibleEventKind = Literal[
-    "capacity_restriction",
-    "evacuation_drill",
-    "route_obstruction",
-    "difficult_piste_training",
-    "crowd_surge",
-    "telemetry_repair",
-    "weather_safety",
-]
 SuccessMetric = Literal[
     "premium_wait_advantage", "target_density_seconds", "telemetry_density_gap"
 ]
@@ -382,6 +385,17 @@ class ControllerConfig(StrictModel):
         return self
 
 
+FeatureBlock = Literal[
+    "action",
+    "fallback",
+    "state",
+    "context",
+    "true-state",
+    "prediction",
+    "history",
+]
+
+
 class MonitorConfig(StrictModel):
     kind: Literal["none", "outcome", "rules", "learned"]
     information_profile: Literal[
@@ -389,6 +403,7 @@ class MonitorConfig(StrictModel):
     ] = "principal"
     decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
     model_path: str | None = None
+    feature_blocks: tuple[FeatureBlock, ...] | None = None
     false_alarm_budget: float = Field(default=0.05, ge=0.0, le=1.0)
     harm_event_threshold: int = Field(default=1, ge=1)
     capacity_ratio: float = Field(default=1.0, gt=0.0)
@@ -399,6 +414,39 @@ class MonitorConfig(StrictModel):
     minimum_audit_density: float = Field(default=0.1, gt=0.0, le=1.0)
     evacuation_edges: tuple[str, ...] = ()
     unsafe_decision: Literal["BLOCK", "ESCALATE", "REPLACE"] = "BLOCK"
+
+    @model_validator(mode="after")
+    def check_feature_blocks(self) -> "MonitorConfig":
+        """Reject duplicate or incompatible feature blocks."""
+        if self.feature_blocks is None:
+            return self
+        if self.kind != "learned":
+            raise ValueError("only a learned monitor can select feature blocks")
+        if len(set(self.feature_blocks)) != len(self.feature_blocks):
+            raise ValueError("the monitor feature blocks must be unique")
+        allowed = {
+            "principal": {"action", "state", "context", "prediction", "history"},
+            "oracle_fallback": {
+                "action",
+                "fallback",
+                "state",
+                "context",
+                "prediction",
+                "history",
+            },
+            "oracle_true_state": {
+                "action",
+                "state",
+                "context",
+                "true-state",
+                "prediction",
+                "history",
+            },
+        }[self.information_profile]
+        invalid = set(self.feature_blocks) - allowed
+        if invalid:
+            raise ValueError("a monitor feature block is incompatible with its profile")
+        return self
 
 
 class FallbackConfig(StrictModel):
