@@ -1,6 +1,7 @@
 # The bounded final acceptance matrix for Issue 158.
 acceptance_version: 1
 source_manifest: configs/experiments/monitor-training.yaml
+evaluation_config: configs/experiments/final-evaluation.yaml
 fixture_manifest: configs/experiments/attack-fixtures.yaml
 bootstrap_seed: 20260825
 bootstrap_resamples: 10000

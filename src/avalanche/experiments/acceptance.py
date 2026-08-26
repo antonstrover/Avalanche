@@ -23,10 +23,10 @@ from avalanche.experiments.final_evaluation import (
     ATTACK_TIERS,
     BOOTSTRAP_RESAMPLES,
     BOOTSTRAP_SEED,
-    EVENT_KINDS,
+    EVALUATION_VERSION,
     FEATURE_PROFILES,
-    HOLDOUT_SLICES,
     POLICY_VARIANTS,
+    load_evaluation_config,
 )
 from avalanche.monitors.dataset import DATASET_VERSION, DatasetEntry, expand_manifest
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
@@ -42,7 +42,6 @@ from avalanche.scenarios.audits import AUDIT_SCHEMA_VERSION
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_SCHEMA_VERSION
 
 ACCEPTANCE_VERSION = 1
-ACCEPTANCE_ROOT_SEED_START = 2026082500
 EXPECTED_PAIR_COUNT = 17
 
 VERSION_INVENTORY = {
@@ -52,7 +51,7 @@ VERSION_INVENTORY = {
     "calibration_version": CALIBRATION_VERSION,
     "dataset_version": DATASET_VERSION,
     "envelope_version": ENVELOPE_VERSION,
-    "evaluation_version": 1,
+    "evaluation_version": EVALUATION_VERSION,
     "feature_version": FEATURE_VERSION,
     "model_version": MODEL_VERSION,
     "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
@@ -74,6 +73,10 @@ def load_acceptance_config(path: Path) -> dict[str, Any]:
         raise ValueError("the acceptance bootstrap count is incompatible")
     if config.get("root_seed_count") != 20:
         raise ValueError("the acceptance root seed count is incompatible")
+    evaluation_path = REPO_ROOT / str(config.get("evaluation_config", ""))
+    evaluation = load_evaluation_config(evaluation_path)
+    if len(evaluation["root_seeds"]) != config["root_seed_count"]:
+        raise ValueError("the acceptance evaluation seed count is incompatible")
     return config
 
 
@@ -280,63 +283,6 @@ def weakest_attack_result(
     }
 
 
-def acceptance_evaluation_records(root_seed_count: int = 20) -> pd.DataFrame:
-    """Build the deterministic final protocol acceptance fixture."""
-    if root_seed_count != 20:
-        raise ValueError("the final protocol fixture needs 20 root seeds")
-    rows = []
-    cells = [
-        (profile.name, attack, tier)
-        for profile in FEATURE_PROFILES
-        for attack in ATTACK_KINDS
-        for tier in ATTACK_TIERS
-    ]
-    for index, (profile, attack, tier) in enumerate(cells):
-        policy = POLICY_VARIANTS[index % len(POLICY_VARIANTS)]
-        event = EVENT_KINDS[index % len(EVENT_KINDS)]
-        holdout = HOLDOUT_SLICES[index % len(HOLDOUT_SLICES)]
-        for offset in range(root_seed_count):
-            root_seed = ACCEPTANCE_ROOT_SEED_START + offset
-            pair_id = f"acceptance-{index:02d}-{root_seed}"
-            variation = (offset % 5) * 0.1
-            for role in ("honest", "attack"):
-                attacked = role == "attack"
-                rows.append(
-                    {
-                        "record_kind": "protocol_acceptance_fixture",
-                        "feature_profile": profile,
-                        "attack_kind": attack,
-                        "attack_tier": tier,
-                        "policy_variant": policy,
-                        "event_kind": event,
-                        "holdout_slice": holdout,
-                        "root_seed": root_seed,
-                        "pair_id": pair_id,
-                        "pair_role": role,
-                        "attack_success": float(attacked and offset % 4 != 0),
-                        "harm_before_detection": (3.0 + variation) if attacked else 0.0,
-                        "detection_time_intervals": (2.0 + variation)
-                        if attacked
-                        else 0.0,
-                        "false_alarm": float(not attacked and offset == 0),
-                        "harm_count": (3.0 + variation) if attacked else 1.0,
-                        "dangerous_density_seconds": (
-                            30.0 + variation if attacked else 10.0
-                        ),
-                        "stranded_skiers": 2.0 if attacked else 0.0,
-                        "completed_journeys": 90.0 if attacked else 100.0,
-                        "mean_wait_seconds": 12.0 if attacked else 10.0,
-                        "utility": 90.0 if attacked else 100.0,
-                        "fairness": 5.0 if attacked else 2.0,
-                        "brier_score": 0.1 + variation / 100.0,
-                        "calibration_error": 0.02,
-                        "monitor_latency_seconds": 0.003,
-                        "simulation_steps_per_second": 500.0,
-                    }
-                )
-    return pd.DataFrame(rows)
-
-
 SHORTCUT_JUSTIFICATIONS_VERSION = 1
 DEFAULT_JUSTIFICATIONS_PATH = "configs/experiments/shortcut-justifications.yaml"
 LOGISTIC_AUDIT_KEY = "__logistic__"
@@ -386,6 +332,8 @@ def write_acceptance_report(
     output_dir = output_dir.resolve()
     config_path = config_path.resolve()
     config = load_acceptance_config(config_path)
+    evaluation_config_path = (REPO_ROOT / config["evaluation_config"]).resolve()
+    evaluation_config = load_evaluation_config(evaluation_config_path)
     justifications_path = (
         justifications_path or REPO_ROOT / DEFAULT_JUSTIFICATIONS_PATH
     ).resolve()
@@ -398,6 +346,10 @@ def write_acceptance_report(
     dataset_manifest_path = dataset_path.with_suffix(".manifest.json")
     shortcut_path = output_dir / "audit" / "shortcut-audit.json"
     hidden_lock_path = output_dir / "model" / "lock.json"
+    oracle_lock_paths = {
+        "oracle-fallback": output_dir / "oracle-fallback-model" / "lock.json",
+        "oracle-true-state": output_dir / "oracle-true-state-model" / "lock.json",
+    }
     surrogate_lock_path = output_dir / "surrogate-model" / "lock.json"
     evaluation_manifest_path = output_dir / "evaluation" / "evaluation-manifest.json"
     evaluation_results_path = output_dir / "evaluation" / "evaluation-results.json"
@@ -412,6 +364,13 @@ def write_acceptance_report(
         dataset_manifest_path,
         shortcut_path,
         hidden_lock_path,
+        *oracle_lock_paths.values(),
+        output_dir / "dataset" / "monitor-acceptance-oracle-fallback.parquet",
+        output_dir / "dataset" / "monitor-acceptance-oracle-fallback.summary.json",
+        output_dir / "dataset" / "monitor-acceptance-oracle-fallback.manifest.json",
+        output_dir / "dataset" / "monitor-acceptance-oracle-true-state.parquet",
+        output_dir / "dataset" / "monitor-acceptance-oracle-true-state.summary.json",
+        output_dir / "dataset" / "monitor-acceptance-oracle-true-state.manifest.json",
         surrogate_lock_path,
         output_dir / "evaluation" / "evaluation-records.json",
         evaluation_manifest_path,
@@ -431,11 +390,20 @@ def write_acceptance_report(
     shortcut = json.loads(shortcut_path.read_text())
     evaluation = json.loads(evaluation_manifest_path.read_text())
     evaluation_results = json.loads(evaluation_results_path.read_text())
+    evaluation_records = pd.DataFrame(
+        json.loads(
+            (output_dir / "evaluation" / "evaluation-records.json").read_text()
+        )
+    )
     adaptive = json.loads(adaptive_manifest_path.read_text())
     queries = json.loads(adaptive_queries_path.read_text())
     fixtures = json.loads(fixture_path.read_text())
     weakest = json.loads(weakest_path.read_text())
     hidden_lock = verify_locked_artifacts(hidden_lock_path)
+    oracle_locks = {
+        name: verify_locked_artifacts(path)
+        for name, path in oracle_lock_paths.items()
+    }
     surrogate_lock = verify_locked_artifacts(surrogate_lock_path)
     controllers = validate_controller_configurations()
     checks = {
@@ -470,6 +438,7 @@ def write_acceptance_report(
         "evaluation_bootstrap": all(
             evaluation.get(name) == value
             for name, value in {
+                "evaluation_version": EVALUATION_VERSION,
                 "bootstrap_seed": BOOTSTRAP_SEED,
                 "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
                 "required_root_seeds": 20,
@@ -485,14 +454,55 @@ def write_acceptance_report(
                 "records_sha256": output_dir / "evaluation" / "evaluation-records.json",
                 "results_sha256": evaluation_results_path,
                 "report_sha256": output_dir / "evaluation" / "evaluation-report.md",
-                "lock_sha256": hidden_lock_path,
             }.items()
+        ),
+        "evaluation_model_locks": (
+            set(evaluation.get("locked_models", ()))
+            == {"principal", "oracle-fallback", "oracle-true-state"}
+            and all(
+                evaluation["locked_models"][name]["lock_sha256"]
+                == file_checksum(path)
+                for name, path in {
+                    "principal": hidden_lock_path,
+                    **oracle_lock_paths,
+                }.items()
+            )
+        ),
+        "evaluation_real_runs": (
+            set(evaluation_records["record_kind"]) == {"evaluation_episode"}
+            and set(evaluation_records["code_revision"]) == {revision}
+            and not evaluation_records["resolved_config_checksum"].isna().any()
+        ),
+        "evaluation_seed_inventory": sorted(
+            evaluation_records["root_seed"].unique().tolist()
+        )
+        == sorted(evaluation_config["root_seeds"]),
+        "evaluation_seed_variation": any(
+            cell["harm_count"].nunique() > 1
+            or cell["dangerous_density_seconds"].nunique() > 1
+            or cell["detection_time_intervals"].nunique() > 1
+            for _, cell in evaluation_records[
+                evaluation_records["pair_role"] == "attack"
+            ].groupby(
+                [
+                    "feature_profile",
+                    "attack_kind",
+                    "attack_tier",
+                    "policy_variant",
+                    "event_kind",
+                    "holdout_slice",
+                ]
+            )
         ),
         "fixture_ranges": bool(
             len(fixtures.get("fixtures", ())) == 3
             and all(item["passed"] for item in fixtures["fixtures"])
         ),
         "hidden_model_lock": hidden_lock.get("information_profile") == "principal",
+        "oracle_model_locks": all(
+            lock.get("information_profile") == name.replace("-", "_")
+            for name, lock in oracle_locks.items()
+        ),
         "shortcut_report": shortcut.get("approved") is True,
         # Every accepted reason must come from the reviewed file.
         "shortcut_allowlist": (
@@ -520,6 +530,10 @@ def write_acceptance_report(
         "code_revision": revision,
         "configuration": str(config_path.relative_to(REPO_ROOT)),
         "configuration_sha256": file_checksum(config_path),
+        "evaluation_configuration": str(
+            evaluation_config_path.relative_to(REPO_ROOT)
+        ),
+        "evaluation_configuration_sha256": file_checksum(evaluation_config_path),
         "shortcut_justifications": str(justifications_path.relative_to(REPO_ROOT)),
         "shortcut_justifications_sha256": file_checksum(justifications_path),
         "source_manifest": config["source_manifest"],

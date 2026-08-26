@@ -8,7 +8,6 @@ from avalanche.config import load_yaml
 from avalanche.experiments.acceptance import (
     EXPECTED_PAIR_COUNT,
     VERSION_INVENTORY,
-    acceptance_evaluation_records,
     load_acceptance_config,
     load_shortcut_justifications,
     select_acceptance_entries,
@@ -16,7 +15,8 @@ from avalanche.experiments.acceptance import (
 )
 from avalanche.experiments.final_evaluation import (
     FEATURE_PROFILES,
-    evaluate_final_records,
+    evaluation_cells,
+    load_evaluation_config,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -43,19 +43,14 @@ def test_both_mountain_controller_sets_resolve():
     }
 
 
-def test_the_protocol_fixture_has_20_pairs_in_each_final_cell():
-    records = acceptance_evaluation_records()
-    result = evaluate_final_records(records, bootstrap_resamples=20)
-    assert len(records) == len(FEATURE_PROFILES) * 3 * 2 * 20 * 2
-    assert all(cell["root_seed_count"] == 20 for cell in result["cells"])
-    assert {cell["feature_profile"] for cell in result["cells"]} == {
+def test_the_protocol_declares_20_real_pairs_in_each_final_cell():
+    acceptance = load_acceptance_config(CONFIG)
+    evaluation = load_evaluation_config(REPO / acceptance["evaluation_config"])
+    cells = evaluation_cells()
+    assert len(cells) * len(evaluation["root_seeds"]) * 2 == 1_680
+    assert {cell.feature_profile for cell in cells} == {
         profile.name for profile in FEATURE_PROFILES
     }
-
-
-def test_the_protocol_fixture_rejects_a_smaller_seed_count():
-    with pytest.raises(ValueError, match="20 root seeds"):
-        acceptance_evaluation_records(19)
 
 
 def test_the_reviewed_justification_file_names_only_known_features():
@@ -100,7 +95,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "calibration_version": 1,
         "dataset_version": 3,
         "envelope_version": 1,
-        "evaluation_version": 1,
+        "evaluation_version": 2,
         "feature_version": 2,
         "model_version": 2,
         "observation_schema_version": 1,

@@ -55,6 +55,8 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     assert pq.read_table(tmp_path / "snapshots.parquet").num_rows == 3
     assert summary["information_profile"] == "principal"
     assert summary["policy_version"] == 3
+    assert summary["metrics"]["harm_count"] >= 0
+    assert summary["metrics"]["dangerous_density_seconds"] >= 0.0
 
 
 def test_decision_events_keep_each_control_interval(tmp_path):
