@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import msgpack
+import pytest
 from fastapi.testclient import TestClient
 
 from avalanche.api.app import app
@@ -73,6 +74,17 @@ def test_config_options_serves_each_validated_configuration_choice():
         "reward_hacker",
         "sleeper_saboteur",
     }
+    assert [item["id"] for item in body["controllers"]] == sorted(
+        item["id"] for item in body["controllers"]
+    )
+    none = next(item for item in body["controllers"] if item["id"] == "none")
+    assert none["compatible_mountain_ids"] == ["medium-resort", "small-resort"]
+    assert next(item for item in body["controllers"] if item["id"] == "honest")[
+        "compatible_mountain_ids"
+    ] == ["medium-resort"]
+    assert next(
+        item for item in body["controllers"] if item["id"] == "small-resort/honest"
+    )["compatible_mountain_ids"] == ["small-resort"]
     assert {item["monitor"]["kind"] for item in body["monitors"]} == {
         "learned",
         "none",
@@ -97,7 +109,7 @@ def test_live_configuration_resolution_combines_every_selected_part():
         json={
             "mountain": "small-resort",
             "scenario": "failure-examples",
-            "controller": "none",
+            "controller": "small-resort/honest",
             "monitor": "none",
             "seed": 17,
             "skier_count": 20,
@@ -108,7 +120,7 @@ def test_live_configuration_resolution_combines_every_selected_part():
     resolved = response.json()
     assert resolved["mountain"]["name"] == "small-resort"
     assert resolved["scenario"]["name"] == "failure-examples"
-    assert resolved["controller"]["kind"] == "none"
+    assert resolved["controller"]["kind"] == "honest"
     assert resolved["monitor"]["kind"] == "none"
     assert resolved["seed"] == 17
     assert resolved["population"]["skier_count"] == 20
@@ -118,6 +130,37 @@ def test_live_configuration_resolution_rejects_an_unknown_choice():
     response = client.post("/api/config-options/resolve", json={"mountain": "missing"})
     assert response.status_code == 422
     assert response.json()["detail"] == "the mountain choice is unknown"
+
+
+def test_live_configuration_resolution_rejects_an_incompatible_pair():
+    response = client.post(
+        "/api/config-options/resolve",
+        json={"mountain": "small-resort", "controller": "honest"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "message": "the controller is incompatible with the mountain",
+        "mountain": "small-resort",
+        "controller": "honest",
+    }
+
+
+@pytest.mark.parametrize("mountain", ["medium-resort", "small-resort"])
+def test_the_shared_controller_resolves_for_each_mountain(mountain: str):
+    response = client.post(
+        "/api/config-options/resolve",
+        json={"mountain": mountain, "controller": "none", "skier_count": 20},
+    )
+
+    assert response.status_code == 200
+    resolved = response.json()
+    assert resolved["mountain"]["path"].endswith(f"/{mountain}.yaml")
+    assert resolved["controller"]["kind"] == "none"
+    session = client.post("/api/sessions", json={"config": resolved})
+    assert session.status_code == 201
+    deleted = client.delete(f"/api/sessions/{session.json()['session_id']}")
+    assert deleted.status_code == 204
 
 
 def test_live_session_runs_the_explicit_resolved_configuration():

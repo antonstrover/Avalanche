@@ -25,13 +25,36 @@ export function SessionSetup({
     if (!options) {
         return <p>Loading the configuration choices.</p>;
     }
+    const compatibleControllers = options.controllers.filter((option) =>
+        option.compatible_mountain_ids.includes(selection.mountain),
+    );
     const choices = {
         mountain: options.mountains,
         scenario: options.scenarios,
-        controller: options.controllers,
+        controller: compatibleControllers,
         monitor: options.monitors,
     };
     const changeChoice = (name: ChoiceName, value: string) => {
+        if (name === "mountain") {
+            const compatible = options.controllers.filter((option) =>
+                option.compatible_mountain_ids.includes(value),
+            );
+            const currentIsCompatible = compatible.some(
+                (option) => option.id === selection.controller,
+            );
+            const preferredId = value === "medium-resort" ? "honest" : `${value}/honest`;
+            const preferred = compatible.find((option) => option.id === preferredId);
+            const honest = compatible.find(
+                (option) => option.controller.kind === "honest",
+            );
+            const controller = currentIsCompatible
+                ? selection.controller
+                : (preferred ?? honest ?? compatible[0])?.id;
+            if (controller) {
+                onChange({ ...selection, mountain: value, controller });
+            }
+            return;
+        }
         onChange({ ...selection, [name]: value });
     };
     return (

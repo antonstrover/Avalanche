@@ -54,7 +54,14 @@ describe("App shell", () => {
                             },
                         ],
                         scenarios: [{ id: "default", label: "Default" }],
-                        controllers: [{ id: "honest", label: "Honest" }],
+                        controllers: [
+                            {
+                                id: "honest",
+                                label: "Honest",
+                                compatible_mountain_ids: ["medium-resort"],
+                                controller: { kind: "honest" },
+                            },
+                        ],
                         monitors: [{ id: "none", label: "None" }],
                     };
                 } else if (url.endsWith("/api/config-options/resolve")) {
