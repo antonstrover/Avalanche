@@ -520,10 +520,9 @@ def _apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
     sim.state.crowd_messages[:] = action["crowd_messages"]
 
     telemetry_enabled = action["telemetry_override_enabled"].astype(bool)
-    sim.state.telemetry_override[telemetry_enabled] = action["telemetry_overrides"][
-        telemetry_enabled
-    ]
-    sim.state.telemetry_override_enabled[telemetry_enabled] = True
+    sim.state.telemetry_override_enabled[:] = telemetry_enabled
+    sim.state.telemetry_override[:] = action["telemetry_overrides"]
+    sim.state.telemetry_override[~telemetry_enabled] = 0.0
     _apply_route_weights(sim, action["route_weights"])
     refresh_reported_telemetry(sim.state, topology)
 
