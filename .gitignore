@@ -9,7 +9,7 @@ __pycache__/
 uv.lock.bak
 
 # Generated runs and models (docs/PLAN.md §3)
-outputs/
+outputs/*
 !outputs/.gitkeep
 
 # Node / dashboard
