@@ -225,17 +225,13 @@ def update_congestion(
     state.speed_factor[state.lift_stopped] = 0.0
 
 
-def start_arrivals(
-    pop: SkierArrays, simulation_time: float, tick_seconds: float
-) -> None:
-    """Release each skier that arrives before the end of the tick.
+def start_arrivals(pop: SkierArrays, boundary_time: float) -> None:
+    """Release each skier that arrived by the current tick boundary.
 
     The arrival times increase with the index, so a search finds the new skiers.
     A released skier starts at its entry node.
     """
-    end = int(
-        np.searchsorted(pop.arrival_time, simulation_time + tick_seconds, side="right")
-    )
+    end = int(np.searchsorted(pop.arrival_time, boundary_time, side="right"))
     pop.location_kind[pop.arrived : end] = LocationKind.NODE
     pop.arrived = end
 

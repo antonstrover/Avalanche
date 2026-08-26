@@ -10,7 +10,7 @@ from avalanche.sim.movement import DynamicState
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 5
+METRICS_VERSION = 6
 PERFORMANCE_VERSION = 1
 
 
@@ -129,7 +129,11 @@ class OnlineMetrics:
             )
 
     def snapshot(self, population: SkierArrays) -> MetricSnapshot:
-        """Return current cumulative and grouped values."""
+        """Return current cumulative and grouped values.
+
+        Each grouped output keeps its configured length and pads absent groups.
+        The scalar fairness value uses only groups that contain a skier.
+        """
         completed = population.status == Status.COMPLETE
         stranded = population.status == Status.STRANDED
         group_sizes = np.bincount(population.group, minlength=self.group_count)[
@@ -151,7 +155,11 @@ class OnlineMetrics:
         utility[present] = group_completed[present] / group_sizes[present] - (
             group_wait[present] + self.group_stranded_seconds[present]
         ) / (group_sizes[present] * self.episode_duration_seconds)
-        fairness = float(np.max(mean_wait) - np.min(mean_wait))
+        fairness = (
+            float(np.max(mean_wait[present]) - np.min(mean_wait[present]))
+            if np.count_nonzero(present) > 1
+            else 0.0
+        )
         total = float(np.sum(group_sizes))
         scalar_utility = (
             float(np.average(utility, weights=group_sizes)) if total > 0.0 else 0.0

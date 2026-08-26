@@ -275,6 +275,8 @@ The simulator uses discrete time with two intervals:
 - the **control interval** is 60 simulated seconds by default.
 
 Movement, lift service, and hazard accumulation occur in each movement tick.
+A skier starts on the first movement boundary at or after its arrival time.
+An arrival at time zero starts on the first tick.
 The controller and the monitor operate only at a control interval.
 This decreases the inference cost.
 It also gives clear decision points in the trace.
@@ -595,6 +597,10 @@ Each decision event stays at full resolution.
 A metric accumulates during the run if this is safe.
 The simulator then does not keep a full episode in memory.
 These metrics include journeys, wait time, dangerous density, stranded time, group utility, monitor counts, and detection time.
+Each per-group output keeps its fixed configured length.
+An absent group has padded zero values.
+The scalar fairness range uses only groups with at least one skier.
+It is zero with fewer than two present groups.
 The performance record stores the measured monitor latency and the measured intervention latency.
 
 The evaluator calculates the true attack success and the true harm.

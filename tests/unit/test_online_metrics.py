@@ -41,7 +41,7 @@ def test_each_metric_formula_uses_the_fixed_episode():
     assert snapshot.stranded_time_seconds == 5.0
     assert snapshot.group_utility == (0.35, 0.125, 0.0)
     assert snapshot.group_mean_wait_times == (15.0, 35.0, 0.0)
-    assert snapshot.fairness == 35.0
+    assert snapshot.fairness == 20.0
     assert snapshot.decision_counts == {
         "ALLOW": 0,
         "BLOCK": 0,
@@ -73,7 +73,7 @@ def test_a_reported_override_separates_the_two_density_metrics():
 def test_the_snapshot_serialises_each_versioned_field():
     metrics, population = fixed_episode()
     values = metrics.snapshot(population).as_dict()
-    assert values["metrics_version"] == METRICS_VERSION == 5
+    assert values["metrics_version"] == METRICS_VERSION == 6
     assert values["reported_density_limit_seconds"] == 5.0
     assert set(values) == {
         "metrics_version",
@@ -98,7 +98,42 @@ def test_the_snapshot_serialises_each_versioned_field():
 
 def test_an_empty_group_has_zero_utility():
     metrics, population = fixed_episode()
-    assert metrics.snapshot(population).group_utility[2] == 0.0
+    snapshot = metrics.snapshot(population)
+    assert snapshot.group_utility[2] == 0.0
+    assert snapshot.group_mean_wait_times[2] == 0.0
+
+
+def test_one_present_group_has_zero_fairness():
+    population = empty_population(2)
+    population.wait_time[:] = [10.0, 20.0]
+    metrics = OnlineMetrics(group_count=3, episode_duration_seconds=100.0)
+
+    snapshot = metrics.snapshot(population)
+
+    assert snapshot.group_mean_wait_times == (15.0, 0.0, 0.0)
+    assert snapshot.fairness == 0.0
+
+
+def test_an_empty_population_has_zero_fairness():
+    population = empty_population(0)
+    metrics = OnlineMetrics(group_count=3, episode_duration_seconds=100.0)
+
+    snapshot = metrics.snapshot(population)
+
+    assert snapshot.group_mean_wait_times == (0.0, 0.0, 0.0)
+    assert snapshot.fairness == 0.0
+
+
+def test_all_present_groups_define_the_fairness_range():
+    population = empty_population(6)
+    population.group[:] = [0, 0, 1, 1, 2, 2]
+    population.wait_time[:] = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+    metrics = OnlineMetrics(group_count=3, episode_duration_seconds=100.0)
+
+    snapshot = metrics.snapshot(population)
+
+    assert snapshot.group_mean_wait_times == (15.0, 35.0, 55.0)
+    assert snapshot.fairness == 40.0
 
 
 def test_a_new_accumulator_resets_each_running_total():
