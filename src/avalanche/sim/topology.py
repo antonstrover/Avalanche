@@ -4,8 +4,10 @@ The loader calls NetworkX one time.
 The simulator then uses only the arrays in `Topology`.
 """
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 
@@ -27,7 +29,7 @@ class Topology:
     name: str
 
     node_ids: tuple[str, ...]
-    node_index: dict[str, int]
+    node_index: Mapping[str, int]
     node_x: np.ndarray
     node_y: np.ndarray
     node_elevation: np.ndarray
@@ -51,6 +53,14 @@ class Topology:
 
     edge_offsets: np.ndarray
     outgoing_edges: np.ndarray
+
+    def __post_init__(self) -> None:
+        """Protect every static array and the node mapping from writes."""
+        for field_info in fields(self):
+            value = getattr(self, field_info.name)
+            if isinstance(value, np.ndarray):
+                value.setflags(write=False)
+        object.__setattr__(self, "node_index", MappingProxyType(dict(self.node_index)))
 
     @property
     def node_count(self) -> int:

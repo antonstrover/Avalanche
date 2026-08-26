@@ -58,9 +58,9 @@ uv run avalanche simulate configs/mountain/default.yaml \
 | Part | File | What it does |
 |---|---|---|
 | Graph | `src/avalanche/sim/graph.py` | reads the mountain file and validates the graph one time, at load |
-| Topology | `src/avalanche/sim/topology.py` | changes the graph into static index arrays |
-| Routes | `src/avalanche/sim/routes.py` | gives the shortest path from each node to each destination |
-| Population | `src/avalanche/sim/population.py` | samples the skier attributes and stores the skier arrays |
+| Topology | `src/avalanche/sim/topology.py` | changes the graph into read-only index arrays |
+| Routes | `src/avalanche/sim/routes.py` | gives safe shortest paths for each ability |
+| Population | `src/avalanche/sim/population.py` | samples skier attributes and reachable exits into arrays |
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
 | Failures | `src/avalanche/scenarios/failures.py` | resolves failures and keeps true telemetry separate |
@@ -80,6 +80,8 @@ It has one upper bowl that drains through a single traverse.
 Each skier travels from an entrance to a sampled destination.
 The movement tick uses masked NumPy operations.
 The route choice groups skiers by their location and their attributes.
+The simulator rejects a piste above the skier's ability limit.
+It rejects lift advice without a safe onward route.
 The compliance value controls the probability that a skier follows the advice.
 The congestion changes the effective edge speed.
 The weather changes the piste speed, the edge risk, and the lift availability.

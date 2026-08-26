@@ -1,3 +1,4 @@
+from dataclasses import fields
 from pathlib import Path
 
 import numpy as np
@@ -110,3 +111,27 @@ def test_the_nodes_round_trip_against_the_graph(topology, graph):
         assert topology.node_y[index] == pytest.approx(attributes["y"])
         assert topology.node_elevation[index] == pytest.approx(attributes["elevation"])
         assert topology.node_capacity[index] == attributes["capacity"]
+
+
+def test_every_topology_array_is_read_only(topology):
+    for field_info in fields(topology):
+        values = getattr(topology, field_info.name)
+        if not isinstance(values, np.ndarray):
+            continue
+        assert not values.flags.writeable, field_info.name
+        with pytest.raises(ValueError, match="read-only"):
+            values.flat[0] = values.flat[0]
+
+
+def test_the_node_index_is_read_only(topology):
+    with pytest.raises(TypeError):
+        topology.node_index["new-node"] = topology.node_count
+
+
+def test_an_outgoing_edge_view_is_read_only(topology):
+    source = topology.node_index["base_village"]
+    outgoing = topology.edges_from(source)
+
+    assert not outgoing.flags.writeable
+    with pytest.raises(ValueError, match="read-only"):
+        outgoing[0] = outgoing[0]

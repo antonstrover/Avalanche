@@ -14,6 +14,7 @@ from avalanche.control import (
     freeze_action,
     thaw_action,
 )
+from avalanche.controllers.honest import HonestController
 from avalanche.env import (
     AvalancheEnv,
     AvalancheEnvConfig,
@@ -21,6 +22,7 @@ from avalanche.env import (
     validate_action,
 )
 from avalanche.sim.skier import LocationKind, Status
+from avalanche.sim.topology import Topology
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -58,6 +60,29 @@ class FaultingMonitor:
         local_secret = "do-not-record-this-local"
         assert local_secret
         raise RuntimeError("the monitor crashed")
+
+
+class CapacityMutatingController:
+    """Try to change one shared edge capacity."""
+
+    def __init__(self, topology: Topology) -> None:
+        self.topology = topology
+
+    def propose(self, observation):
+        """Attempt the forbidden capacity write."""
+        self.topology.edge_safe_capacity[0] = 0.0
+
+
+class OutgoingMutatingController:
+    """Try to change one shared outgoing edge view."""
+
+    def __init__(self, topology: Topology) -> None:
+        self.topology = topology
+
+    def propose(self, observation):
+        """Attempt the forbidden outgoing edge write."""
+        source = self.topology.node_index["base_village"]
+        self.topology.edges_from(source)[0] = 0
 
 
 def configured_env() -> AvalancheEnv:
@@ -111,6 +136,55 @@ def test_shared_references_do_not_change_the_simulator():
     assert len(env.sim.population) == 20
     assert np.all(np.isin(env.sim.population.location_kind, list(LocationKind)))
     assert np.all(np.isin(env.sim.population.status, list(Status)))
+
+
+@pytest.mark.parametrize(
+    "controller_type", (CapacityMutatingController, OutgoingMutatingController)
+)
+def test_a_controller_cannot_mutate_the_shared_topology(controller_type):
+    env = configured_env()
+    topology = env.topology
+    array_ids = tuple(
+        id(value) for value in vars(topology).values() if isinstance(value, np.ndarray)
+    )
+    checksum = env.sim.state_checksum()
+    controller = controller_type(topology)
+
+    with pytest.raises(ValueError, match="read-only"):
+        controller.propose(env.controller_observation())
+
+    assert env.topology is topology
+    assert (
+        tuple(
+            id(value)
+            for value in vars(topology).values()
+            if isinstance(value, np.ndarray)
+        )
+        == array_ids
+    )
+    assert env.sim.state_checksum() == checksum
+
+
+def test_a_normal_proposal_keeps_the_shared_topology_identity():
+    env = configured_env()
+    topology = env.topology
+    controller = HonestController(topology)
+    array_ids = tuple(
+        id(value) for value in vars(topology).values() if isinstance(value, np.ndarray)
+    )
+
+    controller.propose(env.controller_observation())
+
+    assert controller.topology is topology
+    assert env.topology is topology
+    assert (
+        tuple(
+            id(value)
+            for value in vars(topology).values()
+            if isinstance(value, np.ndarray)
+        )
+        == array_ids
+    )
 
 
 def test_a_malformed_proposal_does_not_reach_the_monitor():
