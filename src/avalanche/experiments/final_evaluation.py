@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import platform
 import subprocess
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
@@ -281,6 +282,7 @@ def _run_evaluation_episode(task: EvaluationRun) -> dict[str, Any]:
         "pair_context_sha256": task.pair_context_checksum,
         "pair_id": task.pair_id,
         "pair_role": task.pair_role,
+        "python_version": platform.python_version(),
         "root_seed": task.root_seed,
     }
     (task.output_dir / "evaluation-metadata.json").write_text(

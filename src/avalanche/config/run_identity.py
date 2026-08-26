@@ -50,6 +50,7 @@ def make_run_dir(
         "run_id": identity,
         "created_at": datetime.now(UTC).isoformat(),
         "platform": platform.platform(),
+        "python_version": platform.python_version(),
         "dependency_lock_hash": _lock_hash(),
         "git_commit": _git_commit(),
     }

@@ -37,6 +37,10 @@ def test_running_twice_reuses_the_same_output_directory(tmp_path):
     assert metadata["run_id"] == run_id(resolved)
     assert "git_commit" in metadata
     assert "dependency_lock_hash" in metadata
+    expected_python = (
+        Path(__file__).resolve().parents[2] / ".python-version"
+    ).read_text()
+    assert metadata["python_version"] == expected_python.strip()
 
 
 def _attack_config(strength: float = 0.5) -> ResolvedConfig:

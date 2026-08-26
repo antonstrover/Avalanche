@@ -1,7 +1,7 @@
 ---
 title: "AVALANCHE: Technical Implementation Plan"
 date created: Wednesday, August 19th 2026
-date modified: Tuesday, August 25th 2026
+date modified: Wednesday, August 26th 2026
 status: proposed
 tags:
   - dissertation
@@ -553,7 +553,7 @@ events.jsonl or events.parquet
 model-reference.json
 ```
 
-`metadata.json` records the time, the platform, the hash of the dependency lock, and the Git commit.
+`metadata.json` records the time, the platform, the Python release, the dependency lock hash, and the Git commit.
 The same configuration and the same code must give the same checksum and the same metrics on one platform.
 A small difference between platforms is permitted inside recorded numerical limits.
 
