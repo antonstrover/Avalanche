@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 
 from avalanche.sim import LocationKind, MountainSim, load_topology
-from avalanche.sim.movement import LIFT_EDGE, new_dynamic_state, serve_lift_queues
+from avalanche.sim.movement import (
+    LIFT_EDGE,
+    new_dynamic_state,
+    serve_lift_queues,
+    update_congestion,
+)
 from avalanche.sim.population import empty_population
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -147,3 +152,64 @@ def test_a_reset_clears_each_service_residual():
 
     sim.reset(7)
     assert np.all(sim.state.lift_service_residual == 0.0)
+
+
+def test_a_full_lift_does_not_board_a_waiting_skier():
+    topology = load_topology(MOUNTAINS[0])
+    edge = int(np.flatnonzero(topology.edge_type == LIFT_EDGE)[0])
+    pop = queued_population(np.full(4, edge, dtype=np.int32))
+    state = new_dynamic_state(topology)
+    state.occupancy[edge] = int(topology.edge_safe_capacity[edge])
+
+    for _ in range(4):
+        serve_lift_queues(pop, topology, state, TICK_SECONDS)
+
+    assert np.all(pop.location_kind == LocationKind.QUEUE)
+    assert state.lift_service_residual[edge] < 1.0
+
+
+def test_boarding_resumes_after_one_rider_leaves():
+    topology = load_topology(MOUNTAINS[1])
+    edge = next(
+        int(edge)
+        for edge in np.flatnonzero(topology.edge_type == LIFT_EDGE)
+        if topology.edge_lift_throughput[edge] == 700.0
+    )
+    pop = queued_population(np.full(3, edge, dtype=np.int32))
+    state = new_dynamic_state(topology)
+    state.occupancy[edge] = int(topology.edge_safe_capacity[edge])
+
+    serve_lift_queues(pop, topology, state, TICK_SECONDS)
+    state.occupancy[edge] -= 1
+    serve_lift_queues(pop, topology, state, TICK_SECONDS)
+
+    assert np.count_nonzero(pop.location_kind == LocationKind.LIFT) == 1
+
+
+def test_boarding_uses_the_smaller_service_and_room_limit():
+    topology = load_topology(MOUNTAINS[1])
+    edge = int(np.argmax(topology.edge_lift_throughput))
+    pop = queued_population(np.full(10, edge, dtype=np.int32))
+    state = new_dynamic_state(topology)
+    state.occupancy[edge] = int(topology.edge_safe_capacity[edge]) - 2
+
+    serve_lift_queues(pop, topology, state, TICK_SECONDS)
+
+    assert np.count_nonzero(pop.location_kind == LocationKind.LIFT) == 2
+
+
+def test_a_lift_queue_stays_outside_the_onboard_occupancy():
+    topology = load_topology(MOUNTAINS[0])
+    edge = int(np.flatnonzero(topology.edge_type == LIFT_EDGE)[0])
+    capacity = int(topology.edge_safe_capacity[edge])
+    pop = empty_population(capacity + 3)
+    pop.location_index[:] = edge
+    pop.location_kind[:capacity] = LocationKind.LIFT
+    pop.location_kind[capacity:] = LocationKind.QUEUE
+    pop.queue_ticket[capacity:] = np.arange(3)
+    state = new_dynamic_state(topology)
+
+    update_congestion(pop, topology, state)
+
+    assert state.occupancy[edge] == capacity
+    assert state.queue_length[edge] == 3

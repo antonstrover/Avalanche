@@ -252,6 +252,7 @@ def serve_lift_queues(
     The residual carries fractional service between ticks.
     Closed or stopped lifts do not add service.
     Each tick discards unused whole service credit.
+    The safe capacity limits the onboard skier count.
     The queue ticket gives the order of the service, which is first in and first out.
     """
     lift = topology.edge_type == LIFT_EDGE
@@ -271,7 +272,12 @@ def serve_lift_queues(
         members, rank = group_rank(edges, pop.queue_ticket[queued])
         service = np.floor(state.lift_service_residual).astype(np.int64)
         service[~operational] = 0
-        served = queued[members][rank < service[edges[members]]]
+        room = np.maximum(
+            topology.edge_safe_capacity.astype(np.int64) - state.occupancy,
+            0,
+        )
+        boarding_limit = np.minimum(service, room)
+        served = queued[members][rank < boarding_limit[edges[members]]]
 
         served_edges = pop.location_index[served]
         served_count = np.bincount(served_edges, minlength=topology.edge_count).astype(
@@ -346,7 +352,8 @@ def select_next_edges(
     A piste edge at its safe capacity accepts no new skier.
     The refused skiers wait at the node and try again in the next tick.
     The skier index gives the order of the admission, so the run is deterministic.
-    A lift edge takes no limit, because the queue and the throughput bound it.
+    A lift queue has no admission limit.
+    Lift service applies the onboard limit before boarding.
     """
     at_node = np.flatnonzero(
         (pop.location_kind == LocationKind.NODE) & (pop.status == Status.ACTIVE)

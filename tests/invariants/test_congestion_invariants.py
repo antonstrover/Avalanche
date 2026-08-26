@@ -12,11 +12,12 @@ import pytest
 
 from avalanche.config.models import PopulationConfig
 from avalanche.sim import MountainSim
-from avalanche.sim.movement import LIFT_EDGE, MIN_SPEED_FACTOR
+from avalanche.sim.movement import MIN_SPEED_FACTOR
 from avalanche.sim.skier import Status
 
-FIXTURE = (
-    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+FIXTURES = (
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml",
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "medium-resort.yaml",
 )
 SEED = 4242
 SKIER_COUNT = 3000
@@ -34,22 +35,20 @@ POPULATION = PopulationConfig(
 )
 
 
-@pytest.fixture(scope="module")
-def congested_run():
+@pytest.fixture(scope="module", params=FIXTURES, ids=lambda path: path.stem)
+def congested_run(request):
     """Run the crowded resort and return the simulator and the record of the run."""
-    sim = MountainSim(FIXTURE)
+    sim = MountainSim(request.param)
     sim.reset(SEED, {"population": POPULATION, "tick_seconds": TICK_SECONDS})
-    # A lift edge takes no capacity limit, so the check covers the piste edges.
-    piste = sim.topology.edge_type != LIFT_EDGE
-    capacity = sim.topology.edge_safe_capacity[piste]
+    capacity = sim.topology.edge_safe_capacity
 
     slowest = 1.0
     complete = []
     for _ in range(TICK_COUNT):
         sim.tick()
 
-        # A piste edge never holds more skiers than its safe capacity.
-        assert np.all(sim.state.occupancy[piste] <= capacity)
+        # An edge never holds more skiers than its safe capacity.
+        assert np.all(sim.state.occupancy <= capacity)
 
         # The speed factor stays inside the calibrated range.
         assert np.all(sim.state.speed_factor >= MIN_SPEED_FACTOR)
