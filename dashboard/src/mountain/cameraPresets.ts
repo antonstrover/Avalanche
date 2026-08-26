@@ -1,4 +1,7 @@
+import { Vector3 } from "three";
+import { liftShape, pisteCurve } from "./curves";
 import type { ResortModel } from "./resort";
+import type { FocusRequest } from "./selection";
 
 export type CameraPresetName = "overview" | "zone" | "operations";
 
@@ -9,7 +12,7 @@ export type CameraPose = {
 
 export type CameraPresetMap = Record<CameraPresetName, CameraPose>;
 
-type CameraControl = {
+export type CameraControl = {
     setLookAt: (
         x: number,
         y: number,
@@ -19,6 +22,8 @@ type CameraControl = {
         targetZ: number,
         smooth: boolean,
     ) => unknown;
+    getPosition?: (target: Vector3) => Vector3;
+    getTarget?: (target: Vector3) => Vector3;
 };
 
 function nearestNode(
@@ -95,4 +100,49 @@ export function moveToPreset(
         ...pose.target,
         !reduceMotion,
     );
+}
+
+function focusTarget(
+    request: Exclude<FocusRequest, null>,
+    model: ResortModel,
+): Vector3 | null {
+    const selection = request.selection;
+    if (selection.kind === "node" || selection.kind === "building") {
+        const node = model.resort.nodes[selection.index];
+        return node ? model.nodePosition(node) : null;
+    }
+    if (selection.kind === "piste" || selection.kind === "lift") {
+        const edge = model.resort.edges[selection.index];
+        if (!edge) return null;
+        const curve = edge.edge_type === "lift"
+            ? liftShape(edge, model).cable
+            : pisteCurve(edge, model);
+        return curve.getPoint(0.5);
+    }
+    return null;
+}
+
+export function focusInfrastructure(
+    controls: CameraControl,
+    request: Exclude<FocusRequest, null>,
+    model: ResortModel,
+    reduceMotion: boolean,
+): boolean {
+    const target = focusTarget(request, model);
+    if (!target) return false;
+    const currentPosition = controls.getPosition?.(new Vector3());
+    const currentTarget = controls.getTarget?.(new Vector3());
+    const position = currentPosition && currentTarget
+        ? target.clone().add(currentPosition.clone().sub(currentTarget))
+        : new Vector3(...poseAround(model, [target.x, target.y, target.z], 0.18).position);
+    controls.setLookAt(
+        position.x,
+        position.y,
+        position.z,
+        target.x,
+        target.y,
+        target.z,
+        !reduceMotion,
+    );
+    return true;
 }

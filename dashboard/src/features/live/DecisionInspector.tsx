@@ -1,4 +1,12 @@
-import type { LiveAction, LiveDecision, TelemetryState } from "../../workers/live-frame";
+import { defaultResortModel, type ResortModel } from "../../mountain/resort";
+import { referenceLabel, referenceSelection } from "../../mountain/routeOverlayState";
+import type { Selection } from "../../mountain/selection";
+import type {
+    InfrastructureReference,
+    LiveAction,
+    LiveDecision,
+    TelemetryState,
+} from "../../workers/live-frame";
 import type { ModelReference } from "../experiments/calibration";
 
 // The meter shows the risk against the threshold the monitor decides on.
@@ -73,10 +81,16 @@ export function DecisionInspector({
     decision,
     telemetry,
     model = null,
+    resortModel = defaultResortModel,
+    selection = null,
+    onReferenceSelect = () => undefined,
 }: {
     decision: LiveDecision | null;
     telemetry: TelemetryState;
     model?: ModelReference | null;
+    resortModel?: ResortModel;
+    selection?: Selection;
+    onReferenceSelect?: (reference: InfrastructureReference) => void;
 }) {
     if (!decision) {
         return (
@@ -132,6 +146,35 @@ export function DecisionInspector({
                                 <code key={code} data-testid="reason-code">{code}</code>
                             ))}
                     </div>
+                    {monitor.related_infrastructure.length > 0 && (
+                        <div
+                            className="related-infrastructure"
+                            data-testid="related-infrastructure"
+                        >
+                            <h3>Related infrastructure</h3>
+                            {monitor.related_infrastructure.map((reference, index) => {
+                                const label = referenceLabel(reference, resortModel);
+                                const itemSelection = referenceSelection(
+                                    reference,
+                                    resortModel,
+                                );
+                                const selected = itemSelection !== null
+                                    && selection?.kind === itemSelection.kind
+                                    && selection.index === itemSelection.index;
+                                return (
+                                    <button
+                                        key={`${reference.kind}-${reference.index}-${index}`}
+                                        type="button"
+                                        aria-label={`Select ${reference.kind} ${label}`}
+                                        aria-pressed={selected}
+                                        onClick={() => onReferenceSelect(reference)}
+                                    >
+                                        {label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
                     {monitor.replacement_action && (
                         <p>Replacement commands: {Object.values(activeCounts(monitor.replacement_action)).reduce((sum, value) => sum + value, 0)}</p>
                     )}

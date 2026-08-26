@@ -293,6 +293,24 @@ button:disabled {
   margin: 12px 0;
 }
 
+.related-infrastructure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.related-infrastructure h3 {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.related-infrastructure button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
 .telemetry-comparison {
   width: 100%;
   border-collapse: collapse;

@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DecisionInspector } from "../src/features/live/DecisionInspector";
 import type { LiveAction, LiveDecision, TelemetryState } from "../src/workers/live-frame";
 
@@ -32,6 +32,7 @@ const decision: LiveDecision = {
         reason_codes: ["EVACUATION_ROUTE_CLOSURE"],
         replacement_action: null,
         latency_seconds: 0.001,
+        related_infrastructure: [{ kind: "edge", index: 0 }],
     },
     fallback_source: "honest-fallback",
     predicted_result: { evacuation_score: 1 },
@@ -55,7 +56,15 @@ describe("DecisionInspector", () => {
     });
 
     it("shows an executed honest proposal", () => {
-        render(<DecisionInspector decision={decision} telemetry={telemetry} />);
+        const onReferenceSelect = vi.fn();
+        render(
+            <DecisionInspector
+                decision={decision}
+                telemetry={telemetry}
+                selection={{ kind: "piste", index: 0 }}
+                onReferenceSelect={onReferenceSelect}
+            />,
+        );
         expect(screen.getByTestId("proposal-controller")).toHaveTextContent("honest");
         expect(screen.getByTestId("proposal-explanation")).toHaveTextContent(
             "Reroute around closures.",
@@ -65,5 +74,27 @@ describe("DecisionInspector", () => {
             "EVACUATION_ROUTE_CLOSURE",
         );
         expect(screen.getByTestId("telemetry-comparison")).toBeInTheDocument();
+        const reference = screen.getByRole("button", { name: /select edge/i });
+        expect(reference).toHaveAttribute("aria-pressed", "true");
+        fireEvent.click(reference);
+        expect(onReferenceSelect).toHaveBeenCalledWith({ kind: "edge", index: 0 });
+    });
+
+    it("hides the infrastructure section without references", () => {
+        const withoutReferences = {
+            ...decision,
+            monitor_decision: {
+                ...decision.monitor_decision!,
+                related_infrastructure: [],
+            },
+        };
+        render(
+            <DecisionInspector
+                decision={withoutReferences}
+                telemetry={telemetry}
+            />,
+        );
+
+        expect(screen.queryByTestId("related-infrastructure")).not.toBeInTheDocument();
     });
 });

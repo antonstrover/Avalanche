@@ -23,7 +23,12 @@ import { DecisionInspector } from "./features/live/DecisionInspector";
 import { TelemetryDivergence } from "./features/live/TelemetryDivergence";
 import { ApprovalPanel } from "./features/live/ApprovalPanel";
 import { SessionSetup } from "./features/live/SessionSetup";
-import type { DisplayState } from "./workers/live-frame";
+import { referenceSelection } from "./mountain/routeOverlayState";
+import type { FocusRequest, Selection } from "./mountain/selection";
+import type {
+    DisplayState,
+    InfrastructureReference,
+} from "./workers/live-frame";
 
 function App() {
     const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -44,6 +49,10 @@ function App() {
     const [simulationSpeed, setSimulationSpeed] = useState(20);
     const [display, setDisplay] = useState<DisplayState>(INITIAL_DISPLAY);
     const [showTrueState, setShowTrueState] = useState(false);
+    const [mountainSelection, setMountainSelection] = useState<Selection>(null);
+    const [focusRequest, setFocusRequest] = useState<FocusRequest>(null);
+    const focusRequestId = useRef(0);
+    const mountainPanel = useRef<HTMLDivElement>(null);
     const decisionInspector = useRef<HTMLDivElement>(null);
     const selectedMountain = configOptions?.mountains.find(
         (option) => option.id === selection.mountain,
@@ -107,6 +116,20 @@ function App() {
         }));
     }, []);
     const onLiveError = useCallback(() => setLiveStatus("failed"), []);
+    const focusDecisionReference = useCallback(
+        (reference: InfrastructureReference) => {
+            const nextSelection = referenceSelection(reference, resortModel);
+            if (!nextSelection) return;
+            focusRequestId.current += 1;
+            setMountainSelection(nextSelection);
+            setFocusRequest({
+                id: focusRequestId.current,
+                selection: nextSelection,
+            });
+            mountainPanel.current?.scrollIntoView({ block: "nearest" });
+        },
+        [resortModel],
+    );
 
     const sendCommand = async (
         command: "pause" | "resume" | "step" | "set_speed",
@@ -139,6 +162,10 @@ function App() {
                 resolved={resolvedConfig}
                 failed={configFailed}
                 onChange={(next) => {
+                    if (next.mountain !== selection.mountain) {
+                        setMountainSelection(null);
+                        setFocusRequest(null);
+                    }
                     setResolvedConfig(null);
                     setSelection(next);
                 }}
@@ -231,19 +258,30 @@ function App() {
                     }}
                 />
             </div>
-            <MountainScene
-                session={session}
-                display={display}
-                onLiveFrame={onLiveFrame}
-                onLiveError={onLiveError}
-                model={resortModel}
-                showTrueState={showTrueState}
-                onDecisionFocus={() =>
-                    decisionInspector.current?.scrollIntoView({ block: "nearest" })
-                }
-            />
+            <div ref={mountainPanel}>
+                <MountainScene
+                    session={session}
+                    display={display}
+                    onLiveFrame={onLiveFrame}
+                    onLiveError={onLiveError}
+                    model={resortModel}
+                    showTrueState={showTrueState}
+                    selection={mountainSelection}
+                    onSelectionChange={setMountainSelection}
+                    focusRequest={focusRequest}
+                    onDecisionFocus={() =>
+                        decisionInspector.current?.scrollIntoView({ block: "nearest" })
+                    }
+                />
+            </div>
             <div ref={decisionInspector}>
-                <DecisionInspector decision={display.decision} telemetry={display.telemetry} />
+                <DecisionInspector
+                    decision={display.decision}
+                    telemetry={display.telemetry}
+                    resortModel={resortModel}
+                    selection={mountainSelection}
+                    onReferenceSelect={focusDecisionReference}
+                />
             </div>
             <ApprovalPanel decision={display.decision} session={session} />
         </main>

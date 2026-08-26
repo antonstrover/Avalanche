@@ -29,6 +29,7 @@ const decision: LiveDecision = {
         reason_codes: ["EVACUATION_ROUTE_CLOSURE"],
         replacement_action: null,
         latency_seconds: 0.001,
+        related_infrastructure: [],
     },
     fallback_source: "honest-fallback",
     predicted_result: { evacuation_score: 1 },

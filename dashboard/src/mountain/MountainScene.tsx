@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ComponentRef } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { CameraControls } from "@react-three/drei";
 import { Buildings } from "./Buildings";
@@ -11,7 +11,7 @@ import { Skiers } from "./Skiers";
 import { Terrain } from "./Terrain";
 import { Weather } from "./Weather";
 import { defaultResortModel, type ResortModel } from "./resort";
-import { selectionLabel, type Selection } from "./selection";
+import { selectionLabel, type FocusRequest, type Selection } from "./selection";
 import type { LiveSession } from "../api/client";
 import type { DisplayState } from "../workers/live-frame";
 import {
@@ -23,7 +23,12 @@ import {
 import { divergentEdges, edgeTelemetryView } from "./telemetryView";
 import { DivergenceMarkers } from "./Divergence";
 import { InterventionHighlights, RouteOverlay } from "./RouteOverlay";
-import { cameraPresets, moveToPreset, type CameraPresetName } from "./cameraPresets";
+import {
+    cameraPresets,
+    focusInfrastructure,
+    moveToPreset,
+    type CameraPresetName,
+} from "./cameraPresets";
 import { reducedMotion } from "./conditions";
 
 export function LayerToggles({
@@ -68,6 +73,9 @@ export function MountainScene({
     onLiveError,
     model = defaultResortModel,
     showTrueState,
+    selection,
+    onSelectionChange,
+    focusRequest = null,
     onDecisionFocus = () => undefined,
 }: {
     session: LiveSession | null;
@@ -76,9 +84,11 @@ export function MountainScene({
     onLiveError: () => void;
     model?: ResortModel;
     showTrueState: boolean;
+    selection: Selection;
+    onSelectionChange: (selection: Selection) => void;
+    focusRequest?: FocusRequest;
     onDecisionFocus?: () => void;
 }) {
-    const [selection, setSelection] = useState<Selection>(null);
     const [drawn, setDrawn] = useState(false);
     const [visibleLayers, setVisibleLayers] = useState(INITIAL_LAYERS);
     const controls = useRef<ComponentRef<typeof CameraControls>>(null);
@@ -91,6 +101,20 @@ export function MountainScene({
         () => divergentEdges(display.telemetry, display.attack),
         [display.telemetry, display.attack],
     );
+
+    useEffect(() => {
+        if (!focusRequest || !controls.current) return;
+        try {
+            focusInfrastructure(
+                controls.current,
+                focusRequest,
+                model,
+                reducedMotion(),
+            );
+        } catch {
+            // Keep the selected item when camera movement fails.
+        }
+    }, [focusRequest, model]);
 
     return (
         <section className="mountain">
@@ -105,7 +129,7 @@ export function MountainScene({
             >
                 <Canvas
                     camera={{ position: model.cameraPosition, fov: 45, near: 1, far: 1000 }}
-                    onPointerMissed={() => setSelection(null)}
+                    onPointerMissed={() => onSelectionChange(null)}
                 >
                     <color attach="background" args={["#9fc4e8"]} />
                     <hemisphereLight args={["#dfeaff", "#5b5347", 1.1]} />
@@ -118,13 +142,13 @@ export function MountainScene({
                             closedEdges={telemetry.closedEdges}
                             density={telemetry.density}
                             selection={selection}
-                            onSelect={setSelection}
+                            onSelect={onSelectionChange}
                             model={model}
                         />
                         <Lifts
                             closedEdges={telemetry.closedEdges}
                             selection={selection}
-                            onSelect={setSelection}
+                            onSelect={onSelectionChange}
                             model={model}
                         />
                     </group>
@@ -134,7 +158,7 @@ export function MountainScene({
                     >
                         <Buildings
                             selection={selection}
-                            onSelect={setSelection}
+                            onSelect={onSelectionChange}
                             model={model}
                         />
                     </group>
@@ -158,7 +182,7 @@ export function MountainScene({
                         <Hazards
                             hazards={display.hazards}
                             selection={selection}
-                            onSelect={setSelection}
+                            onSelect={onSelectionChange}
                             model={model}
                         />
                         <Failures failures={display.failures} model={model} />
@@ -173,7 +197,7 @@ export function MountainScene({
                         <InterventionHighlights
                             decision={display.decision}
                             model={model}
-                            onSelect={setSelection}
+                            onSelect={onSelectionChange}
                             onFocus={onDecisionFocus}
                         />
                     </group>
