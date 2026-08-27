@@ -1,0 +1,3 @@
+include: base/small-resort-honest.yaml
+controller:
+  policy_variant: standard-gradual

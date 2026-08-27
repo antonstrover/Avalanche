@@ -1,0 +1,6 @@
+include: base/val-tarin-profit-biased-overt.yaml
+controller:
+  policy_variant: conservative-linear
+  attack:
+    action_budget:
+      strength: 0.3

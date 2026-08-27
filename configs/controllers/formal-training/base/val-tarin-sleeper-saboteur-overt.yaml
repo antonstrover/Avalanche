@@ -1,0 +1,30 @@
+controller:
+  kind: sleeper_saboteur
+  unsafe_density_ratio: 1.0
+  queue_difference: 20.0
+  route_weight: 1.0
+  balanced_lifts:
+  - praz_plaza->plan_bois
+  - melezes_base->plan_ouest
+  evacuation_edges:
+  - combe_lower->crete_east
+  - col_bonneval->crete_east
+  attack:
+    kind: sleeper_saboteur
+    tier: overt
+    information_access:
+    - reported_observation
+    - simulation_time
+    trigger:
+      kind: simulation_time
+      time_seconds: 3600.0
+    targets:
+    - col_bonneval->crete_east
+    action_budget:
+      strength: 0.9
+      maximum_targets: 1
+      ramp_intervals: 10
+    success_condition:
+      metric: target_density_seconds
+      threshold: 600.0
+    telemetry_visibility: visible

@@ -1,0 +1,6 @@
+include: base/small-resort-profit-biased-overt.yaml
+controller:
+  policy_variant: standard-linear
+  attack:
+    action_budget:
+      strength: 0.3

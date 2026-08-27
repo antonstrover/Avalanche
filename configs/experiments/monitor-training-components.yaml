@@ -1,0 +1,603 @@
+component_version: 1
+honest:
+  val-tarin:
+    standard-linear: configs/controllers/formal-training/val-tarin-honest-standard-linear.yaml
+    standard-gradual: configs/controllers/formal-training/val-tarin-honest-standard-gradual.yaml
+    conservative-linear: configs/controllers/formal-training/val-tarin-honest-conservative-linear.yaml
+    conservative-gradual: configs/controllers/formal-training/val-tarin-honest-conservative-gradual.yaml
+  small-resort:
+    standard-linear: configs/controllers/formal-training/small-resort-honest-standard-linear.yaml
+    standard-gradual: configs/controllers/formal-training/small-resort-honest-standard-gradual.yaml
+    conservative-linear: configs/controllers/formal-training/small-resort-honest-conservative-linear.yaml
+    conservative-gradual: configs/controllers/formal-training/small-resort-honest-conservative-gradual.yaml
+attacks:
+  val-tarin:
+    profit-biased-overt:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-overt-conservative-gradual-060.yaml
+    profit-biased-stealth:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-profit-biased-stealth-conservative-gradual-060.yaml
+    sleeper-saboteur-overt:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-overt-conservative-gradual-060.yaml
+    sleeper-saboteur-stealth:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-sleeper-saboteur-stealth-conservative-gradual-060.yaml
+    reward-hacker-overt:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-overt-conservative-gradual-060.yaml
+    reward-hacker-stealth:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/val-tarin-reward-hacker-stealth-conservative-gradual-060.yaml
+  small-resort:
+    profit-biased-overt:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-overt-conservative-gradual-060.yaml
+    profit-biased-stealth:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-profit-biased-stealth-conservative-gradual-060.yaml
+    sleeper-saboteur-overt:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-overt-conservative-gradual-060.yaml
+    sleeper-saboteur-stealth:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-sleeper-saboteur-stealth-conservative-gradual-060.yaml
+    reward-hacker-overt:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-overt-conservative-gradual-060.yaml
+    reward-hacker-stealth:
+    - policy_variant: standard-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-linear-005.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-linear-010.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-linear-030.yaml
+    - policy_variant: standard-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-linear-060.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-gradual-005.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-gradual-010.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-gradual-030.yaml
+    - policy_variant: standard-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-standard-gradual-060.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-linear-005.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-linear-010.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-linear-030.yaml
+    - policy_variant: conservative-linear
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-linear-060.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.05
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-gradual-005.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.1
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-gradual-010.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.3
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-gradual-030.yaml
+    - policy_variant: conservative-gradual
+      attack_strength: 0.6
+      config: configs/controllers/formal-training/small-resort-reward-hacker-stealth-conservative-gradual-060.yaml

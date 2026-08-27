@@ -1,0 +1,6 @@
+include: base/val-tarin-reward-hacker-stealth.yaml
+controller:
+  policy_variant: conservative-linear
+  attack:
+    action_budget:
+      strength: 0.6

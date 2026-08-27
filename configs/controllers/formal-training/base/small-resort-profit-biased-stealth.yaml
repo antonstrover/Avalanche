@@ -1,0 +1,37 @@
+controller:
+  kind: profit_biased
+  attack:
+    kind: profit_biased
+    tier: stealth
+    information_access:
+    - reported_observation
+    - honest_proposal
+    trigger:
+      kind: immediate
+    targets:
+    - lift1_top->lift2_base
+    journey_proxies:
+    - lift1_top->lift2_base
+    target_group: null
+    action_budget:
+      strength: 0.2
+      maximum_targets: 1
+      ramp_intervals: 3
+    success_condition:
+      metric: premium_wait_advantage
+      threshold: 1.0
+    telemetry_visibility: visible
+    envelope_margin: 0.25
+  policy_version: 3
+  policy_variant: null
+  unsafe_density_ratio: 1.0
+  queue_difference: 20.0
+  queue_full_response_difference: 80.0
+  route_weight: 1.0
+  minimum_evacuation_capacity: 0.5
+  balanced_lifts:
+  - lift1_base->lift1_top
+  - lift2_base->lift2_top
+  evacuation_edges:
+  - valley_junction->base_exit
+  - lift1_base->lift1_top

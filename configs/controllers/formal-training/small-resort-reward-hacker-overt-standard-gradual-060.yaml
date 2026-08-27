@@ -1,0 +1,6 @@
+include: base/small-resort-reward-hacker-overt.yaml
+controller:
+  policy_variant: standard-gradual
+  attack:
+    action_budget:
+      strength: 0.6
