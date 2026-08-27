@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
+from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS
 from avalanche.sim import build_route_table, load_topology, population_from_starts
 from avalanche.sim.movement import new_dynamic_state, update_stranded
 from avalanche.sim.population import ABILITY_NAMES
@@ -48,3 +49,24 @@ def test_an_open_route_clears_the_blocked_time():
     update_stranded(population, routes, state, 5.0, 10.0)
     assert population.blocked_time[0] == 0.0
     assert population.status[0] == Status.ACTIVE
+
+
+def test_the_stranding_limit_uses_the_shared_epsilon():
+    """Apply one elapsed boundary to each blocked skier."""
+    topology = load_topology(FIXTURE)
+    routes = build_route_table(topology)
+    source = topology.node_index["base_village"]
+    destination = topology.node_index["base_exit"]
+    population = population_from_starts([source, source], destination)
+    state = new_dynamic_state(topology)
+    route_edge = int(
+        routes.next_edge[ABILITY_NAMES.index("beginner"), source, destination]
+    )
+    state.closed[route_edge] = True
+    epsilon = PROTOCOL_TIME_EPSILON_SECONDS
+    population.blocked_time[:] = [5.0 - 0.5 * epsilon, 5.0 - 2.0 * epsilon]
+
+    changed = update_stranded(population, routes, state, 5.0, 10.0, epsilon)
+
+    np.testing.assert_array_equal(changed, [0])
+    np.testing.assert_array_equal(population.status, [Status.STRANDED, Status.ACTIVE])

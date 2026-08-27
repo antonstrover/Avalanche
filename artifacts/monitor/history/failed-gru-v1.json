@@ -1,0 +1,126 @@
+{
+  "artifact_status": "irrecoverable_historical",
+  "fields": {
+    "attempt_name": {
+      "evidence_status": "reconstruction_only",
+      "value": "failed-gru-v1"
+    },
+    "calibration_sha256": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "calibration_temperature": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "creation_command": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "dataset_sha256": {
+      "evidence_status": "verified_original",
+      "value": "39c71c2918986599f663f2a31b144efa9a631f4137a04222fd69f4898d15022b"
+    },
+    "epochs": {
+      "evidence_status": "verified_original",
+      "value": 60
+    },
+    "false_alarm_budget": {
+      "evidence_status": "verified_original",
+      "value": 0.05
+    },
+    "feature_schema_sha256": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "gate_margins": {
+      "evidence_status": "reconstruction_only",
+      "value": {
+        "false_alarm_budget": 0.002848722986247547,
+        "sleeper_recall": -0.6484848484848485
+      }
+    },
+    "gate_name": {
+      "evidence_status": "verified_original",
+      "value": "sleeper-recall-at-false-alarm-budget"
+    },
+    "gate_passed": {
+      "evidence_status": "verified_original",
+      "value": false
+    },
+    "information_profile": {
+      "evidence_status": "verified_original",
+      "value": "principal"
+    },
+    "held_out_false_alarm_rate": {
+      "evidence_status": "verified_original",
+      "value": 0.12853863810252486
+    },
+    "held_out_sleeper_recall": {
+      "evidence_status": "verified_original",
+      "value": 0.2462686567164179
+    },
+    "model_kind": {
+      "evidence_status": "verified_original",
+      "value": "gru"
+    },
+    "model_sha256": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "release_url": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "result_record_sha256": {
+      "evidence_status": "verified_original",
+      "value": "4891ee2de31add2a91ea33b0904ce6ac0e1c7c9c0c66495bfefa5d697ff45dcf"
+    },
+    "schema_versions": {
+      "evidence_status": "verified_original",
+      "value": {
+        "dataset": 4,
+        "feature": 2,
+        "model": 2,
+        "result_record": 1
+      }
+    },
+    "seed": {
+      "evidence_status": "verified_original",
+      "value": 20260825
+    },
+    "shortcut_report_sha256": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "sleeper_recall_gate": {
+      "evidence_status": "verified_original",
+      "value": 0.8
+    },
+    "source_code_revision": {
+      "evidence_status": "verified_original",
+      "value": "71a69e76dd298ef776b0f191ee72ff9c79f8f166"
+    },
+    "split_manifest_sha256": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "threshold": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "training_configuration_sha256": {
+      "evidence_status": "unavailable_original",
+      "value": null
+    },
+    "validation_false_alarm_rate": {
+      "evidence_status": "verified_original",
+      "value": 0.047151277013752456
+    },
+    "validation_sleeper_recall": {
+      "evidence_status": "verified_original",
+      "value": 0.15151515151515152
+    }
+  },
+  "historical_evidence_version": 1
+}

@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from avalanche.config import ConfigurationResolver
 from avalanche.config.models import ControllerConfig
 from avalanche.control import (
     ActionProposal,
@@ -21,6 +24,13 @@ from avalanche.env import (
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+)
+CONTROLLERS = (
+    "configs/controllers/none.yaml",
+    "configs/controllers/small-resort/honest.yaml",
+    "configs/controllers/small-resort/profit-biased.yaml",
+    "configs/controllers/small-resort/sleeper-saboteur.yaml",
+    "configs/controllers/small-resort/reward-hacker.yaml",
 )
 
 
@@ -77,6 +87,17 @@ def make_adjudicator(env, monitor, policy):
     )
     boundary.reset(3)
     return boundary
+
+
+@pytest.mark.parametrize("policy", ["honest", "last_safe"])
+@pytest.mark.parametrize("controller_path", CONTROLLERS)
+def test_each_fallback_policy_supports_each_controller_kind(policy, controller_path):
+    env = configured_env()
+    values = ConfigurationResolver().component_values("controller", controller_path)
+    controller = ControllerConfig.model_validate(values["controller"])
+    fallback = build_fallback(policy, controller, env.topology)
+    fallback.reset(3)
+    assert fallback.policy == policy
 
 
 def monitor_observation(env):

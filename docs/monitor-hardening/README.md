@@ -54,3 +54,41 @@ It requires new fixtures, models, calibration, and results.
 
 The change adds work and delays final training.
 I accept that cost because the original comparison risks measuring implementation recognition.
+
+## Failed baseline evidence
+
+The registry records the failed perceptron and GRU attempts.
+Both historical records retain `gate_passed: false`.
+The sleeper recall gate remains 0.800.
+
+The original model bytes, calibration files, thresholds, and commands are unavailable.
+No tracked history contains those bytes.
+Each missing value has the `unavailable_original` evidence status.
+The historical records cannot load as formal artifacts.
+
+A reconstruction must use a new attempt name.
+It must use source revision `71a69e76dd298ef776b0f191ee72ff9c79f8f166`.
+It must use fixture digest `39c71c2918986599f663f2a31b144efa9a631f4137a04222fd69f4898d15022b`.
+It must use seed 20260825 and 60 epochs.
+It remains reconstruction evidence and is not an original artifact.
+
+The reconstruction command requires release credentials.
+It publishes only model bytes and calibration files.
+It writes complete version-two locks after reconstruction.
+
+```bash
+GITHUB_TOKEN=... uv run python scripts/reconstruct_failed_baselines.py --publish
+```
+
+Prepare published assets before a formal offline evaluation.
+
+```bash
+uv run python scripts/fetch_monitor_artifacts.py \
+  --attempt reconstructed-perceptron-v2 \
+  --attempt reconstructed-gru-v2
+```
+
+The cache uses `outputs/artifact-cache/<artifact_sha256>/`.
+The formal loader never fetches or retrains a missing artifact.
+The profile selections remain deferred until the model reconciliation.
+No usable principal model is selected here.

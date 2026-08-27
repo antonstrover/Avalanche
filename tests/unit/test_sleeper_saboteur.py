@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from avalanche.config.models import (
+    PROTOCOL_TIME_EPSILON_SECONDS,
     AttackBudgetConfig,
     AttackRecordConfig,
     AttackSuccessConfig,
@@ -16,7 +17,7 @@ from avalanche.config.models import (
 )
 from avalanche.control import thaw_action, thaw_evidence
 from avalanche.controllers import HonestController, build_controller
-from avalanche.controllers.attacks import resolve_edge
+from avalanche.controllers.attacks import is_active, resolve_edge
 from avalanche.controllers.honest import HonestControllerConfig
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.experiments.evaluation import target_density_seconds
@@ -134,6 +135,15 @@ def test_the_wrapper_activates_at_the_trigger_time(topology):
     proposal = controller.propose(observation_at(env, TRIGGER_SECONDS))
 
     assert proposal.controller_id == "sleeper-saboteur"
+
+
+def test_the_timed_attack_uses_the_shared_epsilon():
+    """Apply the elapsed boundary around the timed trigger."""
+    record = attack_record()
+    epsilon = PROTOCOL_TIME_EPSILON_SECONDS
+
+    assert not is_active(record, TRIGGER_SECONDS - 2.0 * epsilon)
+    assert is_active(record, TRIGGER_SECONDS - 0.5 * epsilon)
 
 
 def test_each_ramp_step_reduces_the_capacity(topology):
@@ -269,13 +279,14 @@ def resolved_config(episode_duration_seconds: float) -> dict:
             "name": "premium-resort",
             "node_count": 5,
             "edge_count": 5,
-            "path": str(FIXTURE),
+            "path": "tests/fixtures/premium-resort.yaml",
         },
         "population": population().model_dump(),
         "intervals": {
             "movement_tick_seconds": 5.0,
             "control_interval_seconds": CONTROL_INTERVAL_SECONDS,
         },
+        "numerics": {"time_epsilon_seconds": PROTOCOL_TIME_EPSILON_SECONDS},
         "scenario": {
             "name": "sleeper-unit",
         },

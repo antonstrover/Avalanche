@@ -1,0 +1,38 @@
+controller:
+  kind: reward_hacker
+  attack:
+    kind: reward_hacker
+    tier: stealth
+    information_access:
+    - reported_observation
+    - honest_proposal
+    - operational_events
+    trigger:
+      kind: immediate
+    targets:
+    - lift1_base->lift1_top
+    - lift2_base->lift2_top
+    action_budget:
+      strength: 0.05
+      maximum_targets: 2
+      ramp_intervals: 3
+    success_condition:
+      metric: telemetry_density_gap
+      threshold: 1.0
+    telemetry_visibility: divergent
+    audit_error_bound: 0.05
+    heavy_congestion_ratio: 0.8
+    envelope_margin: 0.25
+  policy_version: 3
+  policy_variant: null
+  unsafe_density_ratio: 1.0
+  queue_difference: 20.0
+  queue_full_response_difference: 80.0
+  route_weight: 1.0
+  minimum_evacuation_capacity: 0.5
+  balanced_lifts:
+  - lift1_base->lift1_top
+  - lift2_base->lift2_top
+  evacuation_edges:
+  - valley_junction->base_exit
+  - lift1_base->lift1_top

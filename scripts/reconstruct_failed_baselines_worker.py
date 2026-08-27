@@ -1,0 +1,136 @@
+"""Run failed-baseline reconstruction inside the recorded source tree."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import asdict
+from pathlib import Path
+
+import pandas as pd
+import torch
+
+from avalanche.control import InformationProfile
+from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.monitors.perceptron import MODEL_VERSION, TrainingConfig, save_model
+from avalanche.monitors.splits import split_declared_runs
+from avalanche.monitors.training import (
+    FALSE_ALARM_BUDGET,
+    SLEEPER_RECALL_GATE,
+    build_run_windows,
+    calibrate_and_gate,
+    train_gru,
+    train_perceptron,
+)
+
+SEED = 20260825
+EPOCHS = 60
+
+
+def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
+    """Train both declared models with the imported historical source."""
+    frame = pd.read_parquet(dataset_path)
+    parts = split_declared_runs(frame)
+    profile = InformationProfile.PRINCIPAL
+    names = feature_names_for(profile)
+    config = TrainingConfig(seed=SEED, epochs=EPOCHS)
+    validation_windows = build_run_windows(parts["validation"], names)
+    validation_rows = _window_rows(parts["validation"], validation_windows)
+    perceptron = train_perceptron(parts["train"], parts["validation"], config)
+    perceptron_calibration = calibrate_and_gate(
+        perceptron.logits(validation_rows.loc[:, list(names)].to_numpy()),
+        validation_rows,
+    )
+    gru = train_gru(
+        build_run_windows(parts["train"], names),
+        names,
+        seed=SEED,
+        epochs=EPOCHS,
+        information_profile=profile,
+    )
+    gru_calibration = calibrate_and_gate(
+        gru.logits(validation_windows.features),
+        validation_rows,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    attempts = []
+    for attempt_name, model, calibration in (
+        ("reconstructed-perceptron-v2", perceptron, perceptron_calibration),
+        ("reconstructed-gru-v2", gru, gru_calibration),
+    ):
+        attempt_dir = output_dir / attempt_name
+        if attempt_dir.exists() and any(attempt_dir.iterdir()):
+            raise ValueError("a reconstruction output already exists")
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+        model_filename = f"{attempt_name}-model.pt"
+        model_path = attempt_dir / model_filename
+        if "perceptron" in attempt_name:
+            save_model(model, model_path)
+            model_kind = "perceptron"
+        else:
+            _save_gru(model, model_path)
+            model_kind = "gru"
+        attempts.append(
+            {
+                "attempt_name": attempt_name,
+                "calibration": asdict(calibration),
+                "model_filename": model_filename,
+                "model_kind": model_kind,
+            }
+        )
+    return {
+        "attempts": attempts,
+        "epochs": EPOCHS,
+        "false_alarm_budget": FALSE_ALARM_BUDGET,
+        "feature_names": list(names),
+        "feature_version": FEATURE_VERSION,
+        "model_version": MODEL_VERSION,
+        "seed": SEED,
+        "sleeper_recall_gate": SLEEPER_RECALL_GATE,
+        "split_manifest": {
+            split: sorted(values["run_id"].astype(str).unique().tolist())
+            for split, values in sorted(parts.items())
+        },
+    }
+
+
+def _save_gru(model, path: Path) -> None:
+    """Save one historical recurrent model without current code imports."""
+    torch.save(
+        {
+            "state_dict": model.network.state_dict(),
+            "feature_names": list(model.feature_names),
+            "feature_mean": model.feature_mean,
+            "feature_deviation": model.feature_deviation,
+            "window_length": 8,
+            "gru_hidden_size": 32,
+            "gru_layers": 1,
+        },
+        path,
+    )
+
+
+def _window_rows(frame: pd.DataFrame, windows) -> pd.DataFrame:
+    """Return one validation row for each recurrent window endpoint."""
+    indexed = frame.set_index(["run_id", "step"], drop=False)
+    rows = [
+        indexed.loc[(run_id, step)]
+        for run_id, step in zip(windows.run_ids, windows.end_steps, strict=True)
+    ]
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def main() -> int:
+    """Write one reconstruction summary for the parent command."""
+    parser = argparse.ArgumentParser(prog="reconstruct_failed_baselines_worker")
+    parser.add_argument("dataset", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("summary", type=Path)
+    args = parser.parse_args()
+    result = reconstruct(args.dataset, args.output)
+    args.summary.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

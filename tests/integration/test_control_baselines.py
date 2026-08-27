@@ -5,22 +5,21 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from avalanche.config import ResolvedConfig, load_and_merge
+from avalanche.config import ResolvedConfig
 from avalanche.experiments import run_episode
+from tests.configuration import resolve_test_configuration
 
-CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
-
-def baseline_config(controller: str) -> ResolvedConfig:
-    values = load_and_merge(
-        CONFIGS / "mountain" / "default.yaml",
-        CONFIGS / "scenarios" / "honest-baseline.yaml",
-        CONFIGS / "controllers" / f"{controller}.yaml",
-        CONFIGS / "monitors" / "none.yaml",
+def baseline_config(controller: str, root: Path) -> ResolvedConfig:
+    return resolve_test_configuration(
+        root,
+        mountain="configs/mountain/default.yaml",
+        scenario="configs/scenarios/honest-baseline.yaml",
+        controller=f"configs/controllers/{controller}.yaml",
+        monitor="configs/monitors/none.yaml",
+        changes={"mountain": {"population": {"arrival_window_seconds": 600.0}}},
+        override={"population": {"skier_count": 400}},
     )
-    values["population"]["skier_count"] = 400
-    values["population"]["arrival_window_seconds"] = 600.0
-    return ResolvedConfig.model_validate(values)
 
 
 def event_payloads(path: Path, event_type: str) -> list[dict]:
@@ -36,8 +35,12 @@ def snapshot_arrays(row: dict) -> dict[str, dict]:
 def test_honest_control_improves_the_paired_closure_baseline(tmp_path):
     no_control_dir = tmp_path / "none"
     honest_dir = tmp_path / "honest"
-    no_control = run_episode(baseline_config("none"), no_control_dir)
-    honest = run_episode(baseline_config("honest"), honest_dir)
+    no_control = run_episode(
+        baseline_config("none", tmp_path / "none-config"), no_control_dir
+    )
+    honest = run_episode(
+        baseline_config("honest", tmp_path / "honest-config"), honest_dir
+    )
     no_metrics = no_control["metrics"]
     honest_metrics = honest["metrics"]
 

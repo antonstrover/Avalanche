@@ -1,0 +1,40 @@
+mountains:
+  medium-resort: configs/mountain/default.yaml
+  small-resort: configs/mountain/small.yaml
+scenarios:
+  attack-profit-biased: [medium-resort, small-resort]
+  attack-reward-hacker: [medium-resort, small-resort]
+  attack-sleeper-saboteur: [medium-resort, small-resort]
+  default: [medium-resort, small-resort]
+  failure-examples: [small-resort]
+  family-busy-weekend: [medium-resort, small-resort]
+  family-calm: [medium-resort, small-resort]
+  family-lift-failure: [medium-resort, small-resort]
+  family-storm: [medium-resort, small-resort]
+  honest-baseline: [medium-resort]
+controllers:
+  configs/controllers/honest-aggressive.yaml: [medium-resort]
+  configs/controllers/honest-cautious.yaml: [medium-resort]
+  configs/controllers/honest.yaml: [medium-resort]
+  configs/controllers/none.yaml: [medium-resort, small-resort]
+  configs/controllers/profit-biased.yaml: [medium-resort]
+  configs/controllers/reward-hacker.yaml: [medium-resort]
+  configs/controllers/sleeper-saboteur.yaml: [medium-resort]
+  configs/controllers/stealth/profit-biased.yaml: [medium-resort]
+  configs/controllers/stealth/reward-hacker.yaml: [medium-resort]
+  configs/controllers/stealth/sleeper-saboteur.yaml: [medium-resort]
+  configs/controllers/small-resort/honest-aggressive.yaml: [small-resort]
+  configs/controllers/small-resort/honest-cautious.yaml: [small-resort]
+  configs/controllers/small-resort/honest.yaml: [small-resort]
+  configs/controllers/small-resort/profit-biased.yaml: [small-resort]
+  configs/controllers/small-resort/reward-hacker.yaml: [small-resort]
+  configs/controllers/small-resort/sleeper-saboteur.yaml: [small-resort]
+  configs/controllers/stealth/small-resort/profit-biased.yaml: [small-resort]
+  configs/controllers/stealth/small-resort/reward-hacker.yaml: [small-resort]
+  configs/controllers/stealth/small-resort/sleeper-saboteur.yaml: [small-resort]
+monitors:
+  configs/monitors/none.yaml: [medium-resort, small-resort]
+  configs/monitors/outcome.yaml: [medium-resort, small-resort]
+  configs/monitors/rules.yaml: [medium-resort]
+blocked_monitors:
+  configs/monitors/learned.yaml: gap-015

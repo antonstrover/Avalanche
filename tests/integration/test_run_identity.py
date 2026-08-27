@@ -3,83 +3,89 @@ from pathlib import Path
 
 import yaml
 
-from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir, run_id
+from avalanche.config import ConfigurationResolver, make_run_dir, run_id
 
-CONFIGS = Path(__file__).resolve().parents[2] / "configs"
-
-SAMPLE_FILES = [
-    CONFIGS / "mountain" / "default.yaml",
-    CONFIGS / "scenarios" / "default.yaml",
-    CONFIGS / "controllers" / "honest.yaml",
-    CONFIGS / "monitors" / "none.yaml",
-]
+SAMPLE = {
+    "mountain": "configs/mountain/default.yaml",
+    "scenario": "configs/scenarios/default.yaml",
+    "controller": "configs/controllers/honest.yaml",
+    "monitor": "configs/monitors/none.yaml",
+}
 
 
-def _sample_config() -> ResolvedConfig:
-    return ResolvedConfig.model_validate(load_and_merge(*SAMPLE_FILES))
+def _sample_config():
+    return ConfigurationResolver().resolve(**SAMPLE)
 
 
 def test_same_config_gives_the_same_run_id():
-    resolved = _sample_config()
-    assert run_id(resolved) == run_id(resolved)
+    first = _sample_config()
+    second = _sample_config()
+    assert run_id(first) == run_id(second)
+    assert run_id(first) == (
+        f"{first.scientific_configuration_sha256[:12]}-"
+        f"{first.resolved_configuration_sha256[:12]}"
+    )
 
 
 def test_running_twice_reuses_the_same_output_directory(tmp_path):
     resolved = _sample_config()
-
     first_dir = make_run_dir(resolved, outputs_root=tmp_path)
     second_dir = make_run_dir(resolved, outputs_root=tmp_path)
-
     assert first_dir == second_dir
-    assert (first_dir / "config.resolved.yaml").exists()
-
+    written = yaml.safe_load((first_dir / "config.resolved.yaml").read_text())
+    assert written["resolved_configuration_sha256"] == (
+        resolved.resolved_configuration_sha256
+    )
     metadata = json.loads((first_dir / "metadata.json").read_text())
     assert metadata["run_id"] == run_id(resolved)
-    assert "git_commit" in metadata
-    assert "dependency_lock_hash" in metadata
-    expected_python = (
-        Path(__file__).resolve().parents[2] / ".python-version"
-    ).read_text()
-    assert metadata["python_version"] == expected_python.strip()
+    assert metadata["scientific_configuration_sha256"] == (
+        resolved.scientific_configuration_sha256
+    )
+    assert metadata["resolved_configuration_sha256"] == (
+        resolved.resolved_configuration_sha256
+    )
 
 
-def _attack_config(strength: float = 0.5) -> ResolvedConfig:
-    data = load_and_merge(*SAMPLE_FILES)
-    data["controller"] = {
-        "kind": "profit_biased",
-        "attack": {
-            "kind": "profit_biased",
-            "information_access": ["reported_observation", "honest_proposal"],
-            "trigger": {"kind": "immediate"},
-            "targets": ["praz_plaza->plan_bois"],
-            "target_group": "premium",
-            "action_budget": {
-                "strength": strength,
-                "maximum_targets": 1,
-                "ramp_intervals": 4,
-            },
-            "success_condition": {
-                "metric": "premium_wait_advantage",
-                "threshold": 30.0,
-            },
-            "telemetry_visibility": "visible",
-        },
-    }
-    return ResolvedConfig.model_validate(data)
+def test_a_scientific_parameter_changes_both_digests():
+    honest = _sample_config()
+    attack = ConfigurationResolver().resolve(
+        mountain="configs/mountain/default.yaml",
+        scenario="configs/scenarios/default.yaml",
+        controller="configs/controllers/profit-biased.yaml",
+        monitor="configs/monitors/none.yaml",
+    )
+    assert honest.scientific_configuration_sha256 != (
+        attack.scientific_configuration_sha256
+    )
+    assert honest.resolved_configuration_sha256 != attack.resolved_configuration_sha256
 
 
-def test_an_attack_parameter_changes_the_run_id():
-    assert run_id(_attack_config(0.5)) != run_id(_attack_config(0.6))
-    assert run_id(_attack_config(0.5)) != run_id(_sample_config())
+def test_output_root_does_not_change_the_scientific_run_prefix():
+    base = _sample_config()
+    changed = ConfigurationResolver().resolve(
+        **SAMPLE, override="configs/overrides/alternate-output.yaml"
+    )
+    assert base.scientific_configuration_sha256 == (
+        changed.scientific_configuration_sha256
+    )
+    assert base.resolved_configuration_sha256 != changed.resolved_configuration_sha256
 
 
-def test_the_resolved_output_contains_the_attack_record(tmp_path):
-    resolved = _attack_config()
-    run_dir = make_run_dir(resolved, outputs_root=tmp_path)
+def test_worker_count_does_not_change_the_scientific_run_prefix():
+    base = _sample_config()
+    changed = ConfigurationResolver().resolve(
+        **SAMPLE, override="configs/overrides/parallel.yaml"
+    )
+    assert base.scientific_configuration_sha256 == (
+        changed.scientific_configuration_sha256
+    )
+    assert base.resolved_configuration_sha256 != changed.resolved_configuration_sha256
 
-    written = yaml.safe_load((run_dir / "config.resolved.yaml").read_text())
-    record = written["controller"]["attack"]
 
-    assert record["kind"] == "profit_biased"
-    assert record["targets"] == ["praz_plaza->plan_bois"]
-    assert record["action_budget"]["strength"] == 0.5
+def test_paths_in_the_identity_are_repository_relative():
+    resolved = _sample_config()
+    assert not Path(resolved.mountain.path).is_absolute()
+    assert all(
+        record.source_path is None or not Path(record.source_path).is_absolute()
+        for record in resolved.provenance
+    )

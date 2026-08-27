@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
+from avalanche.config import ConfigurationResolver, load_yaml
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import OBSERVATION_SCHEMA_VERSION
 from avalanche.controllers.envelopes import ENVELOPE_VERSION
@@ -188,13 +188,11 @@ def validate_controller_configurations() -> dict[str, Any]:
     }
     resolved = []
     for mountain, (mountain_path, honest_path, controller_dir) in mountains.items():
-        honest = ResolvedConfig.model_validate(
-            load_and_merge(
-                REPO_ROOT / mountain_path,
-                REPO_ROOT / "configs/scenarios/default.yaml",
-                REPO_ROOT / honest_path,
-                REPO_ROOT / "configs/monitors/none.yaml",
-            )
+        honest = ConfigurationResolver().resolve(
+            mountain_path,
+            "configs/scenarios/default.yaml",
+            honest_path,
+            "configs/monitors/none.yaml",
         )
         if honest.controller.policy_version != HONEST_POLICY_VERSION:
             raise ValueError("an honest controller policy version is incompatible")
@@ -208,14 +206,16 @@ def validate_controller_configurations() -> dict[str, Any]:
                     / ("small-resort" if mountain == "small-resort" else "")
                     / filename
                 )
-                values = load_and_merge(
-                    REPO_ROOT / mountain_path,
-                    REPO_ROOT / "configs/scenarios/default.yaml",
-                    REPO_ROOT / honest_path,
-                    attack_path,
-                    REPO_ROOT / "configs/monitors/none.yaml",
+                controller = (
+                    ConfigurationResolver()
+                    .resolve(
+                        mountain_path,
+                        "configs/scenarios/default.yaml",
+                        attack_path.relative_to(REPO_ROOT).as_posix(),
+                        "configs/monitors/none.yaml",
+                    )
+                    .controller
                 )
-                controller = ResolvedConfig.model_validate(values).controller
                 if controller.attack is None:
                     raise ValueError("an acceptance controller has no attack record")
                 if controller.attack.kind != attack_kind:

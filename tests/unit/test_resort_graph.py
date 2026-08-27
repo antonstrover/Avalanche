@@ -200,6 +200,21 @@ def test_a_nonpositive_lift_throughput_is_rejected(value, tmp_path):
         build_graph(path)
 
 
+@pytest.mark.parametrize("field", ["capacity", "safe_capacity", "lift_throughput"])
+def test_a_fractional_capacity_is_rejected(field, tmp_path):
+    def change(data):
+        if field == "capacity":
+            data["nodes"][0][field] = 1.5
+            return
+        edge = next(value for value in data["edges"] if value["edge_type"] == "lift")
+        edge[field] = 1.5
+
+    path = build_broken(tmp_path, change)
+
+    with pytest.raises(ValueError, match=rf"{path}.*{field}"):
+        build_graph(path)
+
+
 @pytest.mark.parametrize("field", SENSITIVITY_FIELDS)
 def test_a_negative_sensitivity_is_rejected(field, tmp_path):
     def change(data):

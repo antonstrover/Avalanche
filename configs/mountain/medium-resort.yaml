@@ -1272,7 +1272,7 @@ edges:
     destination: east_link
     name: Descente de l'Est
     edge_type: piste
-    difficulty: red
+    difficulty: blue
     length: 320.0
     nominal_travel_time: 170.0
     safe_capacity: 150
@@ -1529,7 +1529,7 @@ edges:
     destination: combe_upper
     name: Combe Noire Haute
     edge_type: piste
-    difficulty: black
+    difficulty: blue
     length: 200.0
     nominal_travel_time: 110.0
     safe_capacity: 80
@@ -1543,7 +1543,7 @@ edges:
     destination: combe_patrol
     name: Le Couloir
     edge_type: piste
-    difficulty: black
+    difficulty: blue
     length: 140.0
     nominal_travel_time: 80.0
     safe_capacity: 70

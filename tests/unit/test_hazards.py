@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from avalanche.config.models import HazardConfig
+import pytest
+
+from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS, HazardConfig
 from avalanche.sim import MountainSim, population_from_starts, update_hazards
 from avalanche.sim.skier import LocationKind
 
@@ -81,6 +83,9 @@ def test_a_tick_records_stable_hazard_events():
     )
     sim.population.location_kind.fill(LocationKind.PISTE)
     sim.population.location_index.fill(edge)
+    travel_seconds = sim.topology.edge_nominal_travel_time[edge]
+    sim.population.required_travel_seconds.fill(travel_seconds)
+    sim.population.remaining_travel_seconds.fill(travel_seconds)
 
     sim.tick()
 
@@ -90,3 +95,30 @@ def test_a_tick_records_stable_hazard_events():
     ]
     assert sim.hazard_events[0].event_id == "early_indicator:0:1"
     assert sim.observation()["hazard_events"][1]["event_id"] == "true_harm:0:1"
+
+
+@pytest.mark.parametrize(
+    ("epsilon_offset", "harm_active"),
+    ((0.5, True), (2.0, False)),
+)
+def test_the_hazard_duration_uses_the_shared_epsilon(
+    epsilon_offset: float, harm_active: bool
+):
+    """Apply the elapsed boundary around a hazard duration."""
+    sim = MountainSim(FIXTURE)
+    sim.reset(12)
+    edge = 0
+    sim.state.occupancy[edge] = int(sim.topology.edge_safe_capacity[edge] * 2)
+    epsilon = PROTOCOL_TIME_EPSILON_SECONDS
+    sim.state.dangerous_duration[edge] = 5.0 - epsilon_offset * epsilon
+
+    update_hazards(
+        sim.topology,
+        sim.state,
+        HazardConfig(minimum_duration_seconds=10.0),
+        5.0,
+        10.0,
+        epsilon,
+    )
+
+    assert bool(sim.state.harm_active[edge]) is harm_active

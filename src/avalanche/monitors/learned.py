@@ -7,6 +7,7 @@ the training cannot disagree.
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from time import perf_counter
 
 import numpy as np
 
+from avalanche.config.models import ModelLockReference
 from avalanche.control import (
     ActionProposal,
     ConfiguredFallback,
@@ -42,6 +44,33 @@ class LearnedPrediction:
     def as_items(self) -> tuple[tuple[str, float], ...]:
         """Return stable prediction items for traces and display."""
         return tuple(asdict(self).items())
+
+
+@dataclass(frozen=True)
+class ModelReference:
+    """Record one verified formal model identity in a run."""
+
+    reference_version: int
+    attempt_name: str
+    model_kind: str
+    model_sha256: str
+    calibration_sha256: str
+    model_version: int
+    feature_version: int
+    information_profile: str
+    registry_path: str
+    registry_sha256: str
+    selection_manifest_path: str
+    selection_manifest_sha256: str
+    attempt_lock_path: str
+    attempt_lock_sha256: str
+    role: str
+    threshold: float
+    temperature: float
+
+    def as_dict(self) -> dict[str, object]:
+        """Return the durable verified model evidence."""
+        return asdict(self)
 
 
 class LearnedMonitor:
@@ -129,37 +158,45 @@ class LearnedMonitor:
     def model_reference(self) -> dict[str, object]:
         """Return the model identity for the run output, per PLAN section 10."""
         metadata = self.model.metadata
-        return {
-            "model_version": metadata.get("model_version"),
-            "model_kind": metadata.get("model_kind", "perceptron"),
-            "model_path": metadata.get("model_path"),
-            "model_revision": metadata.get("model_revision"),
-            "feature_version": metadata.get("feature_version"),
-            "information_profile": metadata.get("information_profile"),
-            "feature_blocks": list(self.extractor.feature_blocks),
-            "threshold": self.threshold,
-            "temperature": self.temperature,
-        }
+        artifact = metadata["artifact_reference"]
+        reference = ModelReference(
+            reference_version=2,
+            attempt_name=str(metadata["attempt_name"]),
+            model_kind=str(metadata["model_kind"]),
+            model_sha256=str(metadata["model_revision"]),
+            calibration_sha256=str(metadata["calibration_sha256"]),
+            model_version=int(metadata["model_version"]),
+            feature_version=int(metadata["feature_version"]),
+            information_profile=str(metadata["information_profile"]),
+            registry_path=str(artifact["registry_path"]),
+            registry_sha256=str(artifact["registry_sha256"]),
+            selection_manifest_path=str(artifact["selection_manifest_path"]),
+            selection_manifest_sha256=str(artifact["selection_manifest_sha256"]),
+            attempt_lock_path=str(artifact["attempt_lock_path"]),
+            attempt_lock_sha256=str(artifact["attempt_lock_sha256"]),
+            role=str(artifact["role"]),
+            threshold=self.threshold,
+            temperature=self.temperature,
+        )
+        return reference.as_dict()
 
 
 def build_learned_monitor(
-    model_path: Path,
+    model_lock: ModelLockReference,
     extractor: FeatureExtractor,
     fallback: ConfiguredFallback,
     *,
-    threshold: float | None,
     unsafe_decision: str | DecisionType,
 ) -> LearnedMonitor:
-    """Load one saved model and its calibration."""
+    """Load one formally selected model and its locked calibration."""
     from avalanche.monitors.training import load_locked_scoring_model
 
     model = load_locked_scoring_model(
-        model_path,
+        model_lock,
         expected_information_profile=extractor.profile,
     )
     calibration = model.metadata.get("calibration", {})
-    if threshold is None:
-        threshold = float(calibration.get("threshold", 0.5))
+    threshold = float(calibration["threshold"])
     return LearnedMonitor(
         model,
         extractor,
@@ -168,6 +205,18 @@ def build_learned_monitor(
         temperature=float(calibration.get("temperature", 1.0)),
         unsafe_decision=unsafe_decision,
     )
+
+
+def read_legacy_model_reference(path: Path) -> dict[str, object]:
+    """Read a legacy run reference for display without making it loadable."""
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("the legacy model reference must be a mapping")
+    return {
+        "reference_kind": "legacy_display_only",
+        "loadable": False,
+        "record": value,
+    }
 
 
 def _action_distance(proposal: MonitorProposal, fallback: ActionProposal) -> float:

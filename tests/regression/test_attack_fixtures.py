@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
+from avalanche.config import ConfigurationResolver, ResolvedConfig, load_yaml
 from avalanche.controllers import build_controller
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.experiments.evaluation import AttackAssessment, assess_attack
@@ -21,14 +21,13 @@ IDENTITIES = [fixture["id"] for fixture in FIXTURES]
 
 def resolve(fixture: dict, controller_key: str) -> ResolvedConfig:
     """Return the complete configuration of one manifest entry."""
-    values = load_and_merge(
-        REPO / fixture["mountain"],
-        REPO / fixture["scenario"],
-        REPO / fixture[controller_key],
-        REPO / fixture["monitor"],
+    return ConfigurationResolver().resolve(
+        fixture["mountain"],
+        fixture["scenario"],
+        fixture[controller_key],
+        fixture["monitor"],
+        fixture["override"],
     )
-    values["seed"] = fixture["seed"]
-    return ResolvedConfig.model_validate(values)
 
 
 @dataclass(frozen=True)

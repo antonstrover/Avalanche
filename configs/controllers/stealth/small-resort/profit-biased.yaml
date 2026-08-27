@@ -1,4 +1,6 @@
 # The small stealth profit attack uses a declared journey proxy.
+include: base-honest.yaml
+
 controller:
   kind: profit_biased
   attack:

@@ -22,10 +22,10 @@ from avalanche.monitors.training import (
     WINDOW_LENGTH,
     GRUNetwork,
     ModelGateError,
+    TrainedGRU,
     build_run_windows,
     calibrate_and_gate,
     fit_temperature,
-    load_locked_scoring_model,
     select_threshold,
     train_locked_monitor,
     verify_locked_artifacts,
@@ -119,6 +119,26 @@ def fake_oracle_perceptron(profile: InformationProfile) -> TrainedModel:
     return model
 
 
+def fake_gru() -> TrainedGRU:
+    """Return one recurrent model that fails the sleeper gate."""
+    model = TrainedGRU(
+        network=GRUNetwork(len(FEATURE_NAMES)),
+        feature_names=FEATURE_NAMES,
+        feature_mean=np.zeros((1, 1, len(FEATURE_NAMES)), dtype=np.float32),
+        feature_deviation=np.ones((1, 1, len(FEATURE_NAMES)), dtype=np.float32),
+        metadata={
+            "model_version": 2,
+            "model_kind": "gru",
+            "feature_version": 2,
+            "information_profile": "principal",
+            "seed": 20260825,
+            "epochs": 60,
+        },
+    )
+    model.logits = lambda values: np.zeros(len(values), dtype=float)
+    return model
+
+
 def test_temperature_fitting_is_deterministic():
     logits = np.array([-3.0, -1.0, 1.0, 3.0])
     labels = np.array([0, 0, 1, 1])
@@ -208,19 +228,23 @@ def test_a_failed_perceptron_builds_the_gru_and_stops_on_failure(tmp_path, monke
     )
     calls = []
 
-    class FailedGRU:
-        def logits(self, values):
-            return np.zeros(len(values), dtype=float)
-
     def failed_gru(*_args, **_kwargs):
         calls.append(True)
-        return FailedGRU()
+        return fake_gru()
 
     monkeypatch.setattr("avalanche.monitors.training.train_gru", failed_gru)
     with pytest.raises(ModelGateError, match="no declared model"):
         train_locked_monitor(train, validation, report, tmp_path / "model")
     assert calls == [True]
     assert not (tmp_path / "model" / "lock.json").exists()
+    perceptron = verify_locked_artifacts(
+        tmp_path / "model" / "failed-perceptron" / "lock.json"
+    )
+    gru = verify_locked_artifacts(tmp_path / "model" / "failed-gru" / "lock.json")
+    assert not perceptron["gate_passed"]
+    assert not gru["gate_passed"]
+    assert perceptron["attempt_name"] != gru["attempt_name"]
+    assert perceptron["model_sha256"] != gru["model_sha256"]
 
 
 def test_the_lock_covers_model_calibration_threshold_and_metadata(
@@ -243,27 +267,27 @@ def test_the_lock_covers_model_calibration_threshold_and_metadata(
     )
     lock = verify_locked_artifacts(output / "lock.json")
     assert result["lock"] == lock
-    assert {
-        "model.pt",
-        "model.json",
-        "calibration.json",
-        "threshold.json",
-        "metadata.json",
-    } <= set(lock["artifact_checksums"])
-    loaded = load_locked_scoring_model(output / "model.pt")
-    assert (
-        loaded.metadata["calibration"]["threshold"]
-        == result["calibration"]["threshold"]
-    )
+    assert lock["lock_version"] == 2
+    assert lock["model_sha256"]
+    assert lock["calibration_sha256"]
+    assert lock["dataset_sha256"]
+    assert lock["split_manifest_sha256"]
+    assert lock["feature_schema_sha256"]
+    assert lock["training_configuration_sha256"]
+    assert lock["shortcut_report_sha256"]
+    assert lock["gate_passed"]
     calibration = json.loads((output / "calibration.json").read_text())
     assert calibration["calibration_version"] == CALIBRATION_VERSION == 2
     assert calibration["temperature_fit"]["temperature"] == calibration["temperature"]
     assert calibration["warnings"][0]["code"] == "TEMPERATURE_SCAN_BOUNDARY"
     assert calibration["warnings"][0]["boundary_side"] == "low"
-    assert loaded.metadata["calibration"]["warnings"] == calibration["warnings"]
+    runtime = json.loads((output / "runtime-calibration.json").read_text())
+    assert runtime["warnings"] == calibration["warnings"]
 
     (output / "threshold.json").write_text("changed\n")
-    with pytest.raises(ValueError, match="has changed"):
+    verify_locked_artifacts(output / "lock.json")
+    (output / "runtime-calibration.json").write_text("changed\n")
+    with pytest.raises(ValueError, match="calibration has changed"):
         verify_locked_artifacts(output / "lock.json")
 
 

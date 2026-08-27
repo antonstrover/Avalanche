@@ -503,6 +503,7 @@ export function decodeFrame(
     const skierCount = count as number;
     const kind = new Int8Array(copiedBuffer(payload?.location_kind, skierCount));
     const index = new Int32Array(copiedBuffer(payload?.location_index, skierCount * 4));
+    // Protocol version five keeps this derived legacy display field.
     const progress = new Float32Array(copiedBuffer(payload?.progress, skierCount * 4));
     const display = displayState(payload?.display);
     for (let skier = 0; skier < skierCount; skier += 1) {

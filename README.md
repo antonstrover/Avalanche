@@ -48,9 +48,11 @@ Only the evaluator reads the true score.
 ```bash
 uv run pytest tests/regression/test_attack_fixtures.py
 
-uv run avalanche simulate configs/mountain/default.yaml \
-    configs/scenarios/attack-reward-hacker.yaml \
-    configs/controllers/reward-hacker.yaml configs/monitors/none.yaml
+uv run avalanche simulate \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/attack-reward-hacker.yaml \
+    --controller configs/controllers/reward-hacker.yaml \
+    --monitor configs/monitors/none.yaml
 ```
 
 ### The simulator
@@ -58,8 +60,8 @@ uv run avalanche simulate configs/mountain/default.yaml \
 | Part | File | What it does |
 |---|---|---|
 | Graph | `src/avalanche/sim/graph.py` | reads the mountain file and validates the graph one time, at load |
-| Topology | `src/avalanche/sim/topology.py` | changes the graph into read-only index arrays |
-| Routes | `src/avalanche/sim/routes.py` | gives safe shortest paths for each ability |
+| Topology | `src/avalanche/sim/topology.py` | stores index arrays on immutable byte buffers |
+| Routes | `src/avalanche/sim/routes.py` | caches immutable safe paths for each ability |
 | Population | `src/avalanche/sim/population.py` | samples skier attributes and reachable exits into arrays |
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
@@ -83,6 +85,8 @@ Each skier starts on the first movement boundary at or after its arrival time.
 The route choice groups skiers by their location and their attributes.
 The simulator rejects a piste above the skier's ability limit.
 It rejects lift advice without a safe onward route.
+Configuration validation checks every required safe route before a run.
+Each entrance must reach every safe zone and exit for every ability.
 The lift throughput limits the boarding rate.
 A lift queue stays outside the onboard occupancy.
 The safe capacity limits the onboard skier count.
@@ -175,37 +179,45 @@ Select **Start live session** to stream the selected population.
 
 ### The command-line interface
 
-The configuration files are composable.
-A command needs the mountain, the scenario, the controller, and the monitor.
+The resolver composes exactly four component files.
+A command must name the mountain, the scenario, the controller, and the monitor.
+An optional override file can set six approved values.
+The resolver records each explicit, defaulted, and derived value source.
+It validates every topology reference before it creates an output directory.
 The `intervals.movement_tick_seconds` value defines the movement tick.
 The `intervals.control_interval_seconds` value defines the control interval.
 A scenario must not define another interval.
 
 ```bash
-uv run avalanche validate-config configs/mountain/default.yaml \
-    configs/scenarios/default.yaml configs/controllers/honest.yaml \
-    configs/monitors/none.yaml
+uv run avalanche validate-config \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/default.yaml \
+    --controller configs/controllers/honest.yaml \
+    --monitor configs/monitors/none.yaml
 
-uv run avalanche simulate configs/mountain/default.yaml \
-    configs/scenarios/default.yaml configs/controllers/honest.yaml \
-    configs/monitors/none.yaml
+uv run avalanche simulate \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/default.yaml \
+    --controller configs/controllers/honest.yaml \
+    --monitor configs/monitors/none.yaml \
+    --override configs/overrides/quick.yaml
+
+uv run avalanche simulate \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/default.yaml \
+    --controller configs/controllers/honest.yaml \
+    --monitor configs/monitors/none.yaml \
+    --preflight
 ```
 
+The validation and preflight commands print stable configuration evidence.
 `simulate` writes a run directory under `outputs/`.
 The command runs one resolved episode.
 It writes the events, the metrics, the snapshots, the model reference, and the final summary.
-Each snapshot records a version and the complete simulator state.
-The snapshot codec validates each field before it restores a simulator.
-Restore a snapshot into a reset simulator with the same configuration.
-
-```python
-import pyarrow.parquet as pq
-
-from avalanche.traces import restore_snapshot
-
-row = pq.read_table("outputs/example/snapshots.parquet").to_pylist()[0]
-restore_snapshot(sim, row)
-```
+Each version two snapshot stores a physical replay view.
+It derives legacy display progress from the formal travel-time state.
+It does not restore a formal simulator continuation.
+The codec rejects a version two snapshot used for continuation.
 
 ### The simulator, from Python
 
@@ -236,7 +248,8 @@ It splits complete runs before it creates any model window.
 The fixture metadata checks each contract version and the dataset checksum.
 The shortcut audit checks every feature before training.
 The training gate uses validation rows for calibration and threshold selection.
-Each locked model records every artifact checksum.
+Each formal model uses a registered lock and a content-addressed profile selection.
+Prepare release assets before evaluation because formal loading operates offline.
 The final evaluator runs 1,680 paired Val Tarin episodes.
 
 Regenerate the small monitor fixture after a dataset, feature, or policy change.
@@ -245,7 +258,6 @@ Regenerate the small monitor fixture after a dataset, feature, or policy change.
 uv run python scripts/generate_monitor_dataset.py \
   configs/experiments/monitor-training.yaml \
   --fixture \
-  --workers 1 \
   --output tests/fixtures/monitor-dataset.parquet
 ```
 
@@ -256,7 +268,6 @@ Run the two-seed proof before the complete evaluation.
 
 ```bash
 uv run python scripts/run_fix_158_acceptance.py \
-  --workers 1 \
   --evaluation-seed-limit 2 \
   --output outputs/fix-158-proof
 ```
@@ -264,7 +275,7 @@ uv run python scripts/run_fix_158_acceptance.py \
 Run the bounded final acceptance after a clean test run.
 
 ```bash
-uv run python scripts/run_fix_158_acceptance.py --workers 1
+uv run python scripts/run_fix_158_acceptance.py
 ```
 
 The command writes its final report to `outputs/fix-158-final/acceptance-report.json`.
@@ -278,8 +289,8 @@ The live scene reads the mountain selected for its session.
 The scene derives its transform from the resort bounds.
 
 ```bash
-uv run python scripts/export_topology.py configs/mountain/medium-resort.yaml
-uv run python scripts/export_replay.py configs/mountain/medium-resort.yaml
+uv run python scripts/export_topology.py configs/mountain/default.yaml
+uv run python scripts/export_replay.py configs/mountain/default.yaml
 ```
 
 ## Check the code

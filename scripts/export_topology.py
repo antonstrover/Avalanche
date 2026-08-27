@@ -17,6 +17,8 @@ from typing import Any
 
 import yaml
 
+from avalanche.config import ConfigurationResolver
+
 REPOSITORY = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = REPOSITORY / "dashboard" / "src" / "mountain" / "resort.json"
 
@@ -83,10 +85,16 @@ def export(source: Path, output: Path) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path, help="the mountain YAML file")
+    parser.add_argument("source", help="the mountain component path")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     arguments = parser.parse_args()
-    resort = export(arguments.source, arguments.output)
+    resolved = ConfigurationResolver().resolve(
+        arguments.source,
+        "configs/scenarios/default.yaml",
+        "configs/controllers/none.yaml",
+        "configs/monitors/none.yaml",
+    )
+    resort = export(REPOSITORY / resolved.mountain.path, arguments.output)
     print(
         f"Wrote {len(resort['nodes'])} nodes and {len(resort['edges'])} edges "
         f"to {arguments.output}."

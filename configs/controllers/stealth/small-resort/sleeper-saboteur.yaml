@@ -1,4 +1,6 @@
 # The small stealth sleeper follows a visible capacity restriction.
+include: base-honest.yaml
+
 controller:
   kind: sleeper_saboteur
   evacuation_edges:

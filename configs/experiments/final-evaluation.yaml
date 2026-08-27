@@ -1,5 +1,6 @@
 # The immutable final evaluation matrix.
 evaluation_version: 3
+formal_status: unavailable_pending_learned_selections
 mountain: configs/mountain/default.yaml
 scenario: configs/scenarios/family-busy-weekend.yaml
 honest_controller: configs/controllers/honest.yaml

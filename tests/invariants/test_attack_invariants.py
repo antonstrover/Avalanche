@@ -7,13 +7,14 @@ from typing import Any
 import numpy as np
 import pytest
 
-from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
+from avalanche.config import ResolvedConfig, load_yaml
 from avalanche.control import ApprovalChoice, SimulatedApprover
 from avalanche.controllers import build_controller, build_fallback
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.monitors import build_monitor
 from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 from avalanche.sim.skier import LocationKind, Status
+from tests.configuration import resolve_test_configuration
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "configs" / "experiments" / "attack-fixtures.yaml"
@@ -29,18 +30,20 @@ VALID_KINDS = tuple(int(kind) for kind in LocationKind)
 VALID_STATUS = tuple(int(status) for status in Status)
 
 
-def resolve(fixture: dict[str, Any]) -> ResolvedConfig:
+def resolve(fixture: dict[str, Any], root: Path) -> ResolvedConfig:
     """Return one short resolved configuration of a fixture entry."""
-    values = load_and_merge(
-        REPO / fixture["mountain"],
-        REPO / fixture["scenario"],
-        REPO / fixture["controller"],
-        REPO / fixture["monitor"],
+    return resolve_test_configuration(
+        root,
+        mountain=fixture["mountain"],
+        scenario=fixture["scenario"],
+        controller=fixture["controller"],
+        monitor=fixture["monitor"],
+        override={
+            "seed": fixture["seed"],
+            "population": {"skier_count": SKIER_COUNT},
+            "episode_duration_seconds": EPISODE_SECONDS[fixture["id"]],
+        },
     )
-    values["seed"] = fixture["seed"]
-    values["population"]["skier_count"] = SKIER_COUNT
-    values["episode_duration_seconds"] = EPISODE_SECONDS[fixture["id"]]
-    return ResolvedConfig.model_validate(values)
 
 
 def build(resolved: ResolvedConfig) -> tuple[AvalancheEnv, Any]:
@@ -78,7 +81,9 @@ def check_invariants(env: AvalancheEnv, observation: dict[str, Any]) -> None:
         assert values.size == SKIER_COUNT, name
     assert np.all(np.isin(pop.location_kind, VALID_KINDS))
     assert np.all(np.isin(pop.status, VALID_STATUS))
-    assert np.all((pop.progress >= 0.0) & (pop.progress <= 1.0))
+    assert np.all(pop.required_travel_seconds >= 0.0)
+    assert np.all(pop.remaining_travel_seconds >= 0.0)
+    assert np.all(pop.remaining_travel_seconds <= pop.required_travel_seconds)
     assert np.all((pop.compliance >= 0.0) & (pop.compliance <= 1.0))
     assert np.all((pop.ability >= 0) & (pop.ability < len(ABILITY_NAMES)))
     assert np.all((pop.group >= 0) & (pop.group < len(CUSTOMER_GROUP_NAMES)))
@@ -106,9 +111,14 @@ def fixture(request) -> dict[str, Any]:
     return request.param
 
 
-def test_each_attack_holds_the_invariants_in_every_interval(fixture):
-    resolved = resolve(fixture)
-    env, controller = build(resolved)
+@pytest.fixture(scope="module")
+def resolved_attack(fixture, tmp_path_factory) -> ResolvedConfig:
+    root = tmp_path_factory.mktemp(f"attack-{fixture['id']}")
+    return resolve(fixture, root)
+
+
+def test_each_attack_holds_the_invariants_in_every_interval(resolved_attack):
+    env, controller = build(resolved_attack)
     observation = env.controller_observation()
     check_invariants(env, observation)
 
@@ -122,9 +132,8 @@ def test_each_attack_holds_the_invariants_in_every_interval(fixture):
     assert env.sim.step > 0
 
 
-def test_the_attack_controller_cannot_change_the_simulator(fixture):
-    resolved = resolve(fixture)
-    env, controller = build(resolved)
+def test_the_attack_controller_cannot_change_the_simulator(resolved_attack):
+    env, controller = build(resolved_attack)
     for _ in range(4):
         env.step_proposal(controller.propose(env.controller_observation()))
 
@@ -146,9 +155,8 @@ def test_the_attack_controller_cannot_change_the_simulator(fixture):
             )
 
 
-def test_the_attack_proposal_goes_through_the_adjudicator(fixture):
-    resolved = resolve(fixture)
-    env, controller = build(resolved)
+def test_the_attack_proposal_goes_through_the_adjudicator(resolved_attack):
+    env, controller = build(resolved_attack)
 
     proposal = controller.propose(env.controller_observation())
     result = env.execute_proposal(proposal)

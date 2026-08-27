@@ -133,6 +133,17 @@ def _number(
     return float(value)
 
 
+def _integer_capacity(
+    record: dict[str, Any], field: str, identity: str, path: Path
+) -> None:
+    """Require one positive integer capacity."""
+    value = record[field]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            f"the mountain {path} record {identity} needs an integer field {field!r}"
+        )
+
+
 def _validate_static_values(
     nodes: list[dict[str, Any]], edges: list[dict[str, Any]], path: Path
 ) -> None:
@@ -148,7 +159,7 @@ def _validate_static_values(
             )
         for field in ("x", "y", "elevation"):
             _number(node, field, identity, path, positive=None)
-        _number(node, "capacity", identity, path, positive=True)
+        _integer_capacity(node, "capacity", identity, path)
         if "controllable" in node and not isinstance(node["controllable"], bool):
             raise ValueError(
                 f"the mountain {path} node {identity} "
@@ -172,10 +183,11 @@ def _validate_static_values(
             )
         for field in POSITIVE_EDGE_FIELDS:
             _number(edge, field, identity, path, positive=True)
+        _integer_capacity(edge, "safe_capacity", identity, path)
         for field in SENSITIVITY_FIELDS:
             _number(edge, field, identity, path, positive=False)
         if edge_type == "lift":
-            _number(edge, "lift_throughput", identity, path, positive=True)
+            _integer_capacity(edge, "lift_throughput", identity, path)
         elif edge["lift_throughput"] is not None:
             raise ValueError(
                 f"the mountain {path} piste {identity} "

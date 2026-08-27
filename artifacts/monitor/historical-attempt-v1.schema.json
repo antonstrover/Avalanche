@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/antonstrover/Avalanche/artifacts/monitor/historical-attempt-v1.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_status": {
+      "const": "irrecoverable_historical"
+    },
+    "fields": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_status": {
+            "enum": [
+              "verified_original",
+              "unavailable_original",
+              "reconstruction_only"
+            ]
+          },
+          "value": {}
+        },
+        "required": [
+          "value",
+          "evidence_status"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "historical_evidence_version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "historical_evidence_version",
+    "artifact_status",
+    "fields"
+  ],
+  "type": "object"
+}

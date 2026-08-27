@@ -1,3 +1,13 @@
+from avalanche.config.composition import (
+    ConfigurationResolutionError,
+    ConfigurationResolver,
+    ControllerComponent,
+    MonitorComponent,
+    MountainComponent,
+    OverrideComponent,
+    ScenarioComponent,
+    resolve_configuration,
+)
 from avalanche.config.loader import (
     ConfigLoadError,
     load_and_merge,
@@ -16,6 +26,8 @@ from avalanche.config.models import (
     FailureSamplingConfig,
     FailuresConfig,
     HazardConfig,
+    ModelLockReference,
+    NumericsConfig,
     OperationalEventsConfig,
     ResolvedConfig,
     WeatherConfig,
@@ -25,6 +37,7 @@ from avalanche.config.models import (
     WeatherScheduleEntryConfig,
     WeatherStateConfig,
 )
+from avalanche.config.provenance import ValueProvenance
 from avalanche.config.run_identity import make_run_dir, run_id
 
 __all__ = [
@@ -40,6 +53,8 @@ __all__ = [
     "ControllerConfig",
     "ControllerKind",
     "HazardConfig",
+    "ModelLockReference",
+    "NumericsConfig",
     "OperationalEventsConfig",
     "ResolvedConfig",
     "FailureEventConfig",
@@ -53,4 +68,13 @@ __all__ = [
     "WeatherStateConfig",
     "make_run_dir",
     "run_id",
+    "ConfigurationResolutionError",
+    "ConfigurationResolver",
+    "MountainComponent",
+    "ScenarioComponent",
+    "ControllerComponent",
+    "MonitorComponent",
+    "OverrideComponent",
+    "ValueProvenance",
+    "resolve_configuration",
 ]

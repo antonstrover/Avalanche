@@ -1,3 +1,6 @@
+numerics:
+  time_epsilon_seconds: 0.000000001
+
 scenario:
   name: calm-day
   weather:
@@ -25,3 +28,5 @@ intervals:
 
 episode_duration_seconds: 28800
 snapshot_interval_seconds: 60
+seed: 1234
+trace_level: decision

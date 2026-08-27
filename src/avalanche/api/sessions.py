@@ -17,6 +17,7 @@ import numpy as np
 
 from avalanche.config import load_yaml
 from avalanche.config.models import (
+    PROTOCOL_TIME_EPSILON_SECONDS,
     ControllerConfig,
     MonitorConfig,
     PopulationConfig,
@@ -46,6 +47,7 @@ from avalanche.env import (
 from avalanche.monitors import build_monitor
 from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
+from avalanche.sim.population import display_progress
 from avalanche.sim.skier import LocationKind
 
 STREAM_VERSION = 5
@@ -89,7 +91,7 @@ def pack_frame(
         "skier_count": len(population),
         "location_kind": population.location_kind.astype(np.int8, copy=False).tobytes(),
         "location_index": population.location_index.astype("<i4", copy=False).tobytes(),
-        "progress": population.progress.astype("<f4", copy=False).tobytes(),
+        "progress": display_progress(population).astype("<f4", copy=False).tobytes(),
         "display": display_state(sim, proposal, adjudication, approval, controller),
     }
     envelope = {
@@ -428,6 +430,8 @@ def run_session(
     approval_timeout: float = 30.0,
     command_input: Any | None = None,
     resolved_config: ResolvedConfig | None = None,
+    frame_interval_ms: int = FRAME_INTERVAL_MS,
+    initial_simulation_speed: float = SIMULATION_SPEED,
 ) -> None:
     """Run one simulator inside a child process."""
     try:
@@ -470,6 +474,7 @@ def run_session(
                 "hazards": resolved_config.scenario.hazards,
                 "failures": resolved_config.scenario.failures,
                 "audits": resolved_config.scenario.audits,
+                "numerics": resolved_config.numerics,
             }
         if demo_failure:
             options["failures"] = {
@@ -488,6 +493,11 @@ def run_session(
             AvalancheEnvConfig(
                 movement_tick_seconds=movement_tick_seconds,
                 control_interval_seconds=control_interval_seconds,
+                time_epsilon_seconds=(
+                    resolved_config.numerics.time_epsilon_seconds
+                    if resolved_config is not None
+                    else PROTOCOL_TIME_EPSILON_SECONDS
+                ),
                 episode_duration_seconds=episode_duration_seconds,
             ),
             simulator_options=options,
@@ -579,8 +589,8 @@ def run_session(
                 controller=controller_config,
             ),
         )
-        interval = FRAME_INTERVAL_MS / 1000.0
-        simulation_speed = SIMULATION_SPEED
+        interval = frame_interval_ms / 1000.0
+        simulation_speed = initial_simulation_speed
         accumulated_seconds = 0.0
         paused = False
         next_frame = time.monotonic() + interval
@@ -724,6 +734,7 @@ class LiveSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
     pump: threading.Thread | None = None
     simulation_speed: float = SIMULATION_SPEED
+    frame_interval_ms: int = FRAME_INTERVAL_MS
     resolved_config: ResolvedConfig | None = None
     command_results: set[str] = field(default_factory=set)
     command_condition: threading.Condition = field(default_factory=threading.Condition)
@@ -735,7 +746,7 @@ class LiveSession:
             "status": self.status,
             "skier_count": self.skier_count,
             "simulation_speed": self.simulation_speed,
-            "frame_interval_ms": FRAME_INTERVAL_MS,
+            "frame_interval_ms": self.frame_interval_ms,
             "topology_version": self.topology_version,
             "demo_failure": self.demo_failure,
             "demo_monitor": self.demo_monitor,
@@ -760,6 +771,8 @@ class SessionManager:
         demo_monitor: bool = False,
         demo_approval: bool = False,
         resolved_config: ResolvedConfig | None = None,
+        frame_interval_ms: int = FRAME_INTERVAL_MS,
+        simulation_speed: float = SIMULATION_SPEED,
     ) -> LiveSession:
         """Create and start one live session."""
         session_id = str(uuid.uuid4())
@@ -789,6 +802,8 @@ class SessionManager:
                 30.0,
                 command_input,
                 resolved_config,
+                frame_interval_ms,
+                simulation_speed,
             ),
             daemon=True,
         )
@@ -806,6 +821,8 @@ class SessionManager:
             approval_input=approval_input,
             command_input=command_input,
             resolved_config=resolved_config,
+            frame_interval_ms=frame_interval_ms,
+            simulation_speed=simulation_speed,
         )
         with self.lock:
             self.sessions[session_id] = session

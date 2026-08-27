@@ -13,10 +13,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
-from avalanche.config import load_and_merge
+from avalanche.config import load_yaml
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.monitors.dataset import (
     DatasetEntry,
@@ -32,7 +31,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="generate_monitor_dataset")
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     parser.add_argument(
         "--limit", type=int, default=None, help="run only the first entries"
     )
@@ -49,19 +47,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.fixture and args.limit is not None:
         raise ValueError("the fixture selection cannot use an entry limit")
     if args.fixture:
-        manifest = load_and_merge(args.manifest)
+        manifest = load_yaml(args.manifest)
         entries = fixture_entries(expand_manifest(manifest))
         written = generate_dataset_entries(
             args.manifest,
             args.output,
             entries,
-            workers=args.workers,
             source_manifest=manifest,
         )
     else:
-        written = generate_dataset(
-            args.manifest, args.output, workers=args.workers, limit=args.limit
-        )
+        written = generate_dataset(args.manifest, args.output, limit=args.limit)
     print(f"Wrote the labelled rows to {written}")
     return 0
 

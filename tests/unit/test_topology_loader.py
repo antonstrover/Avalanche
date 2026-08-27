@@ -1,4 +1,5 @@
-from dataclasses import fields
+import hashlib
+from dataclasses import fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from avalanche.sim import (
     build_graph,
     load_topology,
 )
+from avalanche.sim.topology import immutable_array
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -24,6 +26,30 @@ EDGE_FIELDS = {
     "edge_wind_sensitivity": "wind_sensitivity",
     "edge_visibility_sensitivity": "visibility_sensitivity",
     "edge_snow_sensitivity": "snow_sensitivity",
+}
+
+EXPECTED_DTYPES = {
+    "node_x": "<f4",
+    "node_y": "<f4",
+    "node_elevation": "<f4",
+    "node_type": "|i1",
+    "node_capacity": "<i4",
+    "node_controllable": "|b1",
+    "edge_source": "<i4",
+    "edge_destination": "<i4",
+    "edge_type": "|i1",
+    "edge_difficulty": "|i1",
+    "edge_length": "<f4",
+    "edge_nominal_travel_time": "<f4",
+    "edge_safe_capacity": "<i4",
+    "edge_critical_density": "<f4",
+    "edge_lift_throughput": "<f4",
+    "edge_wind_sensitivity": "<f4",
+    "edge_visibility_sensitivity": "<f4",
+    "edge_snow_sensitivity": "<f4",
+    "edge_controllable": "|b1",
+    "edge_offsets": "<i4",
+    "outgoing_edges": "<i4",
 }
 
 
@@ -118,9 +144,45 @@ def test_every_topology_array_is_read_only(topology):
         values = getattr(topology, field_info.name)
         if not isinstance(values, np.ndarray):
             continue
+        before = values.tobytes()
         assert not values.flags.writeable, field_info.name
+        assert not values.flags.owndata, field_info.name
         with pytest.raises(ValueError, match="read-only"):
             values.flat[0] = values.flat[0]
+        with pytest.raises(ValueError):
+            values.setflags(write=True)
+        assert values.tobytes() == before, field_info.name
+
+
+def test_every_topology_array_has_one_declared_dtype(topology):
+    for name, dtype in EXPECTED_DTYPES.items():
+        assert getattr(topology, name).dtype.str == dtype, name
+
+
+def test_every_topology_array_uses_immutable_bytes(topology):
+    for name in EXPECTED_DTYPES:
+        owner = getattr(topology, name)
+        while isinstance(owner.base, np.ndarray):
+            owner = owner.base
+        assert isinstance(owner.base, bytes), name
+
+
+def test_the_mountain_digest_covers_the_source_file(topology):
+    assert topology.mountain_sha256 == hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+
+
+def test_an_object_static_array_is_rejected(topology):
+    values = np.asarray(topology.node_x, dtype=object)
+
+    with pytest.raises(TypeError, match="object dtype"):
+        replace(topology, node_x=values)
+
+
+def test_a_platform_dtype_declaration_is_rejected():
+    values = np.arange(3, dtype=np.int64)
+
+    with pytest.raises(TypeError, match="byte order"):
+        immutable_array(values, np.int64)
 
 
 def test_the_node_index_is_read_only(topology):

@@ -284,4 +284,36 @@ describe("live frame handling", () => {
         );
         expect(positions[0]).toBe(0);
     });
+
+    it("keeps the edge endpoint through the first node frame", () => {
+        const frame = (
+            kind: number,
+            progress: number,
+            receivedAt: number,
+        ): FrameState => ({
+            sequence: receivedAt,
+            simulationTime: receivedAt,
+            receivedAt,
+            skierCount: 1,
+            kind: new Int8Array([kind]),
+            index: new Int32Array([0]),
+            progress: new Float32Array([progress]),
+            display,
+        });
+        const table: PositionTable = {
+            nodePositions: new Float32Array([20, 0, 0]),
+            edgePositions: new Float32Array([0, 0, 0, 10, 0, 0, 20, 0, 0]),
+            edgeSamples: 3,
+            edgeCount: 1,
+        };
+        const edge = frame(1, 1, 0);
+        const node = frame(0, 0, 100);
+
+        const finalEdge = interpolatePositions(edge, node, 150, 100, table);
+        const firstNode = interpolatePositions(edge, node, 200, 100, table);
+
+        expect(Array.from(finalEdge)).toEqual([20, 0, 0]);
+        expect(Array.from(firstNode)).toEqual([20, 0, 0]);
+        expect(Array.from(firstNode).every(Number.isFinite)).toBe(true);
+    });
 });

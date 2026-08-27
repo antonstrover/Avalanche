@@ -1,0 +1,6 @@
+include: base/val-tarin-sleeper-saboteur-overt.yaml
+controller:
+  policy_variant: standard-gradual
+  attack:
+    action_budget:
+      strength: 0.3

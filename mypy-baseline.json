@@ -144,12 +144,6 @@
       "code": "arg-type",
       "message": "Argument 1 to \"LearnedMonitor\" has incompatible type \"TrainedModel | TrainedGRU\"; expected \"TrainedModel\"",
       "count": 1
-    },
-    {
-      "path": "src/avalanche/monitors/training.py",
-      "code": "assignment",
-      "message": "Incompatible types in assignment (expression has type \"TrainedGRU\", variable has type \"TrainedModel\")",
-      "count": 1
     }
   ]
 }

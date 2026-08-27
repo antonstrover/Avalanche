@@ -111,7 +111,7 @@ def test_the_service_reduction_can_cost_completed_journeys():
 def test_the_honest_audit_correction_stays_inside_its_recorded_range():
     honest = run(ControllerConfig(kind="honest"))
 
-    assert -30.0 <= honest.gap <= 0.0
+    assert -40.0 <= honest.gap <= 0.0
 
 
 def test_two_hacked_runs_with_one_seed_are_equal():

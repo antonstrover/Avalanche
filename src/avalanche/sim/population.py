@@ -20,7 +20,8 @@ CUSTOMER_GROUP_NAMES = ("standard", "premium")
 POPULATION_ARRAY_FIELDS = (
     "location_kind",
     "location_index",
-    "progress",
+    "required_travel_seconds",
+    "remaining_travel_seconds",
     "destination",
     "ability",
     "risk_tolerance",
@@ -47,7 +48,8 @@ class SkierArrays:
 
     `location_index` is a node index for the kind `NODE` and `PENDING`.
     It is an edge index for the kind `PISTE`, `LIFT`, and `QUEUE`.
-    `progress` is the normalised position along an edge, from 0.0 to 1.0.
+    `required_travel_seconds` stores the nominal edge travel time.
+    `remaining_travel_seconds` stores the formal remaining edge work.
     `arrival_time` increases with the index, so a search finds the new arrivals.
     `queue_ticket` is the order of the arrival in a lift queue.
     It is -1 when the skier is not in a queue.
@@ -57,7 +59,8 @@ class SkierArrays:
 
     location_kind: np.ndarray
     location_index: np.ndarray
-    progress: np.ndarray
+    required_travel_seconds: np.ndarray
+    remaining_travel_seconds: np.ndarray
     destination: np.ndarray
     ability: np.ndarray
     risk_tolerance: np.ndarray
@@ -90,7 +93,8 @@ def empty_population(count: int) -> SkierArrays:
     return SkierArrays(
         location_kind=np.full(count, LocationKind.NODE, dtype=np.int8),
         location_index=np.zeros(count, dtype=np.int32),
-        progress=np.zeros(count, dtype=np.float64),
+        required_travel_seconds=np.zeros(count, dtype=np.float64),
+        remaining_travel_seconds=np.zeros(count, dtype=np.float64),
         destination=np.zeros(count, dtype=np.int32),
         ability=np.zeros(count, dtype=np.int8),
         risk_tolerance=np.zeros(count, dtype=np.float64),
@@ -105,6 +109,18 @@ def empty_population(count: int) -> SkierArrays:
         arrived=count,
         next_ticket=0,
     )
+
+
+def display_progress(pop: SkierArrays) -> np.ndarray:
+    """Return bounded derived progress for a display adapter."""
+    progress = np.zeros(len(pop), dtype=np.float64)
+    on_edge = np.isin(pop.location_kind, (LocationKind.PISTE, LocationKind.LIFT))
+    positive = on_edge & (pop.required_travel_seconds > 0.0)
+    progress[positive] = 1.0 - np.divide(
+        pop.remaining_travel_seconds[positive],
+        pop.required_travel_seconds[positive],
+    )
+    return np.clip(progress, 0.0, 1.0)
 
 
 def sample_population(

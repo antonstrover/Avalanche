@@ -1,5 +1,10 @@
 # The calm family. The weather stays mild and no failure occurs.
 # This family gives the quiet baseline for the learned monitor.
+include: default.yaml
+
+numerics:
+  time_epsilon_seconds: 0.000000001
+
 scenario:
   name: family-calm
   weather:

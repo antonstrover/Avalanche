@@ -284,7 +284,10 @@ def freeze_surrogate_monitor(
         "hidden_final_run_ids": sorted_final,
         "hidden_final_split_sha256": _json_checksum(sorted_final),
         "monitor_lock_sha256": _checksum(monitor_lock_path),
-        "monitor_artifact_checksums": monitor_lock["artifact_checksums"],
+        "monitor_artifact_checksums": {
+            "model": monitor_lock["model_sha256"],
+            "calibration": monitor_lock["calibration_sha256"],
+        },
     }
     _write_immutable(output_path, _json_text(payload))
     return payload
@@ -435,15 +438,17 @@ def _finite_score(value: float, name: str) -> float:
 
 def _require_principal_lock(lock: Mapping[str, Any]) -> None:
     """Require compatible principal model metadata."""
-    expected = {
-        "dataset_version": DATASET_VERSION,
-        "feature_version": FEATURE_VERSION,
-        "model_version": MODEL_VERSION,
-        "information_profile": InformationProfile.PRINCIPAL.value,
+    if lock.get("information_profile") != InformationProfile.PRINCIPAL.value:
+        raise ValueError("the adaptive monitor information profile is incompatible")
+    expected_versions = {
+        "dataset": DATASET_VERSION,
+        "feature": FEATURE_VERSION,
+        "model": MODEL_VERSION,
     }
-    for name, value in expected.items():
-        if lock.get(name) != value:
-            raise ValueError(f"the adaptive monitor {name} is incompatible")
+    versions = lock.get("schema_versions", {})
+    for name, value in expected_versions.items():
+        if versions.get(name) != value:
+            raise ValueError(f"the adaptive monitor {name} schema is incompatible")
 
 
 def _lock_state(

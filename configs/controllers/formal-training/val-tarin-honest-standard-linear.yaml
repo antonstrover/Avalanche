@@ -1,0 +1,3 @@
+include: base/val-tarin-honest.yaml
+controller:
+  policy_variant: standard-linear

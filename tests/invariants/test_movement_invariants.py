@@ -2,7 +2,7 @@
 
 Each scenario runs a few skiers on the small resort with one seed.
 The checks cover the skier count, the one valid state, a closed edge,
-the increasing time, the array lengths, and the progress range.
+the increasing time, the array lengths, and the travel-time range.
 """
 
 import random
@@ -15,14 +15,19 @@ from avalanche.sim import (
     LocationKind,
     MountainSim,
     Status,
+    advance_on_edges,
+    arrive_at_nodes,
     build_route_table,
+    display_progress,
     load_topology,
+    new_dynamic_state,
     population_from_starts,
+    select_next_edges,
     walk_route,
 )
 from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.routes import NO_EDGE
-from avalanche.traces import encode_snapshot, restore_snapshot
+from avalanche.traces import SnapshotSchemaError, encode_snapshot, restore_snapshot
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -30,6 +35,7 @@ FIXTURE = (
 SEEDS = tuple(range(10))
 TICK_LIMIT = 600
 MAX_SKIERS = 4
+TICK_SECONDS = 5.0
 
 ON_EDGE = (LocationKind.PISTE, LocationKind.LIFT, LocationKind.QUEUE)
 
@@ -80,7 +86,10 @@ def check_one_valid_state(sim):
     kinds = np.array(tuple(LocationKind), dtype=np.int8)
     assert np.all(np.isin(pop.location_kind, kinds))
     assert np.all(np.isin(pop.status, np.array(tuple(Status), dtype=np.int8)))
-    assert np.all((pop.progress >= 0.0) & (pop.progress <= 1.0))
+    assert not hasattr(pop, "progress")
+    assert np.all(pop.required_travel_seconds >= 0.0)
+    assert np.all(pop.remaining_travel_seconds >= 0.0)
+    assert np.all(pop.remaining_travel_seconds <= pop.required_travel_seconds)
 
     on_edge = np.isin(pop.location_kind, ON_EDGE)
     assert np.all(pop.location_index[on_edge] < sim.topology.edge_count)
@@ -101,8 +110,8 @@ def check_one_valid_state(sim):
     assert np.all(finished == (pop.status == Status.COMPLETE))
 
 
-def test_snapshot_restoration_keeps_the_population_invariants():
-    """Restore one moving population without changing its valid states."""
+def test_snapshot_version_two_derives_bounded_display_progress():
+    """Keep the old snapshot field outside the formal state."""
     population, _ = build_scenario(4)
     original = MountainSim(FIXTURE)
     original.reset(4)
@@ -114,13 +123,93 @@ def test_snapshot_restoration_keeps_the_population_invariants():
         episode_id="episode-0",
         seed=4,
     )
+    arrays = {item["name"]: item for item in row["arrays"]}
+    progress = np.frombuffer(arrays["population.progress"]["data"], dtype="<f8")
+    np.testing.assert_array_equal(progress, display_progress(original.population))
+    assert np.all((progress >= 0.0) & (progress <= 1.0))
+    assert "population.required_travel_seconds" not in arrays
+    assert "population.remaining_travel_seconds" not in arrays
+
     restored = MountainSim(FIXTURE)
     restored.reset(4)
+    with pytest.raises(SnapshotSchemaError, match="display-only"):
+        restore_snapshot(restored, row)
 
-    restore_snapshot(restored, row)
 
-    assert len(restored.population) == len(original.population)
-    check_one_valid_state(restored)
+def test_exact_travel_completes_on_the_twenty_fourth_tick():
+    """Complete a 120-second edge after exactly 24 five-second ticks."""
+    topology = load_topology(FIXTURE)
+    state = new_dynamic_state(topology)
+    pop = population_from_starts(
+        [topology.node_index["base_village"]],
+        topology.node_index["base_exit"],
+    )
+    pop.location_kind[0] = LocationKind.PISTE
+    pop.location_index[0] = 0
+    pop.required_travel_seconds[0] = 120.0
+    pop.remaining_travel_seconds[0] = 120.0
+
+    for tick in range(23):
+        advance_on_edges(pop, topology, state, TICK_SECONDS)
+        transitions = arrive_at_nodes(pop, topology, tick * TICK_SECONDS, TICK_SECONDS)
+        assert transitions.completed_skiers.size == 0
+
+    advance_on_edges(pop, topology, state, TICK_SECONDS)
+    transitions = arrive_at_nodes(pop, topology, 115.0, TICK_SECONDS)
+
+    np.testing.assert_array_equal(transitions.completed_skiers, [0])
+    np.testing.assert_array_equal(transitions.edge_completed_at, [120.0])
+
+
+def test_completion_commits_simultaneously():
+    """Commit every matching edge completion at one boundary."""
+    topology = load_topology(FIXTURE)
+    state = new_dynamic_state(topology)
+    pop = population_from_starts(
+        [topology.node_index["base_village"]] * 3,
+        topology.node_index["base_exit"],
+    )
+    pop.location_kind[:] = LocationKind.PISTE
+    pop.location_index[:] = 0
+    pop.required_travel_seconds[:] = 120.0
+    pop.remaining_travel_seconds[:] = [5.0, 5.0, 10.0]
+
+    advance_on_edges(pop, topology, state, TICK_SECONDS)
+    transitions = arrive_at_nodes(pop, topology, 0.0, TICK_SECONDS)
+
+    np.testing.assert_array_equal(transitions.completed_skiers, [0, 1])
+    np.testing.assert_array_equal(transitions.edge_completed_at, [5.0, 5.0])
+    np.testing.assert_array_equal(
+        pop.location_kind,
+        [LocationKind.NODE, LocationKind.NODE, LocationKind.PISTE],
+    )
+
+
+def test_boundary_arrival_enters_without_residual_movement():
+    """Enter the next edge at completion without moving on that edge."""
+    topology = load_topology(FIXTURE)
+    routes = build_route_table(topology)
+    state = new_dynamic_state(topology)
+    edge = 8
+    destination = topology.node_index["base_exit"]
+    pop = population_from_starts([int(topology.edge_source[edge])], destination)
+    pop.location_kind[0] = LocationKind.PISTE
+    pop.location_index[0] = edge
+    pop.required_travel_seconds[0] = 210.0
+    pop.remaining_travel_seconds[0] = TICK_SECONDS
+    next_edge = int(
+        routes.next_edge[pop.ability[0], topology.edge_destination[edge], destination]
+    )
+    advance_on_edges(pop, topology, state, TICK_SECONDS)
+    transitions = arrive_at_nodes(pop, topology, 0.0, TICK_SECONDS)
+    select_next_edges(pop, topology, routes, state, np.random.default_rng(7))
+
+    np.testing.assert_array_equal(transitions.edge_completed_at, [TICK_SECONDS])
+    assert pop.location_kind[0] == LocationKind.PISTE
+    assert pop.location_index[0] == next_edge
+    required = topology.edge_nominal_travel_time[next_edge]
+    assert pop.required_travel_seconds[0] == required
+    assert pop.remaining_travel_seconds[0] == required
 
 
 @pytest.mark.parametrize("seed", SEEDS)

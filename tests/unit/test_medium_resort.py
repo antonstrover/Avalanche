@@ -27,6 +27,7 @@ PISTE = EDGE_TYPE_NAMES.index("piste")
 LIFT = EDGE_TYPE_NAMES.index("lift")
 BLUE = DIFFICULTY_NAMES.index("blue")
 ADVANCED = ABILITY_NAMES.index("advanced")
+REQUIRED_TYPES = (NODE_TYPE_NAMES.index("safe_zone"), EXIT)
 
 
 @pytest.fixture(scope="module")
@@ -79,6 +80,26 @@ def test_every_node_reaches_every_exit(topology, routes):
         )
     ]
     assert unreachable == []
+
+
+def test_every_ability_reaches_an_exit_from_every_entrance(topology, routes):
+    entrances = np.flatnonzero(topology.node_type == ENTRANCE)
+    exits = np.flatnonzero(topology.node_type == EXIT)
+
+    for ability in range(len(ABILITY_NAMES)):
+        assert np.all(
+            np.isfinite(routes.travel_time[ability][np.ix_(entrances, exits)])
+        )
+
+
+def test_every_required_destination_is_reachable(topology, routes):
+    entrances = np.flatnonzero(topology.node_type == ENTRANCE)
+    destinations = np.flatnonzero(np.isin(topology.node_type, REQUIRED_TYPES))
+
+    for ability in range(len(ABILITY_NAMES)):
+        assert np.all(
+            np.isfinite(routes.travel_time[ability][np.ix_(entrances, destinations)])
+        )
 
 
 def test_every_node_is_reachable_from_an_entrance(topology, routes):

@@ -1,3 +1,8 @@
+include: default.yaml
+
+numerics:
+  time_epsilon_seconds: 0.000000001
+
 scenario:
   name: honest-baseline-closure
   weather:

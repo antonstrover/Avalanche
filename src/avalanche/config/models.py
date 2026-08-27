@@ -1,14 +1,35 @@
 """Typed models for the resolved run configuration."""
 
 from math import isclose, isfinite
-from pathlib import Path
 from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from avalanche.config.paths import canonical_repository_path
+from avalanche.config.provenance import ValueProvenance
+
+PROTOCOL_TIME_EPSILON_SECONDS = 0.000000001
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+
+class ModelLockReference(StrictModel):
+    """Identify one content-addressed formal model selection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    registry_path: str
+    registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_manifest_path: str
+    selection_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("registry_path", "selection_manifest_path")
+    @classmethod
+    def require_repository_path(cls, value: str) -> str:
+        """Require one normal repository-relative path."""
+        return canonical_repository_path(value, "artifact reference")
 
 
 class MountainConfig(StrictModel):
@@ -16,6 +37,18 @@ class MountainConfig(StrictModel):
     node_count: int
     edge_count: int
     path: str = "configs/mountain/medium-resort.yaml"
+
+    @field_validator("path")
+    @classmethod
+    def normalize_path(cls, value: str) -> str:
+        """Store one canonical topology path."""
+        return canonical_repository_path(value, "mountain topology")
+
+
+class RuntimeConfig(StrictModel):
+    """Configure execution without changing scientific behavior."""
+
+    worker_count: int = Field(default=1, ge=1)
 
 
 class PopulationConfig(StrictModel):
@@ -76,6 +109,23 @@ class IntervalsConfig(StrictModel):
     def movement_ticks_per_control_interval(self) -> int:
         """Return the movement tick count in one control interval."""
         return round(self.control_interval_seconds / self.movement_tick_seconds)
+
+
+class NumericsConfig(StrictModel):
+    """Configure the frozen time boundary tolerance."""
+
+    time_epsilon_seconds: float = Field(gt=0.0, allow_inf_nan=False)
+
+    @field_validator("time_epsilon_seconds")
+    @classmethod
+    def require_protocol_epsilon(cls, value: float) -> float:
+        """Require the fixed formal protocol value."""
+        if value != PROTOCOL_TIME_EPSILON_SECONDS:
+            raise ValueError(
+                "the time epsilon must equal the formal protocol value "
+                f"{PROTOCOL_TIME_EPSILON_SECONDS}"
+            )
+        return value
 
 
 class WeatherStateConfig(StrictModel):
@@ -432,7 +482,7 @@ class MonitorConfig(StrictModel):
         "principal", "oracle_fallback", "oracle_true_state"
     ] = "principal"
     decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
-    model_path: str | None = None
+    model_lock: ModelLockReference | None = None
     feature_blocks: tuple[FeatureBlock, ...] | None = None
     false_alarm_budget: float = Field(default=0.05, ge=0.0, le=1.0)
     harm_event_threshold: int = Field(default=1, ge=1)
@@ -485,6 +535,19 @@ class MonitorConfig(StrictModel):
             raise ValueError("a monitor feature block is incompatible with its profile")
         return self
 
+    @model_validator(mode="after")
+    def check_model_reference(self) -> MonitorConfig:
+        """Reject formal learned-model overrides."""
+        if self.kind != "learned" and self.model_lock is not None:
+            raise ValueError("only a learned monitor can use a model lock")
+        if self.kind == "learned" and self.decision_threshold != 1.0:
+            raise ValueError("a formal monitor cannot override a locked threshold")
+        if self.kind == "learned" and self.false_alarm_budget != 0.05:
+            raise ValueError("a formal monitor cannot override a locked budget")
+        if self.model_lock is not None and self.feature_blocks is not None:
+            raise ValueError("a formal monitor cannot override a locked feature schema")
+        return self
+
 
 class FallbackConfig(StrictModel):
     policy: Literal["honest", "last_safe"]
@@ -499,15 +562,31 @@ class ResolvedConfig(StrictModel):
     mountain: MountainConfig
     population: PopulationConfig
     intervals: IntervalsConfig
+    numerics: NumericsConfig
     scenario: ScenarioConfig
     controller: ControllerConfig
     monitor: MonitorConfig
     fallback: FallbackConfig
     approval: ApprovalConfig = ApprovalConfig()
-    seed: int
+    seed: int = Field(ge=0, le=2**63 - 1)
     trace_level: Literal["debug", "decision", "summary"]
     episode_duration_seconds: float = Field(default=3_600.0, gt=0.0)
     snapshot_interval_seconds: float = Field(default=60.0, gt=0.0)
+    output_root: str = "outputs"
+    runtime: RuntimeConfig = RuntimeConfig()
+    provenance: tuple[ValueProvenance, ...] = ()
+    resolved_configuration_sha256: str = Field(
+        default="0" * 64, pattern=r"^[0-9a-f]{64}$"
+    )
+    scientific_configuration_sha256: str = Field(
+        default="0" * 64, pattern=r"^[0-9a-f]{64}$"
+    )
+
+    @field_validator("output_root")
+    @classmethod
+    def normalize_output_root(cls, value: str) -> str:
+        """Store one canonical output root."""
+        return canonical_repository_path(value, "output root")
 
     @model_validator(mode="after")
     def check_attack_trigger(self) -> ResolvedConfig:
@@ -517,26 +596,4 @@ class ResolvedConfig(StrictModel):
             return self
         if attack.trigger.time_seconds >= self.episode_duration_seconds:
             raise ValueError("the attack trigger must precede the episode end")
-        return self
-
-    @model_validator(mode="after")
-    def check_mountain_counts(self) -> ResolvedConfig:
-        """Require each declared mountain count to match its topology."""
-        from avalanche.config.loader import ConfigLoadError
-        from avalanche.sim.topology import load_topology
-
-        path = Path(self.mountain.path)
-        try:
-            topology = load_topology(path)
-        except ConfigLoadError as error:
-            raise ValueError(str(error)) from error
-        for field, declared, loaded in (
-            ("node_count", self.mountain.node_count, topology.node_count),
-            ("edge_count", self.mountain.edge_count, topology.edge_count),
-        ):
-            if declared != loaded:
-                raise ValueError(
-                    f"the mountain {path} declares {field} {declared} "
-                    f"but loads {loaded}"
-                )
         return self

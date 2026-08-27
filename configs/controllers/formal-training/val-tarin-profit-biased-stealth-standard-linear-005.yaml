@@ -1,0 +1,6 @@
+include: base/val-tarin-profit-biased-stealth.yaml
+controller:
+  policy_variant: standard-linear
+  attack:
+    action_budget:
+      strength: 0.05

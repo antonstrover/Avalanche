@@ -14,7 +14,12 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
+from avalanche.config import (
+    ConfigurationResolver,
+    ModelLockReference,
+    ResolvedConfig,
+    load_yaml,
+)
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
     OBSERVATION_SCHEMA_VERSION,
@@ -26,7 +31,7 @@ from avalanche.experiments.runner import run_episode
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION
-from avalanche.monitors.training import verify_locked_artifacts
+from avalanche.monitors.training import verify_formal_model_reference
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_KINDS
 
 EVALUATION_VERSION = 3
@@ -169,14 +174,45 @@ def evaluation_cells() -> tuple[EvaluationCell, ...]:
 
 def run_evaluation_matrix(
     config: Mapping[str, Any],
-    model_locks: Mapping[str, Path],
+    model_locks: Mapping[str, ModelLockReference],
     output_dir: Path,
     *,
-    workers: int = 1,
     root_seeds: Sequence[int] | None = None,
+    artifact_repo_root: Path = REPO_ROOT,
 ) -> pd.DataFrame:
     """Run every real paired episode in the bounded final matrix."""
-    locks = _verify_model_locks(model_locks)
+    require_formal_evaluation(config)
+    locks = _verify_model_locks(model_locks, repo_root=artifact_repo_root)
+    return _run_available_evaluation_matrix(
+        config,
+        model_locks,
+        output_dir,
+        root_seeds=root_seeds,
+        artifact_repo_root=artifact_repo_root,
+        locks=locks,
+    )
+
+
+def require_formal_evaluation(config: Mapping[str, Any]) -> None:
+    """Reject an incomplete formal evaluation before output creation."""
+    if config.get("formal_status") != "available":
+        raise ValueError(
+            "the final evaluation is unavailable until each learned selection exists"
+        )
+    if not isinstance(config.get("component_selections"), Mapping):
+        raise ValueError("the final evaluation needs formal component selections")
+
+
+def _run_available_evaluation_matrix(
+    config: Mapping[str, Any],
+    model_locks: Mapping[str, ModelLockReference],
+    output_dir: Path,
+    *,
+    root_seeds: Sequence[int] | None,
+    artifact_repo_root: Path,
+    locks: dict[str, Any],
+) -> pd.DataFrame:
+    """Run one available and preflighted formal evaluation matrix."""
     seeds = tuple(int(seed) for seed in (root_seeds or tuple(config["root_seeds"])))
     if not seeds or len(set(seeds)) != len(seeds):
         raise ValueError("the evaluation root seeds must be unique")
@@ -196,6 +232,7 @@ def run_evaluation_matrix(
                     pair_lock,
                     output_dir,
                     revision,
+                    artifact_repo_root,
                 )
                 for role in ("honest", "attack")
             ]
@@ -203,12 +240,16 @@ def run_evaluation_matrix(
             if len(contexts) != 1:
                 raise ValueError("an evaluation pair changes its external context")
             tasks.extend(pair)
+    worker_counts = {task.resolved.runtime.worker_count for task in tasks}
+    if len(worker_counts) != 1:
+        raise ValueError("the evaluation runs have different worker counts")
+    workers = worker_counts.pop()
     if workers <= 1:
         records = [_run_evaluation_episode(task) for task in tasks]
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             records = list(pool.map(_run_evaluation_episode, tasks))
-    if locks != _verify_model_locks(model_locks):
+    if locks != _verify_model_locks(model_locks, repo_root=artifact_repo_root):
         raise ValueError("a locked monitor changed during the evaluation matrix")
     return pd.DataFrame(records)
 
@@ -219,40 +260,32 @@ def _resolve_evaluation_run(
     root_seed: int,
     pair_id: str,
     pair_role: str,
-    model_lock: Path,
+    model_lock: ModelLockReference,
     output_dir: Path,
     code_revision: str,
+    artifact_repo_root: Path = REPO_ROOT,
 ) -> EvaluationRun:
     """Resolve one honest or attack episode from its cell."""
-    paths = [
-        REPO_ROOT / str(config["mountain"]),
-        REPO_ROOT / str(config["scenario"]),
-        REPO_ROOT / str(config["honest_controller"]),
-    ]
-    if pair_role == "attack":
-        paths.append(
-            REPO_ROOT
-            / str(config["attack_controllers"][cell.attack_kind][cell.attack_tier])
-        )
-    paths.append(REPO_ROOT / str(config["monitor"]))
-    values = load_and_merge(*paths)
-    profile = PROFILE_BY_NAME[cell.feature_profile]
-    information_profile = _information_profile(profile)
-    values["seed"] = root_seed
-    values["controller"]["policy_variant"] = cell.policy_variant
-    values["scenario"]["operational_events"]["kind_filter"] = cell.event_kind
-    values["monitor"].update(
-        {
-            "kind": "learned",
-            "information_profile": information_profile.value,
-            "model_path": str(model_lock.parent / "model.pt"),
-            "feature_blocks": list(profile.blocks),
-        }
+    selection = _formal_cell_selection(config, cell, root_seed, pair_role)
+    resolver = ConfigurationResolver(artifact_root=artifact_repo_root)
+    resolved = resolver.resolve(
+        str(selection["mountain"]),
+        str(selection["scenario"]),
+        str(selection["controller"]),
+        str(selection["monitor"]),
+        str(selection["override"]),
     )
-    resolved = ResolvedConfig.model_validate(values)
+    _require_explicit_runtime(resolved)
+    _validate_formal_cell(resolved, cell, root_seed, pair_role, model_lock)
     context = resolved.model_dump(mode="json")
-    context.pop("controller")
-    context.pop("monitor")
+    for field in (
+        "controller",
+        "monitor",
+        "provenance",
+        "resolved_configuration_sha256",
+        "scientific_configuration_sha256",
+    ):
+        context.pop(field)
     context_checksum = _json_checksum(context)
     run_dir = (
         output_dir / "runs" / f"cell-{cell.index:02d}" / str(root_seed) / pair_role
@@ -266,8 +299,71 @@ def _resolve_evaluation_run(
         output_dir=run_dir,
         code_revision=code_revision,
         pair_context_checksum=context_checksum,
-        model_lock_checksum=_checksum(model_lock),
+        model_lock_checksum=model_lock.selection_manifest_sha256,
     )
+
+
+def _formal_cell_selection(
+    config: Mapping[str, Any],
+    cell: EvaluationCell,
+    root_seed: int,
+    pair_role: str,
+) -> Mapping[str, Any]:
+    """Return one explicit formal selection from the evaluation manifest."""
+    try:
+        cell_selection = config["component_selections"][str(cell.index)]
+        role_selection = cell_selection[pair_role]
+        override = cell_selection["overrides"][str(root_seed)]
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            "the final evaluation component selection is incomplete"
+        ) from error
+    selection = {**role_selection, "override": override}
+    required = {"mountain", "scenario", "controller", "monitor", "override"}
+    if set(selection) != required:
+        raise ValueError("the final evaluation component selection has unknown fields")
+    return selection
+
+
+def _require_explicit_runtime(resolved: ResolvedConfig) -> None:
+    """Require the formal override to select the worker count."""
+    if not any(
+        record.pointer == "/runtime/worker_count"
+        and record.kind == "explicit"
+        and record.owner == "override"
+        for record in resolved.provenance
+    ):
+        raise ValueError("the final evaluation override must select a worker count")
+
+
+def _validate_formal_cell(
+    resolved: ResolvedConfig,
+    cell: EvaluationCell,
+    root_seed: int,
+    pair_role: str,
+    model_lock: ModelLockReference,
+) -> None:
+    """Require the selected components to match the declared evaluation cell."""
+    if resolved.seed != root_seed:
+        raise ValueError("the final evaluation override has the wrong root seed")
+    if resolved.controller.policy_variant != cell.policy_variant:
+        raise ValueError("the final evaluation controller has the wrong policy variant")
+    if resolved.scenario.operational_events.kind_filter != cell.event_kind:
+        raise ValueError("the final evaluation scenario has the wrong event kind")
+    attack = resolved.controller.attack
+    if pair_role == "honest" and attack is not None:
+        raise ValueError("the honest evaluation component contains an attack")
+    if pair_role == "attack" and (
+        attack is None
+        or attack.kind != cell.attack_kind
+        or attack.tier != cell.attack_tier
+    ):
+        raise ValueError("the attack evaluation component has the wrong attack")
+    if resolved.monitor.model_lock != model_lock:
+        raise ValueError("the evaluation monitor has the wrong model selection")
+    expected_profile = _information_profile(PROFILE_BY_NAME[cell.feature_profile])
+    if resolved.monitor.information_profile != expected_profile.value:
+        raise ValueError("the evaluation monitor has the wrong information profile")
 
 
 def _run_evaluation_episode(task: EvaluationRun) -> dict[str, Any]:
@@ -463,23 +559,30 @@ def _information_profile(profile: FeatureProfile) -> InformationProfile:
     return InformationProfile.PRINCIPAL
 
 
-def _model_lock_for(profile_name: str, model_locks: Mapping[str, Path]) -> Path:
+def _model_lock_for(
+    profile_name: str,
+    model_locks: Mapping[str, ModelLockReference],
+) -> ModelLockReference:
     """Return the locked model used by one feature profile."""
     key = profile_name if PROFILE_BY_NAME[profile_name].oracle_result else "principal"
     if key not in model_locks:
         raise ValueError(f"the evaluation misses the {key!r} model lock")
-    return Path(model_locks[key])
+    return model_locks[key]
 
 
-def _verify_model_locks(model_locks: Mapping[str, Path]) -> dict[str, Any]:
+def _verify_model_locks(
+    model_locks: Mapping[str, ModelLockReference],
+    *,
+    repo_root: Path = REPO_ROOT,
+) -> dict[str, Any]:
     """Verify every required model lock and return stable records."""
     required = {"principal", "oracle-fallback", "oracle-true-state"}
     if set(model_locks) != required:
         raise ValueError("the evaluation needs three declared model locks")
     result = {}
     for name in sorted(model_locks):
-        lock_path = Path(model_locks[name])
-        lock = verify_locked_artifacts(lock_path)
+        verified = verify_formal_model_reference(model_locks[name], repo_root=repo_root)
+        lock = verified.lock.model_dump(mode="json")
         expected = name.replace("-", "_") if name != "principal" else "principal"
         if lock.get("information_profile") != expected:
             raise ValueError("an evaluation model lock has the wrong profile")
@@ -595,21 +698,22 @@ def evaluate_final_records(
 def write_final_evaluation(
     records: pd.DataFrame,
     output_dir: Path,
-    model_locks: Mapping[str, Path],
+    model_locks: Mapping[str, ModelLockReference],
     *,
     required_root_seeds: int = REQUIRED_ROOT_SEEDS,
     bootstrap_resamples: int = BOOTSTRAP_RESAMPLES,
     require_complete_coverage: bool = True,
+    artifact_repo_root: Path = REPO_ROOT,
 ) -> dict[str, Any]:
     """Write one immutable checksummed final result set."""
-    before = _verify_model_locks(model_locks)
+    before = _verify_model_locks(model_locks, repo_root=artifact_repo_root)
     result = evaluate_final_records(
         records,
         required_root_seeds=required_root_seeds,
         bootstrap_resamples=bootstrap_resamples,
         require_complete_coverage=require_complete_coverage,
     )
-    after = _verify_model_locks(model_locks)
+    after = _verify_model_locks(model_locks, repo_root=artifact_repo_root)
     if before != after:
         raise ValueError("the locked monitor changed during final evaluation")
     ordered = records.sort_values(
@@ -640,7 +744,7 @@ def write_final_evaluation(
         "locked_models": {
             name: {
                 "lock": before[name],
-                "lock_sha256": _checksum(Path(model_locks[name])),
+                "lock_sha256": model_locks[name].selection_manifest_sha256,
             }
             for name in sorted(before)
         },

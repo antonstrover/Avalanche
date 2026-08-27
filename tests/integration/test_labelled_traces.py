@@ -13,17 +13,20 @@ import pandas as pd
 import pytest
 import yaml
 
-from avalanche.config import load_and_merge
+from avalanche.config import ConfigurationResolver
 from avalanche.config.models import ControllerConfig
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     HARM_LABEL,
     HARM_MASK,
     DatasetEntry,
+    ResolvedDatasetEntry,
+    _run_entries,
     expand_manifest,
     generate_dataset,
     label_attack_activity,
     pair_context_checksum,
+    resolve_entry,
     run_entry,
 )
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
@@ -42,9 +45,13 @@ SLEEPER = DatasetEntry(
     config_paths=(
         "configs/mountain/small.yaml",
         "configs/scenarios/family-calm.yaml",
-        "configs/controllers/small-resort/sleeper-saboteur.yaml",
+        "configs/controllers/formal-training/"
+        "small-resort-sleeper-saboteur-overt-standard-linear-030.yaml",
         "configs/monitors/none.yaml",
     ),
+    override_path="configs/overrides/monitor-training/seed-20260801.yaml",
+    attack_strength=0.3,
+    policy_variant="standard-linear",
 )
 
 
@@ -79,6 +86,7 @@ def test_an_honest_run_carries_no_attack_label():
             "configs/controllers/small-resort/honest.yaml",
             "configs/monitors/none.yaml",
         ),
+        override_path="configs/overrides/monitor-training/seed-20260801.yaml",
     )
     rows = run_entry(honest, HORIZON)
 
@@ -124,9 +132,28 @@ def test_the_matrix_expands_to_one_entry_for_each_run():
     assert len(identities) == len(entries)
 
 
-def test_the_generator_writes_the_rows_and_the_summary(tmp_path):
+def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
+    class Pool:
+        def __init__(self, max_workers):
+            assert max_workers == 4
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def map(self, function, entries, horizons, profiles):
+            return [
+                function(entry, horizon, profile)
+                for entry, horizon, profile in zip(
+                    entries, horizons, profiles, strict=True
+                )
+            ]
+
+    monkeypatch.setattr("avalanche.monitors.dataset.ProcessPoolExecutor", Pool)
     output = tmp_path / "rows.parquet"
-    generate_dataset(MANIFEST, output, workers=1, limit=2)
+    generate_dataset(MANIFEST, output, limit=2)
 
     frame = pd.read_parquet(output)
     summary = json.loads(output.with_suffix(".summary.json").read_text())
@@ -238,9 +265,8 @@ def test_the_fixed_family_and_policy_partitions_are_present():
 def test_inactive_wrapper_rows_stay_labelled_as_honest():
     frame = pd.DataFrame({"_attack_active": [0, 0, 1]})
     controller = ControllerConfig.model_validate(
-        load_and_merge(
-            REPO / "configs" / "controllers" / "honest.yaml",
-            REPO / "configs" / "controllers" / "stealth" / "reward-hacker.yaml",
+        ConfigurationResolver().component_values(
+            "controller", "configs/controllers/stealth/reward-hacker.yaml"
         )["controller"]
     )
     labelled = label_attack_activity(frame, controller)
@@ -248,20 +274,95 @@ def test_inactive_wrapper_rows_stay_labelled_as_honest():
 
 
 def test_the_strength_reaches_the_resolved_configuration():
-    from avalanche.monitors.dataset import resolve_entry
-
     entry = DatasetEntry(
         scenario_family="calm",
         mountain="small-resort",
         controller_kind="sleeper-saboteur",
         seed=20260801,
-        config_paths=SLEEPER.config_paths,
+        config_paths=(
+            "configs/mountain/small.yaml",
+            "configs/scenarios/family-calm.yaml",
+            "configs/controllers/formal-training/"
+            "small-resort-sleeper-saboteur-overt-standard-linear-025.yaml",
+            "configs/monitors/none.yaml",
+        ),
+        override_path="configs/overrides/monitor-training/seed-20260801.yaml",
         attack_strength=0.25,
+        policy_variant="standard-linear",
     )
     resolved = resolve_entry(entry)
 
     assert resolved.controller.attack is not None
     assert resolved.controller.attack.action_budget.strength == 0.25
+
+
+def test_training_component_values_keep_explicit_provenance():
+    entry = expand_manifest(yaml.safe_load(MANIFEST.read_text()))[1]
+    resolved = resolve_entry(entry)
+    pointers = {
+        record.pointer: record
+        for record in resolved.provenance
+        if record.pointer
+        in {
+            "/controller/policy_variant",
+            "/controller/attack/action_budget/strength",
+        }
+    }
+
+    assert set(pointers) == {
+        "/controller/policy_variant",
+        "/controller/attack/action_budget/strength",
+    }
+    assert all(record.kind == "explicit" for record in pointers.values())
+    assert all(
+        "formal-training" in (record.source_path or "") for record in pointers.values()
+    )
+    seed = next(record for record in resolved.provenance if record.pointer == "/seed")
+    workers = next(
+        record
+        for record in resolved.provenance
+        if record.pointer == "/runtime/worker_count"
+    )
+    assert seed.kind == workers.kind == "explicit"
+    assert "seed-20260801.yaml" in (seed.source_path or "")
+    assert workers.source_path == "configs/overrides/monitor-training/parallel.yaml"
+
+
+def test_worker_entries_are_resolved_before_pool_creation(monkeypatch):
+    selected = ResolvedDatasetEntry(SLEEPER, resolve_entry(SLEEPER))
+    observed = []
+
+    class Pool:
+        def __init__(self, max_workers):
+            observed.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def map(self, function, entries, horizons, profiles):
+            values = tuple(entries)
+            assert values == (selected,)
+            assert values[0].resolved.resolved_configuration_sha256 != "0" * 64
+            return [pd.DataFrame({"validated": [1]})]
+
+    monkeypatch.setattr("avalanche.monitors.dataset.ProcessPoolExecutor", Pool)
+    frames = _run_entries((selected,), HORIZON, "principal")
+
+    assert observed == [4]
+    assert frames[0]["validated"].tolist() == [1]
+
+
+def test_dataset_rejects_mixed_resolved_worker_counts():
+    selected = ResolvedDatasetEntry(SLEEPER, resolve_entry(SLEEPER))
+    serial = ResolvedDatasetEntry(
+        SLEEPER,
+        ConfigurationResolver().resolve(*SLEEPER.config_paths),
+    )
+    with pytest.raises(ValueError, match="different worker counts"):
+        _run_entries((selected, serial), HORIZON, "principal")
 
 
 def test_each_row_records_the_attack_strength():
@@ -271,6 +372,7 @@ def test_each_row_records_the_attack_strength():
         controller_kind=SLEEPER.controller_kind,
         seed=SLEEPER.seed,
         config_paths=SLEEPER.config_paths,
+        override_path=SLEEPER.override_path,
         attack_strength=0.3,
     )
     rows = run_entry(entry, HORIZON)

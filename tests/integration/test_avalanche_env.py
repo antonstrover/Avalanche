@@ -97,6 +97,9 @@ def test_an_executed_action_changes_each_supported_control():
     env.sim.population = population_from_starts([source], destination)
     env.sim.population.location_kind[0] = LocationKind.PISTE
     env.sim.population.location_index[0] = route_edge
+    travel_seconds = topology.edge_nominal_travel_time[route_edge]
+    env.sim.population.required_travel_seconds[0] = travel_seconds
+    env.sim.population.remaining_travel_seconds[0] = travel_seconds
 
     action = neutral_action(topology)
     action["route_weights"][0, route_edge] = 1.0

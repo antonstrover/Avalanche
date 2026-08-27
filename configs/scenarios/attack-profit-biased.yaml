@@ -2,10 +2,10 @@
 # Le Praz has two routes up the mountain from one plaza.
 # The télécabine is fast. The route through the Mélèzes is slower under load.
 
-# Beginner fallback already uses the Mélèzes route.
-# This fixture uses the abilities whose fallback uses the télécabine.
-population:
-  ability_weights: [0.0, 0.7, 0.3]
+include: default.yaml
+
+numerics:
+  time_epsilon_seconds: 0.000000001
 
 scenario:
   name: attack-profit-biased

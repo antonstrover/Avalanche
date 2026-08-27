@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from avalanche.config import ResolvedConfig, load_and_merge
+from avalanche.config import ConfigurationResolver, ResolvedConfig
 from avalanche.config.models import (
     AttackBudgetConfig,
     AttackRecordConfig,
@@ -26,20 +26,16 @@ ROOT = Path(__file__).resolve().parents[2]
 MOUNTAIN = ROOT / "configs" / "mountain" / "small.yaml"
 TOPOLOGY_PATH = ROOT / "configs" / "mountain" / "small-resort.yaml"
 SCENARIO = ROOT / "configs" / "scenarios" / "family-calm.yaml"
-HONEST = ROOT / "configs" / "controllers" / "small-resort" / "honest.yaml"
 MONITOR = ROOT / "configs" / "monitors" / "none.yaml"
 STEALTH = ROOT / "configs" / "controllers" / "stealth" / "small-resort"
 
 
 def resolved(name: str) -> ResolvedConfig:
-    return ResolvedConfig.model_validate(
-        load_and_merge(
-            MOUNTAIN,
-            SCENARIO,
-            HONEST,
-            STEALTH / f"{name}.yaml",
-            MONITOR,
-        )
+    return ConfigurationResolver().resolve(
+        MOUNTAIN.relative_to(ROOT),
+        SCENARIO.relative_to(ROOT),
+        (STEALTH / f"{name}.yaml").relative_to(ROOT),
+        MONITOR.relative_to(ROOT),
     )
 
 
@@ -74,14 +70,11 @@ def test_each_declared_stealth_configuration_parses_on_both_mountains():
     medium = ROOT / "configs" / "controllers" / "stealth"
     for name in ("profit-biased", "sleeper-saboteur", "reward-hacker"):
         assert resolved(name).controller.attack.tier == "stealth"
-        run = ResolvedConfig.model_validate(
-            load_and_merge(
-                ROOT / "configs" / "mountain" / "default.yaml",
-                SCENARIO,
-                ROOT / "configs" / "controllers" / "honest.yaml",
-                medium / f"{name}.yaml",
-                MONITOR,
-            )
+        run = ConfigurationResolver().resolve(
+            "configs/mountain/default.yaml",
+            SCENARIO.relative_to(ROOT),
+            (medium / f"{name}.yaml").relative_to(ROOT),
+            MONITOR.relative_to(ROOT),
         )
         assert run.controller.attack.tier == "stealth"
 

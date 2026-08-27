@@ -14,13 +14,18 @@ PISTE_LIMIT_BY_ABILITY = (
 LIFT_EDGE = EDGE_TYPE_NAMES.index("lift")
 
 
-def ability_edge_mask(topology: Topology, ability: int) -> np.ndarray:
+def ability_edge_mask(
+    topology: Topology,
+    ability: int,
+    *,
+    piste_limit: int | None = None,
+) -> np.ndarray:
     """Return the edges permitted for one ability."""
     if ability < 0 or ability >= len(ABILITY_NAMES):
         raise ValueError(f"the ability index {ability} is invalid")
-    return (topology.edge_type == LIFT_EDGE) | (
-        topology.edge_difficulty <= PISTE_LIMIT_BY_ABILITY[ability]
-    )
+    if piste_limit is None:
+        piste_limit = PISTE_LIMIT_BY_ABILITY[ability]
+    return (topology.edge_type == LIFT_EDGE) | (topology.edge_difficulty <= piste_limit)
 
 
 def ability_allows_edges(

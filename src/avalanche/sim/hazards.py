@@ -5,8 +5,9 @@ from typing import Literal
 
 import numpy as np
 
-from avalanche.config.models import HazardConfig
+from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS, HazardConfig
 from avalanche.sim.movement import DynamicState
+from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import Topology
 
 type HazardEventType = Literal["early_indicator", "true_harm"]
@@ -34,6 +35,7 @@ def update_hazards(
     config: HazardConfig,
     tick_seconds: float,
     simulation_time: float,
+    epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
 ) -> tuple[HazardEvent, ...]:
     """Accumulate dangerous density and return each new material event.
 
@@ -69,8 +71,10 @@ def update_hazards(
     )
     state.dangerous_density_seconds += dangerous.astype(np.float64) * tick_seconds
     state.early_indicator = warning
-    state.harm_active = dangerous & (
-        state.dangerous_duration >= config.minimum_duration_seconds
+    state.harm_active = dangerous & time_boundary_reached(
+        state.dangerous_duration,
+        config.minimum_duration_seconds,
+        epsilon_seconds,
     )
 
     new_indicators = state.early_indicator & ~previous_indicator
