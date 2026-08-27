@@ -1,13 +1,50 @@
 """Check the shared numerical time boundary."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS, NumericsConfig
+from avalanche.sim import LocationKind, arrive_at_nodes, load_topology
+from avalanche.sim.population import population_from_starts
 from avalanche.sim.time import time_boundary_reached
 
 EPSILON = PROTOCOL_TIME_EPSILON_SECONDS
+FIXTURE = (
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+)
+
+
+@pytest.mark.parametrize(
+    ("remaining_seconds", "completed"),
+    (
+        (0.5 * EPSILON, True),
+        (EPSILON, True),
+        (2.0 * EPSILON, False),
+    ),
+)
+def test_remaining_work_uses_the_epsilon_boundary(
+    remaining_seconds: float, completed: bool
+):
+    """Complete remaining work below and at the frozen epsilon."""
+    topology = load_topology(FIXTURE)
+    edge = 0
+    population = population_from_starts(
+        [int(topology.edge_source[edge])],
+        int(topology.edge_destination[edge]),
+    )
+    population.location_kind[0] = LocationKind.PISTE
+    population.location_index[0] = edge
+    population.required_travel_seconds[0] = 120.0
+    population.remaining_travel_seconds[0] = remaining_seconds
+
+    transitions = arrive_at_nodes(population, topology)
+
+    assert bool(transitions.completed_skiers.size) is completed
+    expected_kind = LocationKind.NODE if completed else LocationKind.PISTE
+    assert population.location_kind[0] == expected_kind
 
 
 @pytest.mark.parametrize(

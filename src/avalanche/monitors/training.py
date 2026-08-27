@@ -39,7 +39,7 @@ from avalanche.monitors.perceptron import (
 )
 from avalanche.monitors.shortcut_audit import require_approved_shortcut_report
 
-LOCK_VERSION = 2
+LOCK_VERSION: Literal[2] = 2
 REGISTRY_VERSION = 2
 SELECTION_VERSION = 1
 FALSE_ALARM_BUDGET = 0.05

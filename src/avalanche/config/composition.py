@@ -31,6 +31,9 @@ from avalanche.config.paths import canonical_repository_path
 from avalanche.config.provenance import ValueProvenance
 
 Owner = Literal["mountain", "scenario", "controller", "monitor", "override"]
+ProvenanceOwner = Literal[
+    "mountain", "scenario", "controller", "monitor", "override", "resolver"
+]
 
 
 class _Envelope(BaseModel):
@@ -93,7 +96,7 @@ class OverrideComponent(_Envelope):
     runtime: RuntimeOverride | None = None
 
 
-_ENVELOPES = {
+_ENVELOPES: dict[Owner, type[_Envelope]] = {
     "mountain": MountainComponent,
     "scenario": ScenarioComponent,
     "controller": ControllerComponent,
@@ -256,7 +259,7 @@ def _leaf_pointers(value: Any, parts: tuple[str, ...] = ()) -> tuple[str, ...]:
     return (_pointer(parts),)
 
 
-def _owner_for_pointer(pointer: str) -> str:
+def _owner_for_pointer(pointer: str) -> ProvenanceOwner:
     head = pointer.split("/", 2)[1]
     if head in {"mountain", "population"}:
         return "mountain"
@@ -563,15 +566,15 @@ class ConfigurationResolver:
             formatted = []
             for item in error.errors(include_url=False):
                 pointer = _pointer(tuple(str(value) for value in item["loc"]))
-                owner = (
+                error_owner = (
                     "live" if pointer in live_values else _owner_for_pointer(pointer)
                 )
-                formatted.append(f"{owner} {pointer}: {item['msg']}")
+                formatted.append(f"{error_owner} {pointer}: {item['msg']}")
             raise ConfigurationResolutionError(formatted) from error
         errors.extend(self._validate_semantics(resolved))
         if errors:
             raise ConfigurationResolutionError(errors)
-        logical = resolved.model_dump(mode="json", exclude=_IDENTITY_FIELDS)
+        logical = resolved.model_dump(mode="json", exclude=set(_IDENTITY_FIELDS))
         records = []
         override_pointers = {
             pointer
@@ -602,12 +605,14 @@ class ConfigurationResolver:
                     )
                 )
                 continue
-            owner = "override" if pointer in override_pointers else location.owner
+            record_owner: Owner = (
+                "override" if pointer in override_pointers else location.owner
+            )
             records.append(
                 ValueProvenance(
                     pointer=pointer,
                     kind="explicit",
-                    owner=owner,
+                    owner=record_owner,
                     source_path=location.source_path,
                     line=location.line,
                     column=location.column,
@@ -898,7 +903,7 @@ def _with_identity(
     resolved: ResolvedConfig, provenance: tuple[ValueProvenance, ...]
 ) -> ResolvedConfig:
     """Add both canonical configuration identities."""
-    logical = resolved.model_dump(mode="json", exclude=_IDENTITY_FIELDS)
+    logical = resolved.model_dump(mode="json", exclude=set(_IDENTITY_FIELDS))
     canonical = json.dumps(
         logical, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()
