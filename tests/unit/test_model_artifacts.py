@@ -312,7 +312,10 @@ def test_formal_reference_rejects_non_repository_paths(field, path):
         "selection_manifest_sha256": "2" * 64,
     }
     values[field] = path
-    with pytest.raises(ValidationError, match="repository-relative|normal"):
+    with pytest.raises(
+        ValidationError,
+        match="repository-relative|normal|traverse",
+    ):
         ModelLockReference.model_validate(values)
 
 

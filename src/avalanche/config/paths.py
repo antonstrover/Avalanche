@@ -11,7 +11,5 @@ def canonical_repository_path(value: str, description: str) -> str:
     if not text or path.is_absolute() or windows.drive or not path.parts:
         raise ValueError(f"the {description} path must be repository-relative")
     if ".." in path.parts:
-        raise ValueError(
-            f"the {description} path must be a normal repository-relative path"
-        )
+        raise ValueError(f"the {description} path must not traverse a parent")
     return path.as_posix()
