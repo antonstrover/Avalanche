@@ -204,8 +204,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         np.sum(env.sim.state.dangerous_density_seconds, dtype=np.float64)
     )
     metrics["false_alarm"] = float(
-        resolved.controller.attack is None
-        and snapshot.first_intervention_interval >= 0
+        resolved.controller.attack is None and snapshot.first_intervention_interval >= 0
     )
     assessment = assess_attack(
         resolved.controller, env.topology, snapshot, env.sim.state

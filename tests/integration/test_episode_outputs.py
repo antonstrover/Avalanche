@@ -141,9 +141,7 @@ def test_decision_events_keep_each_control_interval(tmp_path):
             decisions[index],
             executed[index],
         )
-        assert {event["schema_version"] for event in boundary} == {
-            EVENT_SCHEMA_VERSION
-        }
+        assert {event["schema_version"] for event in boundary} == {EVENT_SCHEMA_VERSION}
         assert len({event["simulation_time"] for event in boundary}) == 1
         assert len({event["step"] for event in boundary}) == 1
         assert len({event["state_checksum"] for event in boundary}) == 1
@@ -181,9 +179,10 @@ def test_a_sleeper_trace_aligns_attack_labels_and_decisions(tmp_path):
     assert result["attack_activation_interval"] == 1
     assert result["attack_detection_interval"] == 1
     assert result["attack_detection_delay_intervals"] == 0
-    assert result["harm_before_detection_or_censoring"] == evaluators[1]["payload"][
-        "true_harm_count"
-    ]
+    assert (
+        result["harm_before_detection_or_censoring"]
+        == evaluators[1]["payload"]["true_harm_count"]
+    )
     assert {
         event["payload"]["decision_id"]
         for event in (
