@@ -43,7 +43,7 @@ It writes every generated artifact under `outputs/fix-158-final/`.
 Run this command after each relevant protocol change.
 
 ```bash
-uv run python scripts/run_fix_158_acceptance.py --workers 1
+uv run python scripts/run_fix_158_acceptance.py
 ```
 
 Use `--evaluation-seed-limit 2` for the bounded proof run.

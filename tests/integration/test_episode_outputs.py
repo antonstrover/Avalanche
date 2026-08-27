@@ -5,73 +5,79 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from avalanche.config import ResolvedConfig, load_and_merge
+from avalanche.config import ResolvedConfig
 from avalanche.experiments import run_episode
 from avalanche.experiments.final_evaluation import attack_detection_metrics
 from avalanche.traces import EVENT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION
+from tests.configuration import resolve_test_configuration
 
-CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
-
-def small_config() -> ResolvedConfig:
-    values = load_and_merge(
-        CONFIGS / "mountain" / "default.yaml",
-        CONFIGS / "scenarios" / "default.yaml",
-        CONFIGS / "controllers" / "honest.yaml",
-        CONFIGS / "monitors" / "none.yaml",
+def small_config(root: Path) -> ResolvedConfig:
+    return resolve_test_configuration(
+        root,
+        mountain="configs/mountain/small.yaml",
+        scenario="configs/scenarios/default.yaml",
+        controller="configs/controllers/small-resort/honest.yaml",
+        monitor="configs/monitors/none.yaml",
+        changes={
+            "mountain": {"population": {"arrival_window_seconds": 5.0}},
+            "scenario": {
+                "intervals": {
+                    "movement_tick_seconds": 5.0,
+                    "control_interval_seconds": 5.0,
+                },
+                "snapshot_interval_seconds": 5.0,
+            },
+        },
+        override={
+            "population": {"skier_count": 8},
+            "episode_duration_seconds": 10.0,
+        },
     )
-    values["mountain"] = {
-        "name": "small-resort",
-        "node_count": 10,
-        "edge_count": 12,
-        "path": "configs/mountain/small-resort.yaml",
-    }
-    values["population"] = {
-        "skier_count": 8,
-        "arrival_window_seconds": 5.0,
-    }
-    values["intervals"] = {
-        "movement_tick_seconds": 5.0,
-        "control_interval_seconds": 5.0,
-    }
-    values["controller"]["balanced_lifts"] = None
-    values["controller"]["evacuation_edges"] = []
-    values["episode_duration_seconds"] = 10.0
-    values["snapshot_interval_seconds"] = 5.0
-    return ResolvedConfig.model_validate(values)
 
 
-def sleeper_config() -> ResolvedConfig:
-    values = load_and_merge(
-        CONFIGS / "mountain" / "default.yaml",
-        CONFIGS / "scenarios" / "default.yaml",
-        CONFIGS / "controllers" / "small-resort" / "sleeper-saboteur.yaml",
-        CONFIGS / "monitors" / "rules.yaml",
+def sleeper_config(root: Path) -> ResolvedConfig:
+    return resolve_test_configuration(
+        root,
+        mountain="configs/mountain/small.yaml",
+        scenario="configs/scenarios/default.yaml",
+        controller="configs/controllers/small-resort/sleeper-saboteur.yaml",
+        monitor="configs/monitors/rules.yaml",
+        changes={
+            "mountain": {"population": {"arrival_window_seconds": 5.0}},
+            "scenario": {
+                "intervals": {
+                    "movement_tick_seconds": 5.0,
+                    "control_interval_seconds": 5.0,
+                },
+                "snapshot_interval_seconds": 5.0,
+            },
+            "controller": {
+                "controller": {
+                    "attack": {
+                        "trigger": {"time_seconds": 5.0},
+                        "action_budget": {"ramp_intervals": 1},
+                    }
+                }
+            },
+            "monitor": {
+                "monitor": {
+                    "evacuation_edges": [
+                        "valley_junction->base_exit",
+                        "lift1_base->lift1_top",
+                    ]
+                }
+            },
+        },
+        override={
+            "population": {"skier_count": 8},
+            "episode_duration_seconds": 15.0,
+        },
     )
-    values["mountain"] = {
-        "name": "small-resort",
-        "node_count": 10,
-        "edge_count": 12,
-        "path": "configs/mountain/small-resort.yaml",
-    }
-    values["population"] = {"skier_count": 8, "arrival_window_seconds": 5.0}
-    values["intervals"] = {
-        "movement_tick_seconds": 5.0,
-        "control_interval_seconds": 5.0,
-    }
-    values["controller"]["attack"]["trigger"]["time_seconds"] = 5.0
-    values["controller"]["attack"]["action_budget"]["ramp_intervals"] = 1
-    values["monitor"]["evacuation_edges"] = [
-        "valley_junction->base_exit",
-        "lift1_base->lift1_top",
-    ]
-    values["episode_duration_seconds"] = 15.0
-    values["snapshot_interval_seconds"] = 5.0
-    return ResolvedConfig.model_validate(values)
 
 
 def test_a_full_episode_writes_each_required_file(tmp_path):
-    summary = run_episode(small_config(), tmp_path)
+    summary = run_episode(small_config(tmp_path / ".configuration"), tmp_path)
     required = {
         "events.jsonl",
         "metrics.parquet",
@@ -100,7 +106,7 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
 
 
 def test_decision_events_keep_each_control_interval(tmp_path):
-    run_episode(small_config(), tmp_path)
+    run_episode(small_config(tmp_path / ".configuration"), tmp_path)
     events = [
         json.loads(line)
         for line in (tmp_path / "events.jsonl").read_text().splitlines()
@@ -154,7 +160,7 @@ def test_decision_events_keep_each_control_interval(tmp_path):
 
 
 def test_a_sleeper_trace_aligns_attack_labels_and_decisions(tmp_path):
-    run_episode(sleeper_config(), tmp_path)
+    run_episode(sleeper_config(tmp_path / ".configuration"), tmp_path)
     events = [
         json.loads(line)
         for line in (tmp_path / "events.jsonl").read_text().splitlines()

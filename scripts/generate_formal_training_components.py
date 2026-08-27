@@ -12,6 +12,7 @@ from avalanche.config.run_identity import REPO_ROOT
 
 SOURCE = REPO_ROOT / "configs/experiments/monitor-training.yaml"
 OUTPUT = REPO_ROOT / "configs/controllers/formal-training"
+OVERRIDES = REPO_ROOT / "configs/overrides/monitor-training"
 MANIFEST = REPO_ROOT / "configs/experiments/monitor-training-components.yaml"
 
 
@@ -32,10 +33,16 @@ def generate() -> None:
     variants = tuple(str(value) for value in source["policy_variants"])
     strengths = tuple(float(value) for value in source["attack_strengths"])
     selection: dict[str, Any] = {
-        "component_version": 1,
+        "component_version": 2,
+        "overrides": {},
         "honest": {},
         "attacks": {},
     }
+    _write_yaml(OVERRIDES / "parallel.yaml", {"runtime": {"worker_count": 4}})
+    for seed in source["seeds"]:
+        name = f"seed-{int(seed)}.yaml"
+        _write_yaml(OVERRIDES / name, {"include": "parallel.yaml", "seed": seed})
+        selection["overrides"][str(seed)] = f"configs/overrides/monitor-training/{name}"
     resolver = ConfigurationResolver()
     for mountain in source["mountains"]:
         mountain_id = str(mountain["id"])

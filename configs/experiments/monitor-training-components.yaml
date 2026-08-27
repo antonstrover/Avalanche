@@ -1,4 +1,9 @@
-component_version: 1
+component_version: 2
+overrides:
+  '20260801': configs/overrides/monitor-training/seed-20260801.yaml
+  '20260802': configs/overrides/monitor-training/seed-20260802.yaml
+  '20260803': configs/overrides/monitor-training/seed-20260803.yaml
+  '20260804': configs/overrides/monitor-training/seed-20260804.yaml
 honest:
   val-tarin:
     standard-linear: configs/controllers/formal-training/val-tarin-honest-standard-linear.yaml

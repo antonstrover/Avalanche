@@ -104,6 +104,56 @@ def test_an_override_changes_only_approved_paths():
     )
 
 
+@pytest.mark.parametrize(
+    ("pointer", "values", "expected"),
+    [
+        ("/seed", {"seed": 8}, 8),
+        ("/episode_duration_seconds", {"episode_duration_seconds": 900}, 900.0),
+        ("/population/skier_count", {"population": {"skier_count": 200}}, 200),
+        ("/trace_level", {"trace_level": "summary"}, "summary"),
+        ("/output_root", {"output_root": "alternate-outputs"}, "alternate-outputs"),
+        ("/runtime/worker_count", {"runtime": {"worker_count": 2}}, 2),
+    ],
+)
+def test_each_formal_override_path_is_explicit(tmp_path, pointer, values, expected):
+    _copy_sample(tmp_path)
+    override = tmp_path / "configs/override.yaml"
+    override.write_text(yaml.safe_dump(values, sort_keys=False))
+    resolved = ConfigurationResolver(tmp_path).resolve(
+        **SAMPLE, override="configs/override.yaml"
+    )
+    target = resolved.model_dump(mode="json")
+    for part in pointer.strip("/").split("/"):
+        target = target[part]
+    provenance = next(item for item in resolved.provenance if item.pointer == pointer)
+    assert target == expected
+    assert provenance.kind == "explicit"
+    assert provenance.owner == "override"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"mountain": {}},
+        {"scenario": {}},
+        {"controller": {}},
+        {"monitor": {}},
+        {"fallback": {}},
+        {"approval": {}},
+        {"population": {"ability_weights": [0.3, 0.5, 0.2]}},
+        {"runtime": {"queue_size": 2}},
+    ],
+)
+def test_each_forbidden_override_domain_is_rejected(tmp_path, values):
+    _copy_sample(tmp_path)
+    override = tmp_path / "configs/override.yaml"
+    override.write_text(yaml.safe_dump(values, sort_keys=False))
+    with pytest.raises(ConfigurationResolutionError):
+        ConfigurationResolver(tmp_path).resolve(
+            **SAMPLE, override="configs/override.yaml"
+        )
+
+
 def _copy_sample(root: Path) -> None:
     for source in (*SAMPLE.values(), "configs/mountain/medium-resort.yaml"):
         target = root / source
@@ -174,6 +224,35 @@ def test_working_directory_does_not_change_identity(monkeypatch, tmp_path):
     second = resolver.resolve(**SAMPLE)
     assert first.resolved_configuration_sha256 == second.resolved_configuration_sha256
     assert first.provenance == second.provenance
+
+
+def test_stored_separator_forms_have_one_identity(tmp_path):
+    _copy_sample(tmp_path)
+    resolver = ConfigurationResolver(tmp_path)
+    first = resolver.resolve(**SAMPLE)
+    mountain = load_yaml(tmp_path / SAMPLE["mountain"])
+    mountain["mountain"]["path"] = "configs\\mountain\\medium-resort.yaml"
+    (tmp_path / SAMPLE["mountain"]).write_text(
+        yaml.safe_dump(mountain, sort_keys=False)
+    )
+    second = resolver.resolve(**SAMPLE)
+    assert second.mountain.path == "configs/mountain/medium-resort.yaml"
+    assert first.resolved_configuration_sha256 == second.resolved_configuration_sha256
+
+
+def test_live_resolution_loads_the_topology_once(monkeypatch):
+    from avalanche.sim import topology
+
+    original = topology.load_topology
+    calls = []
+
+    def load_once(path):
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(topology, "load_topology", load_once)
+    ConfigurationResolver().resolve_live(**SAMPLE, seed=9)
+    assert len(calls) == 1
 
 
 def test_an_including_component_replaces_one_owned_value(tmp_path):

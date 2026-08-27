@@ -118,6 +118,7 @@ class DatasetEntry:
     controller_kind: str
     seed: int
     config_paths: tuple[str, ...]
+    override_path: str
     attack_strength: float | None = None
     pair_id: str = ""
     pair_role: str = "unpaired"
@@ -330,14 +331,15 @@ def resolve_entry(entry: DatasetEntry) -> ResolvedConfig:
     if len(entry.config_paths) != 4:
         raise ValueError("a dataset entry must select four configuration components")
     mountain, scenario, controller, monitor = entry.config_paths
-    resolver = ConfigurationResolver()
-    resolved = resolver.resolve_live(
+    resolved = ConfigurationResolver().resolve(
         mountain,
         scenario,
         controller,
         monitor,
-        seed=entry.seed,
+        entry.override_path,
     )
+    if resolved.seed != entry.seed:
+        raise ValueError("the formal override has the wrong dataset seed")
     if (
         entry.policy_variant is not None
         and resolved.controller.policy_variant != entry.policy_variant
@@ -409,6 +411,9 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                             ),
                                             _repo_relative(manifest["monitor"]),
                                         ),
+                                        override_path=_override_component(
+                                            components, int(seed)
+                                        ),
                                         pair_role="honest",
                                         **common,
                                     ),
@@ -425,6 +430,9 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                                 strength,
                                             ),
                                             _repo_relative(manifest["monitor"]),
+                                        ),
+                                        override_path=_override_component(
+                                            components, int(seed)
                                         ),
                                         pair_role="attack",
                                         **common,
@@ -448,9 +456,18 @@ def _component_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     """Load the explicit training component selections."""
     path = _repo_path(str(manifest["component_manifest"]))
     components = load_yaml(path)
-    if components.get("component_version") != 1:
+    if components.get("component_version") != 2:
         raise ValueError("the training component manifest version is incompatible")
     return components
+
+
+def _override_component(components: dict[str, Any], seed: int) -> str:
+    """Return one declared seed and runtime override."""
+    try:
+        path = components["overrides"][str(seed)]
+    except KeyError as error:
+        raise ValueError("the dataset override component is not declared") from error
+    return _repo_relative(str(path))
 
 
 def _honest_component(components: dict[str, Any], mountain: str, variant: str) -> str:
@@ -642,7 +659,6 @@ def generate_dataset(
     manifest_path: Path,
     output_path: Path,
     *,
-    workers: int = 1,
     limit: int | None = None,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> Path:
@@ -653,7 +669,6 @@ def generate_dataset(
         manifest_path,
         output_path,
         entries,
-        workers=workers,
         source_manifest=manifest,
         information_profile=information_profile,
     )
@@ -664,19 +679,44 @@ def generate_dataset_entries(
     output_path: Path,
     entries: Sequence[DatasetEntry],
     *,
-    workers: int = 1,
     source_manifest: dict[str, Any] | None = None,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> Path:
     """Run a declared entry subset and write its dataset artifacts."""
+    selected = resolve_dataset_entries(entries)
+    return generate_resolved_dataset_entries(
+        manifest_path,
+        output_path,
+        selected,
+        source_manifest=source_manifest,
+        information_profile=information_profile,
+    )
+
+
+def resolve_dataset_entries(
+    entries: Sequence[DatasetEntry],
+) -> tuple[ResolvedDatasetEntry, ...]:
+    """Resolve every dataset entry before execution starts."""
+    _validate_pairs(entries)
+    return tuple(ResolvedDatasetEntry(entry, resolve_entry(entry)) for entry in entries)
+
+
+def generate_resolved_dataset_entries(
+    manifest_path: Path,
+    output_path: Path,
+    selected: Sequence[ResolvedDatasetEntry],
+    *,
+    source_manifest: dict[str, Any] | None = None,
+    information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+) -> Path:
+    """Write a dataset from one previously resolved entry set."""
     manifest = source_manifest or load_yaml(manifest_path)
     horizon = int(manifest.get("harm_horizon_intervals", 5))
-    _validate_pairs(entries)
-    selected = tuple(
-        ResolvedDatasetEntry(entry, resolve_entry(entry)) for entry in entries
-    )
+    entries = tuple(value.entry for value in selected)
+    if not selected:
+        raise ValueError("the dataset entry subset must not be empty")
     profile = InformationProfile(information_profile)
-    frames = _run_entries(selected, horizon, workers, profile)
+    frames = _run_entries(selected, horizon, profile)
     if not frames:
         raise ValueError("the dataset entry subset must not be empty")
     frame = pd.concat(frames, ignore_index=True)
@@ -697,10 +737,13 @@ def generate_dataset_entries(
 def _run_entries(
     entries: Sequence[ResolvedDatasetEntry],
     horizon: int,
-    workers: int,
     information_profile: InformationProfile,
 ) -> list[pd.DataFrame]:
     """Run each entry, in one process or in a pool."""
+    worker_counts = {entry.resolved.runtime.worker_count for entry in entries}
+    if len(worker_counts) != 1:
+        raise ValueError("the dataset entries have different worker counts")
+    workers = worker_counts.pop()
     if workers <= 1:
         return [
             _run_resolved_entry(entry, horizon, information_profile)
@@ -849,7 +892,7 @@ def load_dataset_fixture(
     metadata_path = metadata_path or dataset_path.with_suffix(".metadata.json")
     command = (
         "uv run python scripts/generate_monitor_dataset.py "
-        "configs/experiments/monitor-training.yaml --fixture --workers 1 "
+        "configs/experiments/monitor-training.yaml --fixture "
         "--output tests/fixtures/monitor-dataset.parquet"
     )
     try:

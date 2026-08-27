@@ -4,7 +4,13 @@ import pytest
 from pydantic import ValidationError
 
 from avalanche.config import ResolvedConfig, load_and_merge
-from avalanche.config.models import IntervalsConfig, MonitorConfig, PopulationConfig
+from avalanche.config.models import (
+    IntervalsConfig,
+    ModelLockReference,
+    MonitorConfig,
+    MountainConfig,
+    PopulationConfig,
+)
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
@@ -19,6 +25,43 @@ MOUNTAIN_FILES = [
     pytest.param(CONFIGS / "mountain" / "default.yaml", 60, 80, id="medium"),
     pytest.param(CONFIGS / "mountain" / "small.yaml", 10, 12, id="small"),
 ]
+
+
+def test_repository_paths_store_posix_separators():
+    mountain = MountainConfig(
+        name="test",
+        node_count=1,
+        edge_count=1,
+        path="configs\\mountain\\test.yaml",
+    )
+    reference = ModelLockReference(
+        registry_path="artifacts\\registry.json",
+        registry_sha256="1" * 64,
+        selection_manifest_path="artifacts\\selection.json",
+        selection_manifest_sha256="2" * 64,
+    )
+    assert mountain.path == "configs/mountain/test.yaml"
+    assert reference.registry_path == "artifacts/registry.json"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/absolute/path",
+        "C:\\absolute\\path",
+        "C:relative\\path",
+        "\\\\server\\share",
+        "..\\escape",
+    ],
+)
+def test_model_references_reject_non_repository_paths(path):
+    with pytest.raises(ValidationError, match="repository-relative|traverse"):
+        ModelLockReference(
+            registry_path=path,
+            registry_sha256="1" * 64,
+            selection_manifest_path="artifacts/selection.json",
+            selection_manifest_sha256="2" * 64,
+        )
 
 
 @pytest.mark.parametrize(

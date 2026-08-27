@@ -17,11 +17,12 @@ import torch
 
 import avalanche.sim.engine as engine
 from avalanche.config import (
+    ConfigurationResolver,
     ModelLockReference,
     ResolvedConfig,
-    load_and_merge,
     make_run_dir,
 )
+from avalanche.config.models import MonitorConfig
 from avalanche.control import DecisionType
 from avalanche.experiments import run_episode
 from avalanche.monitors.calibration import calibrate
@@ -39,6 +40,7 @@ from avalanche.monitors.perceptron import (
 from avalanche.monitors.splits import split_by_family
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import MountainSim
+from tests.configuration import resolve_test_configuration
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "configs"
@@ -205,23 +207,49 @@ def resolve(
     model_reference: ModelLockReference,
     controller: str,
     scenario: str = "family-calm.yaml",
+    *,
+    monitor: str = "learned.yaml",
 ) -> ResolvedConfig:
     """Resolve one short episode under the learned monitor."""
-    merged = load_and_merge(
-        CONFIGS / "mountain" / "small.yaml",
-        CONFIGS / "scenarios" / scenario,
-        CONFIGS / "controllers" / "small-resort" / controller,
-        CONFIGS / "monitors" / "learned.yaml",
+    root = Path(tempfile.mkdtemp(prefix="learned-monitor-config-"))
+    controller_changes = {}
+    values = ConfigurationResolver().component_values(
+        "controller", f"configs/controllers/small-resort/{controller}"
     )
-    merged["monitor"]["model_lock"] = model_reference.model_dump(mode="json")
-    merged["episode_duration_seconds"] = 900.0
-    merged["snapshot_interval_seconds"] = 900.0
-    merged["population"]["skier_count"] = 200
-    attack = merged["controller"].get("attack")
+    attack = values["controller"].get("attack")
     if attack and attack["trigger"].get("time_seconds") is not None:
-        # The short episode needs an early trigger.
-        attack["trigger"]["time_seconds"] = 300.0
-    return ResolvedConfig.model_validate(merged)
+        controller_changes = {
+            "controller": {"attack": {"trigger": {"time_seconds": 300.0}}}
+        }
+    monitor_changes = {}
+    if monitor == "learned.yaml":
+        monitor_changes = {"monitor": {"model_lock": model_reference.model_dump()}}
+    try:
+        return resolve_test_configuration(
+            root,
+            mountain="configs/mountain/small.yaml",
+            scenario=f"configs/scenarios/{scenario}",
+            controller=f"configs/controllers/small-resort/{controller}",
+            monitor=f"configs/monitors/{monitor}",
+            changes={
+                "scenario": {
+                    "snapshot_interval_seconds": 900.0,
+                    "scenario": {
+                        "weather": {"sampling": None, "schedule": []},
+                        "failures": {"sampling": None, "schedule": []},
+                        "operational_events": {"enabled": False},
+                    },
+                },
+                "controller": controller_changes,
+                "monitor": monitor_changes,
+            },
+            override={
+                "episode_duration_seconds": 900.0,
+                "population": {"skier_count": 200},
+            },
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _monitor_isolation_pair(
@@ -233,9 +261,12 @@ def _monitor_isolation_pair(
         "reward-hacker.yaml",
         "family-busy-weekend.yaml",
     )
-    unmonitored_values = monitored.model_dump()
-    unmonitored_values["monitor"] = {"kind": "none"}
-    unmonitored = ResolvedConfig.model_validate(unmonitored_values)
+    unmonitored = resolve(
+        model_reference,
+        "reward-hacker.yaml",
+        "family-busy-weekend.yaml",
+        monitor="none.yaml",
+    )
     return monitored, unmonitored
 
 
@@ -353,17 +384,12 @@ def test_a_blocked_proposal_names_the_learned_reason(model_reference, tmp_path):
     )
 
 
-def test_a_formal_ablation_rejects_a_schema_override(
-    ablation_model_reference, tmp_path
-):
+def test_a_formal_ablation_rejects_a_schema_override(ablation_model_reference):
     complete = resolve(ablation_model_reference, "honest.yaml")
-    complete = ResolvedConfig.model_validate(
-        {**complete.model_dump(), "episode_duration_seconds": 120.0}
-    )
-    ablated_values = complete.model_dump()
-    ablated_values["monitor"]["feature_blocks"] = ["action"]
+    ablated_values = complete.monitor.model_dump()
+    ablated_values["feature_blocks"] = ["action"]
     with pytest.raises(ValueError, match="locked feature schema"):
-        ResolvedConfig.model_validate(ablated_values)
+        MonitorConfig.model_validate(ablated_values)
 
 
 def test_a_learned_run_records_latency_as_performance(model_reference, tmp_path):
@@ -401,8 +427,14 @@ def test_a_monitor_change_keeps_each_external_input_and_can_change_an_outcome(
     monitored, unmonitored = _monitor_isolation_pair(model_reference)
     monitored_context = monitored.model_dump()
     unmonitored_context = unmonitored.model_dump()
-    monitored_context.pop("monitor")
-    unmonitored_context.pop("monitor")
+    for field in (
+        "monitor",
+        "provenance",
+        "resolved_configuration_sha256",
+        "scientific_configuration_sha256",
+    ):
+        monitored_context.pop(field)
+        unmonitored_context.pop(field)
     assert monitored_context == unmonitored_context
 
     _assert_same_external_inputs(

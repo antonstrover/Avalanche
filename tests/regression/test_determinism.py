@@ -16,7 +16,6 @@ import torch
 from avalanche.config import (
     ModelLockReference,
     ResolvedConfig,
-    load_and_merge,
     load_yaml,
 )
 from avalanche.config.models import PopulationConfig
@@ -31,6 +30,7 @@ from avalanche.monitors.perceptron import (
 )
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import MountainSim, population_from_starts
+from tests.configuration import resolve_test_configuration
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -40,12 +40,6 @@ TICK_COUNT = 10
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIGS = REPO / "configs"
-CONFIG_FILES = (
-    CONFIGS / "mountain" / "default.yaml",
-    CONFIGS / "scenarios" / "default.yaml",
-    CONFIGS / "controllers" / "honest.yaml",
-    CONFIGS / "monitors" / "none.yaml",
-)
 CONTROL_INTERVAL_SECONDS = 30.0
 EPISODE_DURATION_SECONDS = 300.0
 METRIC_NAMES = {
@@ -190,55 +184,60 @@ def test_two_seeds_give_different_populations():
 
 def resolved_episode_config(seed: int = SEED) -> ResolvedConfig:
     """Return the exact small configuration for the full episode test."""
-    values = load_and_merge(*CONFIG_FILES)
-    values["mountain"] = {
-        "name": "small-resort",
-        "node_count": 10,
-        "edge_count": 12,
-        "path": "configs/mountain/small-resort.yaml",
-    }
-    values["population"] = {
-        "skier_count": 64,
-        "arrival_window_seconds": 120.0,
-        "ability_weights": [0.3, 0.5, 0.2],
-        "compliance_mean": 0.7,
-        "compliance_spread": 0.2,
-    }
-    values["intervals"] = {
-        "movement_tick_seconds": 5.0,
-        "control_interval_seconds": CONTROL_INTERVAL_SECONDS,
-    }
-    values["scenario"] = {
-        "name": "determinism-regression",
-        "weather": {
-            "sampling": {
-                "interval_seconds": 120.0,
-                "transition_count": 2,
-                "wind": {"minimum": 1.0, "maximum": 20.0},
-                "visibility": {"minimum": 300.0, "maximum": 8_000.0},
-                "snowfall": {"minimum": 0.0, "maximum": 8.0},
-                "temperature": {"minimum": -12.0, "maximum": 5.0},
-            }
-        },
-        "hazards": {
-            "critical_density_multiplier": 1.0,
-            "warning_fraction": 0.8,
-            "minimum_duration_seconds": 60.0,
-            "weather_risk_weight": 1.0,
-        },
-        "failures": {
-            "sampling": {
-                "event_count": 4,
-                "earliest_start_seconds": 30.0,
-                "latest_start_seconds": 240.0,
-                "minimum_duration_seconds": 30.0,
-                "maximum_duration_seconds": 60.0,
-                "controller_visibility_probability": 0.5,
-            }
-        },
-    }
-    values["seed"] = seed
-    return ResolvedConfig.model_validate(values)
+    root = Path(tempfile.mkdtemp(prefix="determinism-config-"))
+    try:
+        return resolve_test_configuration(
+            root,
+            mountain="configs/mountain/small.yaml",
+            scenario="configs/scenarios/default.yaml",
+            controller="configs/controllers/small-resort/honest.yaml",
+            monitor="configs/monitors/none.yaml",
+            changes={
+                "mountain": {"population": {"arrival_window_seconds": 120.0}},
+                "scenario": {
+                    "intervals": {
+                        "movement_tick_seconds": 5.0,
+                        "control_interval_seconds": CONTROL_INTERVAL_SECONDS,
+                    },
+                    "scenario": {
+                        "name": "determinism-regression",
+                        "weather": {
+                            "sampling": {
+                                "interval_seconds": 120.0,
+                                "transition_count": 2,
+                                "wind": {"minimum": 1.0, "maximum": 20.0},
+                                "visibility": {"minimum": 300.0, "maximum": 8000.0},
+                                "snowfall": {"minimum": 0.0, "maximum": 8.0},
+                                "temperature": {"minimum": -12.0, "maximum": 5.0},
+                            }
+                        },
+                        "hazards": {
+                            "critical_density_multiplier": 1.0,
+                            "warning_fraction": 0.8,
+                            "minimum_duration_seconds": 60.0,
+                            "weather_risk_weight": 1.0,
+                        },
+                        "failures": {
+                            "sampling": {
+                                "event_count": 4,
+                                "earliest_start_seconds": 30.0,
+                                "latest_start_seconds": 240.0,
+                                "minimum_duration_seconds": 30.0,
+                                "maximum_duration_seconds": 60.0,
+                                "controller_visibility_probability": 0.5,
+                            }
+                        },
+                    },
+                },
+            },
+            override={
+                "seed": seed,
+                "population": {"skier_count": 64},
+                "episode_duration_seconds": EPISODE_DURATION_SECONDS,
+            },
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def run_episode(
@@ -340,18 +339,26 @@ class AttackRun:
     population: tuple[tuple[str, bytes], ...]
 
 
-def attack_config(fixture: dict[str, Any], controller_key: str) -> ResolvedConfig:
+def attack_config(
+    fixture: dict[str, Any], controller_key: str, *, seed: int | None = None
+) -> ResolvedConfig:
     """Return one short resolved configuration of a fixture entry."""
-    values = load_and_merge(
-        REPO / fixture["mountain"],
-        REPO / fixture["scenario"],
-        REPO / fixture[controller_key],
-        REPO / fixture["monitor"],
-    )
-    values["seed"] = fixture["seed"]
-    values["population"]["skier_count"] = ATTACK_SKIER_COUNT
-    values["episode_duration_seconds"] = ATTACK_EPISODE_SECONDS[fixture["id"]]
-    return ResolvedConfig.model_validate(values)
+    root = Path(tempfile.mkdtemp(prefix="attack-config-"))
+    try:
+        return resolve_test_configuration(
+            root,
+            mountain=fixture["mountain"],
+            scenario=fixture["scenario"],
+            controller=fixture[controller_key],
+            monitor=fixture["monitor"],
+            override={
+                "seed": fixture["seed"] if seed is None else seed,
+                "population": {"skier_count": ATTACK_SKIER_COUNT},
+                "episode_duration_seconds": ATTACK_EPISODE_SECONDS[fixture["id"]],
+            },
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def run_attack_episode(resolved: ResolvedConfig, output_dir: Path) -> AttackRun:
@@ -489,7 +496,7 @@ def test_extra_weather_draws_keep_the_population(attack_fixture):
 
 def test_another_root_seed_changes_one_external_variable(attack_fixture):
     resolved = attack_config(attack_fixture, "controller")
-    other = resolved.model_copy(update={"seed": resolved.seed + 1})
+    other = attack_config(attack_fixture, "controller", seed=resolved.seed + 1)
 
     assert _population_bytes(resolved) != _population_bytes(other)
 
@@ -523,7 +530,7 @@ def _formal_model_reference(
 ) -> tuple[ModelLockReference, tuple[Path, ...]]:
     """Register one temporary formal model for the determinism test."""
     root = Path(tempfile.mkdtemp(prefix="determinism-model-", dir=REPO / "outputs"))
-    attempt_name = root.name
+    attempt_name = root.name.replace("_", "-")
     model_bytes = model_path.read_bytes()
     model_sha256 = hashlib.sha256(model_bytes).hexdigest()
     model_filename = f"{attempt_name}-model.pt"
@@ -617,17 +624,28 @@ def _formal_model_reference(
 
 def _learned_monitor_config(model_lock: ModelLockReference) -> ResolvedConfig:
     """Return one short run with a forced learned intervention."""
-    values = load_and_merge(
-        CONFIGS / "mountain" / "small.yaml",
-        CONFIGS / "scenarios" / "family-calm.yaml",
-        CONFIGS / "controllers" / "small-resort" / "honest.yaml",
-        CONFIGS / "monitors" / "learned.yaml",
-    )
-    values["monitor"]["model_lock"] = model_lock.model_dump(mode="json")
-    values["population"]["skier_count"] = 64
-    values["episode_duration_seconds"] = 120.0
-    values["snapshot_interval_seconds"] = 120.0
-    return ResolvedConfig.model_validate(values)
+    root = Path(tempfile.mkdtemp(prefix="learned-config-"))
+    try:
+        return resolve_test_configuration(
+            root,
+            mountain="configs/mountain/small.yaml",
+            scenario="configs/scenarios/family-calm.yaml",
+            controller="configs/controllers/small-resort/honest.yaml",
+            monitor="configs/monitors/learned.yaml",
+            changes={
+                "scenario": {
+                    "snapshot_interval_seconds": 120.0,
+                    "scenario": {"operational_events": {"enabled": False}},
+                },
+                "monitor": {"monitor": {"model_lock": model_lock.model_dump()}},
+            },
+            override={
+                "population": {"skier_count": 64},
+                "episode_duration_seconds": 120.0,
+            },
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_active_learned_monitor_runs_keep_each_simulated_result(tmp_path):

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from avalanche.config import ModelLockReference
+from avalanche.config import ConfigurationResolver, ModelLockReference
 from avalanche.experiments.final_evaluation import (
     ATTACK_KINDS,
     ATTACK_TIERS,
@@ -17,6 +17,7 @@ from avalanche.experiments.final_evaluation import (
     FEATURE_PROFILES,
     HOLDOUT_SLICES,
     POLICY_VARIANTS,
+    _require_explicit_runtime,
     attack_detection_metrics,
     evaluate_final_records,
     evaluation_cells,
@@ -502,3 +503,31 @@ def test_the_incomplete_learned_matrix_fails_before_output(tmp_path):
         )
 
     assert not output.exists()
+
+
+def test_the_final_evaluation_requires_an_explicit_runtime_override():
+    resolver = ConfigurationResolver()
+    components = (
+        "configs/mountain/default.yaml",
+        "configs/scenarios/family-busy-weekend.yaml",
+        "configs/controllers/honest.yaml",
+        "configs/monitors/none.yaml",
+    )
+    explicit = resolver.resolve(
+        *components,
+        "configs/overrides/monitor-training/seed-20260801.yaml",
+    )
+    implicit = explicit.model_copy(
+        update={
+            "provenance": tuple(
+                record
+                for record in explicit.provenance
+                if record.pointer != "/runtime/worker_count"
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="must select a worker count"):
+        _require_explicit_runtime(implicit)
+
+    _require_explicit_runtime(explicit)

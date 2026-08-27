@@ -1,6 +1,7 @@
 """The avalanche command-line interface."""
 
 import argparse
+import json
 import sys
 
 from avalanche.config import (
@@ -30,10 +31,10 @@ def _report_config_error(error: ConfigurationResolutionError) -> int:
 
 def validate_config(args: argparse.Namespace) -> int:
     try:
-        _resolve_config(args)
+        resolved = _resolve_config(args)
     except ConfigurationResolutionError as error:
         return _report_config_error(error)
-    print("OK")
+    _print_preflight(resolved)
     return 0
 
 
@@ -43,10 +44,27 @@ def simulate(args: argparse.Namespace) -> int:
     except ConfigurationResolutionError as error:
         return _report_config_error(error)
 
+    if args.preflight:
+        _print_preflight(resolved)
+        return 0
+
     run_dir = make_run_dir(resolved)
     run_episode(resolved, run_dir)
     print(f"Wrote the episode to {run_dir}")
     return 0
+
+
+def _print_preflight(resolved: ResolvedConfig) -> None:
+    """Print one stable configuration preflight record."""
+    value = {
+        "provenance": [
+            record.model_dump(mode="json") for record in resolved.provenance
+        ],
+        "resolved_configuration_sha256": resolved.resolved_configuration_sha256,
+        "scientific_configuration_sha256": resolved.scientific_configuration_sha256,
+        "status": "OK",
+    }
+    print(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
 def sweep(args: argparse.Namespace) -> int:
@@ -73,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         "simulate", help="run one resolved simulator episode"
     )
     _add_component_arguments(simulate_parser)
+    simulate_parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="validate and report without running an episode",
+    )
     simulate_parser.set_defaults(func=simulate)
 
     sweep_parser = subparsers.add_parser("sweep", help="run an experiment matrix")

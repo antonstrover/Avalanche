@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import numpy as np
@@ -26,6 +26,7 @@ from avalanche.config.models import (
     ResolvedConfig,
     ScenarioConfig,
 )
+from avalanche.config.paths import canonical_repository_path
 from avalanche.config.provenance import ValueProvenance
 
 Owner = Literal["mountain", "scenario", "controller", "monitor", "override"]
@@ -228,15 +229,8 @@ def _merge(
 
 
 def _logical_path(value: str | Path, description: str) -> PurePosixPath:
-    text = (
-        value.as_posix() if isinstance(value, Path) else str(value).replace("\\", "/")
-    )
-    path = PurePosixPath(text)
-    if path.is_absolute() or PureWindowsPath(text).is_absolute() or not path.parts:
-        raise ValueError(f"the {description} path must be repository-relative")
-    if any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"the {description} path must not traverse a parent")
-    return path
+    text = value.as_posix() if isinstance(value, Path) else str(value)
+    return PurePosixPath(canonical_repository_path(text, description))
 
 
 def _leaf_pointers(value: Any, parts: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -463,49 +457,23 @@ class ConfigurationResolver:
         trace_level: str | None = None,
     ) -> ResolvedConfig:
         """Apply the four scientific live overrides to a formal selection."""
-        base = self.resolve(mountain, scenario, controller, monitor)
-        values = base.model_dump(mode="json", exclude=_IDENTITY_FIELDS)
-        pointers: list[str] = []
-        for pointer, value in (
-            ("/seed", seed),
-            ("/episode_duration_seconds", episode_duration_seconds),
-            ("/population/skier_count", skier_count),
-            ("/trace_level", trace_level),
-        ):
-            if value is None:
-                continue
-            target = values
-            parts = pointer.strip("/").split("/")
-            for part in parts[:-1]:
-                target = target[part]
-            target[parts[-1]] = value
-            pointers.append(pointer)
-        try:
-            resolved = ResolvedConfig.model_validate(values)
-        except ValidationError as error:
-            raise ConfigurationResolutionError(
-                [
-                    f"live {_pointer(tuple(str(value) for value in item['loc']))}: "
-                    f"{item['msg']}"
-                    for item in error.errors(include_url=False)
-                ]
-            ) from error
-        errors = self._validate_semantics(resolved)
-        if errors:
-            raise ConfigurationResolutionError(errors)
-        provenance = tuple(
-            record for record in base.provenance if record.pointer not in pointers
-        ) + tuple(
-            ValueProvenance(
-                pointer=pointer,
-                kind="derived",
-                owner="override",
-                formula_version="validated-live-request-v1",
-                input_paths=(f"/live_request{pointer}",),
+        live_values = {
+            pointer: value
+            for pointer, value in (
+                ("/seed", seed),
+                ("/episode_duration_seconds", episode_duration_seconds),
+                ("/population/skier_count", skier_count),
+                ("/trace_level", trace_level),
             )
-            for pointer in pointers
+            if value is not None
+        }
+        return self._resolve(
+            mountain,
+            scenario,
+            controller,
+            monitor,
+            live_values=live_values,
         )
-        return _with_identity(resolved, provenance)
 
     def resolve(
         self,
@@ -516,6 +484,20 @@ class ConfigurationResolver:
         override: str | Path | None = None,
     ) -> ResolvedConfig:
         """Resolve all sources or return every validation error."""
+        return self._resolve(mountain, scenario, controller, monitor, override)
+
+    def _resolve(
+        self,
+        mountain: str | Path,
+        scenario: str | Path,
+        controller: str | Path,
+        monitor: str | Path,
+        override: str | Path | None = None,
+        *,
+        live_values: Mapping[str, Any] | None = None,
+    ) -> ResolvedConfig:
+        """Resolve one formal or live selection in one validation pass."""
+        live_values = live_values or {}
         selections: list[tuple[Owner, str | Path]] = [
             ("mountain", mountain),
             ("scenario", scenario),
@@ -568,15 +550,22 @@ class ConfigurationResolver:
         values.setdefault("runtime", {"worker_count": 1})
         if errors:
             raise ConfigurationResolutionError(errors)
+        for pointer, value in live_values.items():
+            target = values
+            parts = pointer.strip("/").split("/")
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
         try:
             resolved = ResolvedConfig.model_validate(values)
         except ValidationError as error:
             formatted = []
             for item in error.errors(include_url=False):
                 pointer = _pointer(tuple(str(value) for value in item["loc"]))
-                formatted.append(
-                    f"{_owner_for_pointer(pointer)} {pointer}: {item['msg']}"
+                owner = (
+                    "live" if pointer in live_values else _owner_for_pointer(pointer)
                 )
+                formatted.append(f"{owner} {pointer}: {item['msg']}")
             raise ConfigurationResolutionError(formatted) from error
         errors.extend(self._validate_semantics(resolved))
         if errors:
@@ -590,6 +579,17 @@ class ConfigurationResolver:
             for pointer in source.locations
         }
         for pointer in sorted(_leaf_pointers(logical)):
+            if pointer in live_values:
+                records.append(
+                    ValueProvenance(
+                        pointer=pointer,
+                        kind="derived",
+                        owner="override",
+                        formula_version="validated-live-request-v1",
+                        input_paths=(f"/live_request{pointer}",),
+                    )
+                )
+                continue
             location = locations.get(pointer)
             if location is None:
                 records.append(

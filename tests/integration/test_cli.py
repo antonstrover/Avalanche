@@ -1,8 +1,13 @@
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from avalanche.cli import main
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SAMPLE_ARGS = [
     "--mountain",
@@ -24,6 +29,33 @@ def _run(args: list[str]) -> int:
 
 def test_validate_config_accepts_four_named_components():
     assert _run(["validate-config", *SAMPLE_ARGS]) == 0
+
+
+def test_validate_config_reports_complete_stable_evidence(capsys):
+    assert _run(["validate-config", *SAMPLE_ARGS]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "OK"
+    assert len(report["resolved_configuration_sha256"]) == 64
+    assert len(report["scientific_configuration_sha256"]) == 64
+    assert report["provenance"]
+
+
+@pytest.mark.parametrize("command", ["validate-config", "simulate"])
+def test_cli_preflight_is_working_directory_independent(command):
+    arguments = [command, *SAMPLE_ARGS]
+    if command == "simulate":
+        arguments.append("--preflight")
+    outputs = []
+    for directory in (REPO_ROOT, REPO_ROOT / "dashboard"):
+        result = subprocess.run(
+            [sys.executable, "-m", "avalanche.cli", *arguments],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        outputs.append(json.loads(result.stdout))
+    assert outputs[0] == outputs[1]
 
 
 @pytest.mark.parametrize("command", ["validate-config", "simulate"])
@@ -80,3 +112,11 @@ def test_simulate_passes_one_validated_configuration(tmp_path, monkeypatch):
     assert _run(["simulate", *SAMPLE_ARGS]) == 0
     assert calls[0][0].resolved_configuration_sha256 != "0" * 64
     assert calls[0][1] == run_dir
+
+
+def test_simulate_preflight_creates_no_output(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr("avalanche.cli.make_run_dir", lambda value: calls.append(value))
+    assert _run(["simulate", *SAMPLE_ARGS, "--preflight"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "OK"
+    assert calls == []

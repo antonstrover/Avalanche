@@ -1,5 +1,7 @@
 """Check the final Issue 158 acceptance contracts."""
 
+import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,14 @@ from avalanche.experiments.final_evaluation import (
 REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "configs/experiments/fix-158-acceptance.yaml"
 JUSTIFICATIONS = REPO / "configs/experiments/shortcut-justifications.yaml"
+SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "run_fix_158_acceptance",
+    REPO / "scripts/run_fix_158_acceptance.py",
+)
+assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
+acceptance_script = importlib.util.module_from_spec(SCRIPT_SPEC)
+sys.modules[SCRIPT_SPEC.name] = acceptance_script
+SCRIPT_SPEC.loader.exec_module(acceptance_script)
 
 
 def test_the_acceptance_matrix_selects_complete_declared_pairs():
@@ -104,3 +114,56 @@ def test_the_acceptance_inventory_records_each_required_version():
         "proposal_schema_version": 1,
         "shortcut_report_version": 2,
     }
+
+
+def test_every_acceptance_fixture_resolves_before_execution():
+    config = load_acceptance_config(CONFIG)
+    tasks = acceptance_script._resolve_fixtures(config)
+    assert len(tasks) == 3
+    assert all(task.attack.runtime.worker_count == 4 for task in tasks)
+    assert all(task.honest.runtime.worker_count == 4 for task in tasks)
+
+
+def test_fixture_workers_receive_only_resolved_tasks(monkeypatch, tmp_path):
+    config = load_acceptance_config(CONFIG)
+    tasks = acceptance_script._resolve_fixtures(config)
+    observed = []
+
+    class Pool:
+        def __init__(self, max_workers):
+            observed.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def map(self, function, selected, outputs):
+            values = tuple(selected)
+            assert values == tasks
+            assert all(value.attack.resolved_configuration_sha256 for value in values)
+            return [{"id": value.fixture_id, "passed": True} for value in values]
+
+    monkeypatch.setattr(acceptance_script, "ProcessPoolExecutor", Pool)
+    result = acceptance_script._run_fixtures(config, tasks, tmp_path)
+    assert observed == [4]
+    assert len(result["fixtures"]) == 3
+
+
+def test_invalid_fixture_preflight_creates_no_output(monkeypatch, tmp_path):
+    config = load_acceptance_config(CONFIG)
+    manifest = load_yaml(REPO / config["fixture_manifest"])
+    manifest["fixtures"][0]["scenario"] = "configs/scenarios/missing.yaml"
+    original = acceptance_script.load_yaml
+
+    def load_invalid(path):
+        if path == REPO / config["fixture_manifest"]:
+            return manifest
+        return original(path)
+
+    monkeypatch.setattr(acceptance_script, "load_yaml", load_invalid)
+    output = tmp_path / "acceptance"
+    with pytest.raises(Exception, match="does not exist"):
+        acceptance_script._resolve_fixtures(config)
+    assert not output.exists()

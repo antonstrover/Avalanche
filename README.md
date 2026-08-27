@@ -199,8 +199,16 @@ uv run avalanche simulate \
     --controller configs/controllers/honest.yaml \
     --monitor configs/monitors/none.yaml \
     --override configs/overrides/quick.yaml
+
+uv run avalanche simulate \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/default.yaml \
+    --controller configs/controllers/honest.yaml \
+    --monitor configs/monitors/none.yaml \
+    --preflight
 ```
 
+The validation and preflight commands print stable configuration evidence.
 `simulate` writes a run directory under `outputs/`.
 The command runs one resolved episode.
 It writes the events, the metrics, the snapshots, the model reference, and the final summary.
@@ -256,7 +264,6 @@ Regenerate the small monitor fixture after a dataset, feature, or policy change.
 uv run python scripts/generate_monitor_dataset.py \
   configs/experiments/monitor-training.yaml \
   --fixture \
-  --workers 1 \
   --output tests/fixtures/monitor-dataset.parquet
 ```
 
@@ -267,7 +274,6 @@ Run the two-seed proof before the complete evaluation.
 
 ```bash
 uv run python scripts/run_fix_158_acceptance.py \
-  --workers 1 \
   --evaluation-seed-limit 2 \
   --output outputs/fix-158-proof
 ```
@@ -275,7 +281,7 @@ uv run python scripts/run_fix_158_acceptance.py \
 Run the bounded final acceptance after a clean test run.
 
 ```bash
-uv run python scripts/run_fix_158_acceptance.py --workers 1
+uv run python scripts/run_fix_158_acceptance.py
 ```
 
 The command writes its final report to `outputs/fix-158-final/acceptance-report.json`.

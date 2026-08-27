@@ -27,6 +27,12 @@ The scientific digest excludes the output root and worker count.
 Formal experiment manifests must select concrete component files.
 They must not change a resolved controller, scenario, or monitor.
 Resolve every worker configuration before creating the worker.
+Read each process pool size from `runtime.worker_count`.
+Reject a pool when its resolved worker counts differ.
+
+Both fallback policies support every controller kind.
+The `honest` policy proposes a fresh honest action.
+The `last_safe` policy reuses the last accepted action.
 
 Live requests may set the seed, duration, population size, and trace level.
 They may also set the frame interval and simulation speed.
@@ -35,7 +41,8 @@ Frame timing and simulation speed do not change either configuration digest.
 Use `/api/demo-sessions` for display-only demonstrations.
 The formal `/api/sessions` endpoint rejects every demo behaviour field.
 
-The training component manifest lists every concrete controller selection.
+The training component manifest lists every controller and override selection.
+Each training seed selects one formal override with four workers.
 Regenerate those components after changing a training controller or matrix axis.
 
 Run:

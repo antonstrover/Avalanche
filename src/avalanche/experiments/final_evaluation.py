@@ -177,7 +177,6 @@ def run_evaluation_matrix(
     model_locks: Mapping[str, ModelLockReference],
     output_dir: Path,
     *,
-    workers: int = 1,
     root_seeds: Sequence[int] | None = None,
     artifact_repo_root: Path = REPO_ROOT,
 ) -> pd.DataFrame:
@@ -188,7 +187,6 @@ def run_evaluation_matrix(
         config,
         model_locks,
         output_dir,
-        workers=workers,
         root_seeds=root_seeds,
         artifact_repo_root=artifact_repo_root,
         locks=locks,
@@ -210,7 +208,6 @@ def _run_available_evaluation_matrix(
     model_locks: Mapping[str, ModelLockReference],
     output_dir: Path,
     *,
-    workers: int,
     root_seeds: Sequence[int] | None,
     artifact_repo_root: Path,
     locks: dict[str, Any],
@@ -243,6 +240,10 @@ def _run_available_evaluation_matrix(
             if len(contexts) != 1:
                 raise ValueError("an evaluation pair changes its external context")
             tasks.extend(pair)
+    worker_counts = {task.resolved.runtime.worker_count for task in tasks}
+    if len(worker_counts) != 1:
+        raise ValueError("the evaluation runs have different worker counts")
+    workers = worker_counts.pop()
     if workers <= 1:
         records = [_run_evaluation_episode(task) for task in tasks]
     else:
@@ -274,6 +275,7 @@ def _resolve_evaluation_run(
         str(selection["monitor"]),
         str(selection["override"]),
     )
+    _require_explicit_runtime(resolved)
     _validate_formal_cell(resolved, cell, root_seed, pair_role, model_lock)
     context = resolved.model_dump(mode="json")
     for field in (
@@ -321,6 +323,17 @@ def _formal_cell_selection(
     if set(selection) != required:
         raise ValueError("the final evaluation component selection has unknown fields")
     return selection
+
+
+def _require_explicit_runtime(resolved: ResolvedConfig) -> None:
+    """Require the formal override to select the worker count."""
+    if not any(
+        record.pointer == "/runtime/worker_count"
+        and record.kind == "explicit"
+        and record.owner == "override"
+        for record in resolved.provenance
+    ):
+        raise ValueError("the final evaluation override must select a worker count")
 
 
 def _validate_formal_cell(

@@ -269,7 +269,7 @@ def resolved_config(episode_duration_seconds: float) -> dict:
             "name": "premium-resort",
             "node_count": 5,
             "edge_count": 5,
-            "path": str(FIXTURE),
+            "path": "tests/fixtures/premium-resort.yaml",
         },
         "population": population().model_dump(),
         "intervals": {

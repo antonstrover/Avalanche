@@ -1,11 +1,11 @@
 """Typed models for the resolved run configuration."""
 
 from math import isclose, isfinite
-from pathlib import Path
 from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from avalanche.config.paths import canonical_repository_path
 from avalanche.config.provenance import ValueProvenance
 
 
@@ -27,12 +27,7 @@ class ModelLockReference(StrictModel):
     @classmethod
     def require_repository_path(cls, value: str) -> str:
         """Require one normal repository-relative path."""
-        path = Path(value)
-        if path.is_absolute() or not path.parts or ".." in path.parts:
-            raise ValueError("an artifact reference path must be repository-relative")
-        if any(part in ("", ".") for part in path.parts):
-            raise ValueError("an artifact reference path must be normal")
-        return path.as_posix()
+        return canonical_repository_path(value, "artifact reference")
 
 
 class MountainConfig(StrictModel):
@@ -40,6 +35,12 @@ class MountainConfig(StrictModel):
     node_count: int
     edge_count: int
     path: str = "configs/mountain/medium-resort.yaml"
+
+    @field_validator("path")
+    @classmethod
+    def normalize_path(cls, value: str) -> str:
+        """Store one canonical topology path."""
+        return canonical_repository_path(value, "mountain topology")
 
 
 class RuntimeConfig(StrictModel):
@@ -560,6 +561,12 @@ class ResolvedConfig(StrictModel):
     scientific_configuration_sha256: str = Field(
         default="0" * 64, pattern=r"^[0-9a-f]{64}$"
     )
+
+    @field_validator("output_root")
+    @classmethod
+    def normalize_output_root(cls, value: str) -> str:
+        """Store one canonical output root."""
+        return canonical_repository_path(value, "output root")
 
     @model_validator(mode="after")
     def check_attack_trigger(self) -> ResolvedConfig:
