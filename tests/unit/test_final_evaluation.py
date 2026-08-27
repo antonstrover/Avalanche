@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from avalanche.config import ModelLockReference
 from avalanche.experiments.final_evaluation import (
     ATTACK_KINDS,
     ATTACK_TIERS,
@@ -27,6 +28,8 @@ from avalanche.experiments.final_evaluation import (
     run_evaluation_matrix,
     write_final_evaluation,
 )
+from avalanche.monitors.features import feature_names_for
+from avalanche.monitors.training import AttemptLockV2, gate_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 EVALUATION_CONFIG = ROOT / "configs/experiments/final-evaluation.yaml"
@@ -101,23 +104,95 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
 
 
 def model_lock(tmp_path, name, information_profile):
-    model_dir = tmp_path / name
-    model_dir.mkdir()
-    artifact = model_dir / "model.pt"
-    artifact.write_bytes(b"locked-model")
-    checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    lock = {
-        "lock_version": 1,
-        "model_version": 2,
-        "feature_version": 2,
-        "dataset_version": 4,
-        "information_profile": information_profile,
-        "artifact_checksums": {"model.pt": checksum},
-        "dataset_checksums": {"dataset_sha256": "abc"},
+    model_bytes = b"locked-model"
+    model_sha256 = hashlib.sha256(model_bytes).hexdigest()
+    calibration = {
+        "calibration_version": 2,
+        "temperature": 1.0,
+        "threshold": 0.5,
+        "false_alarm_budget": 0.05,
+        "false_alarm_rate": 0.0,
+        "recall": 1.0,
+        "sleeper_recall": 1.0,
+        "sleeper_recall_gate": 0.8,
     }
-    path = model_dir / "lock.json"
-    path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
-    return path
+    calibration_bytes = (
+        json.dumps(calibration, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    calibration_sha256 = hashlib.sha256(calibration_bytes).hexdigest()
+    model_filename = f"{name}-model.pt"
+    calibration_filename = f"{name}-calibration.json"
+    cache = tmp_path / "outputs/artifact-cache" / model_sha256
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / model_filename).write_bytes(model_bytes)
+    (cache / calibration_filename).write_bytes(calibration_bytes)
+    lock = AttemptLockV2(
+        lock_version=2,
+        attempt_name=f"{name}-attempt",
+        model_kind="perceptron",
+        information_profile=information_profile,
+        feature_names=feature_names_for(information_profile),
+        model_filename=model_filename,
+        model_sha256=model_sha256,
+        calibration_filename=calibration_filename,
+        calibration_sha256=calibration_sha256,
+        dataset_sha256="1" * 64,
+        split_manifest_sha256="2" * 64,
+        feature_schema_sha256="3" * 64,
+        training_configuration_sha256="4" * 64,
+        shortcut_report_sha256="5" * 64,
+        source_code_revision="6" * 40,
+        gate_name="sleeper-recall-at-false-alarm-budget",
+        gate_thresholds={"false_alarm_budget": 0.05, "sleeper_recall": 0.8},
+        gate_passed=True,
+        gate_margins={"false_alarm_budget": 0.05, "sleeper_recall": 0.2},
+        creation_command="uv run pytest tests/unit/test_final_evaluation.py",
+        schema_versions={
+            "calibration": 2,
+            "dataset": 4,
+            "feature": 2,
+            "lock": 2,
+            "model": 2,
+        },
+        release_url="https://github.com/test/test/releases/download/test-v2",
+    )
+    artifact_dir = tmp_path / "artifacts" / name
+    artifact_dir.mkdir(parents=True)
+    lock_bytes = (
+        json.dumps(lock.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    ).encode()
+    (artifact_dir / "lock.json").write_bytes(lock_bytes)
+    lock_relative = f"artifacts/{name}/lock.json"
+    selection = {
+        "selection_version": 1,
+        "profile": information_profile,
+        "role": "selected_pass",
+        "attempt_lock_path": lock_relative,
+        "attempt_lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
+        "gate_sha256": gate_digest(lock),
+        "selection_protocol_sha256": "7" * 64,
+    }
+    selection_bytes = (json.dumps(selection, indent=2, sort_keys=True) + "\n").encode()
+    (artifact_dir / "selection.json").write_bytes(selection_bytes)
+    registry = {
+        "registry_version": 2,
+        "attempts": [
+            {
+                "attempt_name": lock.attempt_name,
+                "artifact_status": "reconstruction_only",
+                "record_path": lock_relative,
+                "record_sha256": selection["attempt_lock_sha256"],
+            }
+        ],
+    }
+    registry_bytes = (json.dumps(registry, indent=2, sort_keys=True) + "\n").encode()
+    (artifact_dir / "registry.json").write_bytes(registry_bytes)
+    return ModelLockReference(
+        registry_path=f"artifacts/{name}/registry.json",
+        registry_sha256=hashlib.sha256(registry_bytes).hexdigest(),
+        selection_manifest_path=f"artifacts/{name}/selection.json",
+        selection_manifest_sha256=hashlib.sha256(selection_bytes).hexdigest(),
+    )
 
 
 def model_locks(tmp_path):
@@ -130,6 +205,17 @@ def model_locks(tmp_path):
             tmp_path, "oracle-true-state-model", "oracle_true_state"
         ),
     }
+
+
+def cached_model_path(tmp_path, reference):
+    selection = json.loads((tmp_path / reference.selection_manifest_path).read_text())
+    lock = json.loads((tmp_path / selection["attempt_lock_path"]).read_text())
+    return (
+        tmp_path
+        / "outputs/artifact-cache"
+        / lock["model_sha256"]
+        / lock["model_filename"]
+    )
 
 
 def test_the_paired_bootstrap_is_deterministic():
@@ -333,8 +419,8 @@ def test_each_final_cell_requires_the_declared_root_seed_count():
 
 def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
     locks = model_locks(tmp_path)
-    lock_path = locks["principal"]
-    before = lock_path.parent.joinpath("model.pt").read_bytes()
+    model_path = cached_model_path(tmp_path, locks["principal"])
+    before = model_path.read_bytes()
     output = tmp_path / "evaluation"
     written = write_final_evaluation(
         final_records(),
@@ -342,8 +428,9 @@ def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
         locks,
         required_root_seeds=2,
         bootstrap_resamples=100,
+        artifact_repo_root=tmp_path,
     )
-    assert lock_path.parent.joinpath("model.pt").read_bytes() == before
+    assert model_path.read_bytes() == before
     assert written["manifest"]["bootstrap_seed"] == BOOTSTRAP_SEED
     assert written["manifest"]["observation_schema_version"] == 2
     assert written["manifest"]["policy_version"] == 3
@@ -366,6 +453,7 @@ def test_an_immutable_result_set_rejects_changed_records(tmp_path):
         locks,
         required_root_seeds=2,
         bootstrap_resamples=20,
+        artifact_repo_root=tmp_path,
     )
     changed = rows.copy()
     changed.loc[0, "harm_count"] = 99.0
@@ -376,6 +464,7 @@ def test_an_immutable_result_set_rejects_changed_records(tmp_path):
             locks,
             required_root_seeds=2,
             bootstrap_resamples=20,
+            artifact_repo_root=tmp_path,
         )
 
 
@@ -467,6 +556,7 @@ def test_the_real_matrix_runs_complete_pairs_without_fixture_rows(
         locks,
         tmp_path / "evaluation",
         root_seeds=config["root_seeds"][:2],
+        artifact_repo_root=tmp_path,
     )
     assert len(records) == 42 * 2 * 2
     assert set(records["record_kind"]) == {"evaluation_episode"}

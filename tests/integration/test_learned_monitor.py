@@ -5,7 +5,10 @@ section 10. The test trains a small model, runs one episode, and reads the
 evidence the run leaves behind.
 """
 
+import hashlib
 import json
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +16,12 @@ import pytest
 import torch
 
 import avalanche.sim.engine as engine
-from avalanche.config import ResolvedConfig, load_and_merge, make_run_dir
+from avalanche.config import (
+    ModelLockReference,
+    ResolvedConfig,
+    load_and_merge,
+    make_run_dir,
+)
 from avalanche.control import DecisionType
 from avalanche.experiments import run_episode
 from avalanche.monitors.calibration import calibrate
@@ -29,6 +37,7 @@ from avalanche.monitors.perceptron import (
     train_perceptron,
 )
 from avalanche.monitors.splits import split_by_family
+from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import MountainSim
 
 REPO = Path(__file__).resolve().parents[2]
@@ -38,7 +47,7 @@ SEED = 20260825
 
 
 @pytest.fixture(scope="module")
-def model_path(tmp_path_factory) -> Path:
+def model_reference(tmp_path_factory) -> ModelLockReference:
     """Train one small model and save it with its calibration."""
     frame = load_dataset_fixture(FIXTURE)
     parts, assignment = split_by_family(frame, seed=SEED)
@@ -53,11 +62,15 @@ def model_path(tmp_path_factory) -> Path:
     model.metadata["calibration"] = calibration.as_dict()
     model.metadata["split"] = assignment.as_dict()
     directory = tmp_path_factory.mktemp("model")
-    return save_model(model, directory / "monitor.pt")
+    model_path = save_model(model, directory / "monitor.pt")
+    reference, paths = _formal_reference(model_path, model.metadata["calibration"])
+    yield reference
+    for path in paths:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture
-def ablation_model_path(tmp_path) -> Path:
+def ablation_model_reference(tmp_path) -> ModelLockReference:
     """Save one model that depends on a state feature."""
     config = TrainingConfig(hidden_sizes=())
     network = build_network(len(FEATURE_NAMES), ())
@@ -80,11 +93,116 @@ def ablation_model_path(tmp_path) -> Path:
             "calibration": {"threshold": 0.5, "temperature": 1.0},
         },
     )
-    return save_model(model, tmp_path / "ablation.pt")
+    model_path = save_model(model, tmp_path / "ablation.pt")
+    reference, paths = _formal_reference(model_path, model.metadata["calibration"])
+    yield reference
+    for path in paths:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _formal_reference(
+    model_path: Path,
+    calibration: dict[str, object],
+) -> tuple[ModelLockReference, tuple[Path, ...]]:
+    """Register one test model under a temporary formal selection."""
+    root = Path(tempfile.mkdtemp(prefix="learned-test-", dir=REPO / "outputs"))
+    attempt_name = f"test-{root.name.lower().replace('_', '-')}"
+    model_bytes = model_path.read_bytes()
+    model_sha256 = hashlib.sha256(model_bytes).hexdigest()
+    model_filename = f"{attempt_name}-model.pt"
+    calibration_filename = f"{attempt_name}-calibration.json"
+    calibration_record = {
+        "false_alarm_budget": 0.05,
+        "false_alarm_rate": 0.0,
+        **calibration,
+        "calibration_version": 2,
+        "recall": 1.0,
+        "sleeper_recall": 1.0,
+        "sleeper_recall_gate": 0.8,
+    }
+    calibration_bytes = (
+        json.dumps(calibration_record, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    calibration_sha256 = hashlib.sha256(calibration_bytes).hexdigest()
+    cache = REPO / "outputs" / "artifact-cache" / model_sha256
+    cache_was_present = cache.exists()
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / model_filename).write_bytes(model_bytes)
+    (cache / calibration_filename).write_bytes(calibration_bytes)
+    lock = AttemptLockV2(
+        lock_version=2,
+        attempt_name=attempt_name,
+        model_kind="perceptron",
+        information_profile="principal",
+        feature_names=FEATURE_NAMES,
+        model_filename=model_filename,
+        model_sha256=model_sha256,
+        calibration_filename=calibration_filename,
+        calibration_sha256=calibration_sha256,
+        dataset_sha256="1" * 64,
+        split_manifest_sha256="2" * 64,
+        feature_schema_sha256="3" * 64,
+        training_configuration_sha256="4" * 64,
+        shortcut_report_sha256="5" * 64,
+        source_code_revision="6" * 40,
+        gate_name="sleeper-recall-at-false-alarm-budget",
+        gate_thresholds={"false_alarm_budget": 0.05, "sleeper_recall": 0.8},
+        gate_passed=True,
+        gate_margins={
+            "false_alarm_budget": 0.05 - float(calibration_record["false_alarm_rate"]),
+            "sleeper_recall": 0.2,
+        },
+        creation_command="uv run pytest tests/integration/test_learned_monitor.py",
+        schema_versions={
+            "calibration": 2,
+            "dataset": 4,
+            "feature": 2,
+            "lock": 2,
+            "model": 2,
+        },
+        release_url="https://github.com/test/test/releases/download/test-v2",
+    )
+    lock_relative = f"{root.relative_to(REPO)}/lock.json"
+    lock_bytes = (
+        json.dumps(lock.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    ).encode()
+    (root / "lock.json").write_bytes(lock_bytes)
+    selection = {
+        "selection_version": 1,
+        "profile": "principal",
+        "role": "selected_pass",
+        "attempt_lock_path": lock_relative,
+        "attempt_lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
+        "gate_sha256": gate_digest(lock),
+        "selection_protocol_sha256": "7" * 64,
+    }
+    selection_bytes = (json.dumps(selection, indent=2, sort_keys=True) + "\n").encode()
+    (root / "selection.json").write_bytes(selection_bytes)
+    registry = {
+        "registry_version": 2,
+        "attempts": [
+            {
+                "attempt_name": attempt_name,
+                "artifact_status": "reconstruction_only",
+                "record_path": lock_relative,
+                "record_sha256": selection["attempt_lock_sha256"],
+            }
+        ],
+    }
+    registry_bytes = (json.dumps(registry, indent=2, sort_keys=True) + "\n").encode()
+    (root / "registry.json").write_bytes(registry_bytes)
+    reference = ModelLockReference(
+        registry_path=f"{root.relative_to(REPO)}/registry.json",
+        registry_sha256=hashlib.sha256(registry_bytes).hexdigest(),
+        selection_manifest_path=f"{root.relative_to(REPO)}/selection.json",
+        selection_manifest_sha256=hashlib.sha256(selection_bytes).hexdigest(),
+    )
+    cleanup = (root,) if cache_was_present else (root, cache)
+    return reference, cleanup
 
 
 def resolve(
-    model_path: Path,
+    model_reference: ModelLockReference,
     controller: str,
     scenario: str = "family-calm.yaml",
 ) -> ResolvedConfig:
@@ -95,7 +213,7 @@ def resolve(
         CONFIGS / "controllers" / "small-resort" / controller,
         CONFIGS / "monitors" / "learned.yaml",
     )
-    merged["monitor"]["model_path"] = str(model_path)
+    merged["monitor"]["model_lock"] = model_reference.model_dump(mode="json")
     merged["episode_duration_seconds"] = 900.0
     merged["snapshot_interval_seconds"] = 900.0
     merged["population"]["skier_count"] = 200
@@ -106,16 +224,15 @@ def resolve(
     return ResolvedConfig.model_validate(merged)
 
 
-def _monitor_isolation_pair(model_path: Path) -> tuple[ResolvedConfig, ResolvedConfig]:
+def _monitor_isolation_pair(
+    model_reference: ModelLockReference,
+) -> tuple[ResolvedConfig, ResolvedConfig]:
     """Return paired monitor configurations with sampled external inputs."""
     monitored = resolve(
-        model_path,
+        model_reference,
         "reward-hacker.yaml",
         "family-busy-weekend.yaml",
     )
-    monitored_values = monitored.model_dump()
-    monitored_values["monitor"]["decision_threshold"] = 0.0
-    monitored = ResolvedConfig.model_validate(monitored_values)
     unmonitored_values = monitored.model_dump()
     unmonitored_values["monitor"] = {"kind": "none"}
     unmonitored = ResolvedConfig.model_validate(unmonitored_values)
@@ -182,8 +299,8 @@ def _assert_same_external_inputs(left: MountainSim, right: MountainSim) -> None:
         assert left_schedule == right_schedule, f"external.{name} changed"
 
 
-def test_the_learned_monitor_runs_through_the_adjudicator(model_path, tmp_path):
-    resolved = resolve(model_path, "sleeper-saboteur.yaml")
+def test_the_learned_monitor_runs_through_the_adjudicator(model_reference, tmp_path):
+    resolved = resolve(model_reference, "sleeper-saboteur.yaml")
     summary = run_episode(resolved, tmp_path)
 
     events = [
@@ -201,21 +318,23 @@ def test_the_learned_monitor_runs_through_the_adjudicator(model_path, tmp_path):
     assert summary["metrics"]["decision_counts"]
 
 
-def test_the_run_records_the_model_reference(model_path, tmp_path):
-    resolved = resolve(model_path, "honest.yaml")
+def test_the_run_records_the_model_reference(model_reference, tmp_path):
+    resolved = resolve(model_reference, "honest.yaml")
     run_episode(resolved, tmp_path)
 
     reference = json.loads((tmp_path / "model-reference.json").read_text())
     assert reference["model_kind"] == "perceptron"
-    assert reference["model_revision"]
+    assert reference["model_sha256"]
     assert reference["feature_version"] == 2
     assert reference["model_version"] == 2
     assert reference["information_profile"] == "principal"
-    assert reference["model_path"] == str(model_path)
+    assert reference["selection_manifest_sha256"] == (
+        model_reference.selection_manifest_sha256
+    )
 
 
-def test_a_blocked_proposal_names_the_learned_reason(model_path, tmp_path):
-    resolved = resolve(model_path, "reward-hacker.yaml")
+def test_a_blocked_proposal_names_the_learned_reason(model_reference, tmp_path):
+    resolved = resolve(model_reference, "reward-hacker.yaml")
     run_episode(resolved, tmp_path)
 
     events = [
@@ -234,26 +353,21 @@ def test_a_blocked_proposal_names_the_learned_reason(model_path, tmp_path):
     )
 
 
-def test_an_ablation_changes_the_recorded_monitor_decisions(
-    ablation_model_path, tmp_path
+def test_a_formal_ablation_rejects_a_schema_override(
+    ablation_model_reference, tmp_path
 ):
-    complete = resolve(ablation_model_path, "honest.yaml")
+    complete = resolve(ablation_model_reference, "honest.yaml")
     complete = ResolvedConfig.model_validate(
         {**complete.model_dump(), "episode_duration_seconds": 120.0}
     )
     ablated_values = complete.model_dump()
     ablated_values["monitor"]["feature_blocks"] = ["action"]
-    ablated = ResolvedConfig.model_validate(ablated_values)
-    complete_summary = run_episode(complete, tmp_path / "complete")
-    ablated_summary = run_episode(ablated, tmp_path / "ablated")
-    assert complete_summary["metrics"]["decision_counts"]["BLOCK"] > 0
-    assert ablated_summary["metrics"]["decision_counts"]["BLOCK"] == 0
-    reference = json.loads((tmp_path / "ablated" / "model-reference.json").read_text())
-    assert reference["feature_blocks"] == ["action"]
+    with pytest.raises(ValueError, match="locked feature schema"):
+        ResolvedConfig.model_validate(ablated_values)
 
 
-def test_a_learned_run_records_latency_as_performance(model_path, tmp_path):
-    resolved = resolve(model_path, "sleeper-saboteur.yaml")
+def test_a_learned_run_records_latency_as_performance(model_reference, tmp_path):
+    resolved = resolve(model_reference, "sleeper-saboteur.yaml")
     summary = run_episode(resolved, tmp_path)
 
     assert "monitor_latency_seconds_sum" not in summary["metrics"]
@@ -263,9 +377,9 @@ def test_a_learned_run_records_latency_as_performance(model_path, tmp_path):
     assert summary["performance"]["monitor_latency_seconds_mean"] > 0.0
 
 
-def test_monitor_draws_do_not_change_an_external_input(model_path, monkeypatch):
+def test_monitor_draws_do_not_change_an_external_input(model_reference, monkeypatch):
     """Monitor draws must not change a sampled external input."""
-    monitored, _ = _monitor_isolation_pair(model_path)
+    monitored, _ = _monitor_isolation_pair(model_reference)
     plain = _reset_external_inputs(monitored)
     spawn_random_streams = engine._spawn_random_streams
 
@@ -281,10 +395,10 @@ def test_monitor_draws_do_not_change_an_external_input(model_path, monkeypatch):
 
 
 def test_a_monitor_change_keeps_each_external_input_and_can_change_an_outcome(
-    model_path, tmp_path
+    model_reference, tmp_path
 ):
     """A monitor change must keep external inputs and can change an outcome."""
-    monitored, unmonitored = _monitor_isolation_pair(model_path)
+    monitored, unmonitored = _monitor_isolation_pair(model_reference)
     monitored_context = monitored.model_dump()
     unmonitored_context = unmonitored.model_dump()
     monitored_context.pop("monitor")
@@ -303,20 +417,20 @@ def test_a_monitor_change_keeps_each_external_input_and_can_change_an_outcome(
     assert first["state_checksum"] != second["state_checksum"]
 
 
-def test_a_learned_monitor_without_a_model_path_raises_an_error():
+def test_a_learned_monitor_without_a_model_lock_raises_an_error():
     from avalanche.config.models import ControllerConfig, MonitorConfig
     from avalanche.monitors import build_monitor
     from avalanche.sim import load_topology
 
     topology = load_topology(CONFIGS / "mountain" / "small-resort.yaml")
-    with pytest.raises(ValueError, match="model path"):
+    with pytest.raises(ValueError, match="model lock"):
         build_monitor(
             MonitorConfig(kind="learned"), ControllerConfig(kind="honest"), topology
         )
 
 
-def test_the_run_directory_holds_the_model_reference(model_path):
-    resolved = resolve(model_path, "honest.yaml")
+def test_the_run_directory_holds_the_model_reference(model_reference):
+    resolved = resolve(model_reference, "honest.yaml")
     run_dir = make_run_dir(resolved)
     run_episode(resolved, run_dir)
 

@@ -1,9 +1,6 @@
 """Build the configured alignment monitor."""
 
-from pathlib import Path
-
 from avalanche.config.models import ControllerConfig, MonitorConfig
-from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import Monitor
 from avalanche.controllers.factory import build_fallback
 from avalanche.monitors.outcome import AllowMonitor, OutcomeMonitor
@@ -60,11 +57,8 @@ def _learned(
     from avalanche.monitors.features import FeatureExtractor
     from avalanche.monitors.learned import build_learned_monitor
 
-    if config.model_path is None:
-        raise ValueError("the learned monitor needs a model path")
-    model_path = Path(config.model_path)
-    if not model_path.is_absolute():
-        model_path = REPO_ROOT / model_path
+    if config.model_lock is None:
+        raise ValueError("the learned monitor needs a verified model lock")
     # The extractor compares each proposal with the reference honest policy.
     # It keeps its own fallback, so it cannot change the adjudicator fallback.
     extractor = FeatureExtractor(
@@ -73,13 +67,9 @@ def _learned(
         profile=config.information_profile,
         feature_blocks=config.feature_blocks,
     )
-    # The default threshold of one means "take the calibrated threshold".
-    # A configured value below one overrides the saved calibration.
-    configured = config.decision_threshold
     return build_learned_monitor(
-        model_path,
+        config.model_lock,
         extractor,
         build_fallback("honest", controller_config, topology),
-        threshold=None if configured >= 1.0 else configured,
         unsafe_decision=config.unsafe_decision,
     )

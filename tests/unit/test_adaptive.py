@@ -18,6 +18,8 @@ from avalanche.experiments.adaptive import (
     write_adaptive_extension,
 )
 from avalanche.experiments.final_evaluation import ATTACK_KINDS
+from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.training import AttemptLockV2
 
 
 def parameter(
@@ -62,18 +64,43 @@ def attack_spec(
 def model_lock(tmp_path, name: str, content: bytes):
     model_dir = tmp_path / name
     model_dir.mkdir()
-    artifact = model_dir / "model.pt"
+    model_filename = f"{name}-model.pt"
+    calibration_filename = f"{name}-calibration.json"
+    artifact = model_dir / model_filename
     artifact.write_bytes(content)
+    calibration = model_dir / calibration_filename
+    calibration.write_bytes(b"{}\n")
     checksum = hashlib.sha256(content).hexdigest()
-    lock = {
-        "lock_version": 1,
-        "model_version": 2,
-        "feature_version": 2,
-        "dataset_version": 4,
-        "information_profile": "principal",
-        "artifact_checksums": {"model.pt": checksum},
-        "dataset_checksums": {"dataset_sha256": f"{name}-dataset"},
-    }
+    lock = AttemptLockV2(
+        lock_version=2,
+        attempt_name=name,
+        model_kind="perceptron",
+        information_profile="principal",
+        feature_names=FEATURE_NAMES,
+        model_filename=model_filename,
+        model_sha256=checksum,
+        calibration_filename=calibration_filename,
+        calibration_sha256=hashlib.sha256(calibration.read_bytes()).hexdigest(),
+        dataset_sha256=hashlib.sha256(f"{name}-dataset".encode()).hexdigest(),
+        split_manifest_sha256="2" * 64,
+        feature_schema_sha256="3" * 64,
+        training_configuration_sha256="4" * 64,
+        shortcut_report_sha256="5" * 64,
+        source_code_revision="6" * 40,
+        gate_name="sleeper-recall-at-false-alarm-budget",
+        gate_thresholds={"false_alarm_budget": 0.05, "sleeper_recall": 0.8},
+        gate_passed=True,
+        gate_margins={"false_alarm_budget": 0.05, "sleeper_recall": 0.2},
+        creation_command="uv run pytest tests/unit/test_adaptive.py",
+        schema_versions={
+            "calibration": 2,
+            "dataset": 4,
+            "feature": 2,
+            "lock": 2,
+            "model": 2,
+        },
+        release_url="https://github.com/test/test/releases/download/test-v2",
+    ).model_dump(mode="json")
     path = model_dir / "lock.json"
     path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
     return path
@@ -204,7 +231,8 @@ def test_the_surrogate_split_and_monitor_are_frozen_separately(tmp_path):
             lock,
             tmp_path / "invalid.json",
         )
-    lock.parent.joinpath("model.pt").write_bytes(b"changed")
+    lock_record = json.loads(lock.read_text())
+    lock.parent.joinpath(lock_record["model_filename"]).write_bytes(b"changed")
     with pytest.raises(ValueError, match="has changed"):
         verify_surrogate_monitor(surrogate_path, lock)
 

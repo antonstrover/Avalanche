@@ -44,7 +44,7 @@ from avalanche.monitors.shortcut_audit import (
     run_shortcut_audit,
 )
 from avalanche.monitors.training import (
-    load_locked_scoring_model,
+    load_local_locked_scoring_model,
     train_locked_monitor,
 )
 
@@ -223,8 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         surrogate_split_path,
     )
     adaptive_specs = _adaptive_specs(train)
-    surrogate_model = load_locked_scoring_model(surrogate_dir / "model.pt")
-    hidden_model = load_locked_scoring_model(hidden_dir / "model.pt")
+    surrogate_model = load_local_locked_scoring_model(surrogate_dir / "lock.json")
+    hidden_model = load_local_locked_scoring_model(hidden_dir / "lock.json")
     reference = train.loc[:, list(FEATURE_NAMES)].median().to_numpy(dtype=np.float32)
 
     def surrogate_score(kind, proposal, _information):

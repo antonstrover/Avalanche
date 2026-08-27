@@ -1,0 +1,29 @@
+{
+  "attempts": [
+    {
+      "artifact_status": "irrecoverable_historical",
+      "attempt_name": "failed-perceptron-v1",
+      "record_path": "artifacts/monitor/history/failed-perceptron-v1.json",
+      "record_sha256": "9be55640589db8d75f72fdc7e241d998bd5cd328d31f994fb19494d1af3303c7"
+    },
+    {
+      "artifact_status": "irrecoverable_historical",
+      "attempt_name": "failed-gru-v1",
+      "record_path": "artifacts/monitor/history/failed-gru-v1.json",
+      "record_sha256": "d71d5523c29fe3505f65c49a39f635f14895a7e7e344efaab62dae2f96105335"
+    },
+    {
+      "artifact_status": "reconstruction_only",
+      "attempt_name": "reconstructed-perceptron-v2",
+      "record_path": "artifacts/monitor/locks/reconstructed-perceptron-v2.json",
+      "record_sha256": "74081d4ba6da3dce2b31aeb7c04db35b6c8cb96fcaa4a04c4ed83aa7976c99af"
+    },
+    {
+      "artifact_status": "reconstruction_only",
+      "attempt_name": "reconstructed-gru-v2",
+      "record_path": "artifacts/monitor/locks/reconstructed-gru-v2.json",
+      "record_sha256": "4459c633b0799464b77b492015546afe7f34df1d6438f6dc779f8b7bef7b9033"
+    }
+  ],
+  "registry_version": 2
+}

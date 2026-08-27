@@ -267,7 +267,6 @@ def test_invalid_learned_feature_blocks_are_rejected(profile, blocks):
     data["monitor"].update(
         {
             "kind": "learned",
-            "model_path": "model.pt",
             "information_profile": profile,
             "feature_blocks": blocks,
         }
@@ -281,7 +280,6 @@ def test_a_learned_monitor_accepts_compatible_feature_blocks():
     data["monitor"].update(
         {
             "kind": "learned",
-            "model_path": "model.pt",
             "feature_blocks": ["action", "context"],
         }
     )

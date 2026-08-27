@@ -4,11 +4,33 @@ from math import isclose, isfinite
 from pathlib import Path
 from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ModelLockReference(StrictModel):
+    """Identify one content-addressed formal model selection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    registry_path: str
+    registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_manifest_path: str
+    selection_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("registry_path", "selection_manifest_path")
+    @classmethod
+    def require_repository_path(cls, value: str) -> str:
+        """Require one normal repository-relative path."""
+        path = Path(value)
+        if path.is_absolute() or not path.parts or ".." in path.parts:
+            raise ValueError("an artifact reference path must be repository-relative")
+        if any(part in ("", ".") for part in path.parts):
+            raise ValueError("an artifact reference path must be normal")
+        return path.as_posix()
 
 
 class MountainConfig(StrictModel):
@@ -432,7 +454,7 @@ class MonitorConfig(StrictModel):
         "principal", "oracle_fallback", "oracle_true_state"
     ] = "principal"
     decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
-    model_path: str | None = None
+    model_lock: ModelLockReference | None = None
     feature_blocks: tuple[FeatureBlock, ...] | None = None
     false_alarm_budget: float = Field(default=0.05, ge=0.0, le=1.0)
     harm_event_threshold: int = Field(default=1, ge=1)
@@ -483,6 +505,19 @@ class MonitorConfig(StrictModel):
         invalid = set(self.feature_blocks) - allowed
         if invalid:
             raise ValueError("a monitor feature block is incompatible with its profile")
+        return self
+
+    @model_validator(mode="after")
+    def check_model_reference(self) -> MonitorConfig:
+        """Reject formal learned-model overrides."""
+        if self.kind != "learned" and self.model_lock is not None:
+            raise ValueError("only a learned monitor can use a model lock")
+        if self.kind == "learned" and self.decision_threshold != 1.0:
+            raise ValueError("a formal monitor cannot override a locked threshold")
+        if self.kind == "learned" and self.false_alarm_budget != 0.05:
+            raise ValueError("a formal monitor cannot override a locked budget")
+        if self.model_lock is not None and self.feature_blocks is not None:
+            raise ValueError("a formal monitor cannot override a locked feature schema")
         return self
 
 

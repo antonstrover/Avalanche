@@ -1,10 +1,8 @@
 # The learned process monitor.
-# `decision_threshold` of one means the calibrated threshold of the model.
-# A value below one overrides the saved calibration.
+# Add a verified selection after the model reconciliation.
 monitor:
   kind: learned
   information_profile: principal
-  model_path: outputs/models/monitor-perceptron.pt
   decision_threshold: 1.0
   false_alarm_budget: 0.05
   unsafe_decision: BLOCK

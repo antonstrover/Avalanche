@@ -236,7 +236,8 @@ It splits complete runs before it creates any model window.
 The fixture metadata checks each contract version and the dataset checksum.
 The shortcut audit checks every feature before training.
 The training gate uses validation rows for calibration and threshold selection.
-Each locked model records every artifact checksum.
+Each formal model uses a registered lock and a content-addressed profile selection.
+Prepare release assets before evaluation because formal loading operates offline.
 The final evaluator runs 1,680 paired Val Tarin episodes.
 
 Regenerate the small monitor fixture after a dataset, feature, or policy change.

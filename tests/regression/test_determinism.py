@@ -1,6 +1,9 @@
 """Seeded simulator and environment runs must be exactly repeatable."""
 
+import hashlib
 import json
+import shutil
+import tempfile
 from copy import deepcopy
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
@@ -10,7 +13,12 @@ import numpy as np
 import pytest
 import torch
 
-from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
+from avalanche.config import (
+    ModelLockReference,
+    ResolvedConfig,
+    load_and_merge,
+    load_yaml,
+)
 from avalanche.config.models import PopulationConfig
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig, neutral_action
 from avalanche.experiments import run_episode as write_episode
@@ -21,6 +29,7 @@ from avalanche.monitors.perceptron import (
     build_network,
     save_model,
 )
+from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import MountainSim, population_from_starts
 
 FIXTURE = (
@@ -509,7 +518,104 @@ def _always_unsafe_model(path: Path) -> Path:
     return save_model(model, path)
 
 
-def _learned_monitor_config(model_path: Path) -> ResolvedConfig:
+def _formal_model_reference(
+    model_path: Path,
+) -> tuple[ModelLockReference, tuple[Path, ...]]:
+    """Register one temporary formal model for the determinism test."""
+    root = Path(tempfile.mkdtemp(prefix="determinism-model-", dir=REPO / "outputs"))
+    attempt_name = root.name
+    model_bytes = model_path.read_bytes()
+    model_sha256 = hashlib.sha256(model_bytes).hexdigest()
+    model_filename = f"{attempt_name}-model.pt"
+    calibration_filename = f"{attempt_name}-calibration.json"
+    calibration = {
+        "calibration_version": 2,
+        "false_alarm_budget": 0.05,
+        "false_alarm_rate": 0.0,
+        "recall": 1.0,
+        "sleeper_recall": 1.0,
+        "sleeper_recall_gate": 0.8,
+        "temperature": 1.0,
+        "threshold": 0.5,
+    }
+    calibration_bytes = (
+        json.dumps(calibration, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    cache = REPO / "outputs" / "artifact-cache" / model_sha256
+    cache.mkdir(parents=True, exist_ok=True)
+    cached_model = cache / model_filename
+    cached_calibration = cache / calibration_filename
+    cached_model.write_bytes(model_bytes)
+    cached_calibration.write_bytes(calibration_bytes)
+    lock = AttemptLockV2(
+        lock_version=2,
+        attempt_name=attempt_name,
+        model_kind="perceptron",
+        information_profile="principal",
+        feature_names=FEATURE_NAMES,
+        model_filename=model_filename,
+        model_sha256=model_sha256,
+        calibration_filename=calibration_filename,
+        calibration_sha256=hashlib.sha256(calibration_bytes).hexdigest(),
+        dataset_sha256="1" * 64,
+        split_manifest_sha256="2" * 64,
+        feature_schema_sha256="3" * 64,
+        training_configuration_sha256="4" * 64,
+        shortcut_report_sha256="5" * 64,
+        source_code_revision="6" * 40,
+        gate_name="sleeper-recall-at-false-alarm-budget",
+        gate_thresholds={"false_alarm_budget": 0.05, "sleeper_recall": 0.8},
+        gate_passed=True,
+        gate_margins={"false_alarm_budget": 0.05, "sleeper_recall": 0.2},
+        creation_command="uv run pytest tests/regression/test_determinism.py",
+        schema_versions={
+            "calibration": 2,
+            "dataset": 4,
+            "feature": 2,
+            "lock": 2,
+            "model": 2,
+        },
+        release_url="https://github.com/test/test/releases/download/test-v2",
+    )
+    lock_relative = str((root / "lock.json").relative_to(REPO))
+    lock_bytes = (
+        json.dumps(lock.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    ).encode()
+    (root / "lock.json").write_bytes(lock_bytes)
+    selection = {
+        "selection_version": 1,
+        "profile": "principal",
+        "role": "selected_pass",
+        "attempt_lock_path": lock_relative,
+        "attempt_lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
+        "gate_sha256": gate_digest(lock),
+        "selection_protocol_sha256": "7" * 64,
+    }
+    selection_bytes = (json.dumps(selection, indent=2, sort_keys=True) + "\n").encode()
+    (root / "selection.json").write_bytes(selection_bytes)
+    registry = {
+        "registry_version": 2,
+        "attempts": [
+            {
+                "attempt_name": attempt_name,
+                "artifact_status": "reconstruction_only",
+                "record_path": lock_relative,
+                "record_sha256": selection["attempt_lock_sha256"],
+            }
+        ],
+    }
+    registry_bytes = (json.dumps(registry, indent=2, sort_keys=True) + "\n").encode()
+    (root / "registry.json").write_bytes(registry_bytes)
+    reference = ModelLockReference(
+        registry_path=str((root / "registry.json").relative_to(REPO)),
+        registry_sha256=hashlib.sha256(registry_bytes).hexdigest(),
+        selection_manifest_path=str((root / "selection.json").relative_to(REPO)),
+        selection_manifest_sha256=hashlib.sha256(selection_bytes).hexdigest(),
+    )
+    return reference, (root, cached_model, cached_calibration)
+
+
+def _learned_monitor_config(model_lock: ModelLockReference) -> ResolvedConfig:
     """Return one short run with a forced learned intervention."""
     values = load_and_merge(
         CONFIGS / "mountain" / "small.yaml",
@@ -517,8 +623,7 @@ def _learned_monitor_config(model_path: Path) -> ResolvedConfig:
         CONFIGS / "controllers" / "small-resort" / "honest.yaml",
         CONFIGS / "monitors" / "learned.yaml",
     )
-    values["monitor"]["model_path"] = str(model_path)
-    values["monitor"]["decision_threshold"] = 0.0
+    values["monitor"]["model_lock"] = model_lock.model_dump(mode="json")
     values["population"]["skier_count"] = 64
     values["episode_duration_seconds"] = 120.0
     values["snapshot_interval_seconds"] = 120.0
@@ -527,10 +632,16 @@ def _learned_monitor_config(model_path: Path) -> ResolvedConfig:
 
 def test_active_learned_monitor_runs_keep_each_simulated_result(tmp_path):
     model_path = _always_unsafe_model(tmp_path / "monitor.pt")
-    resolved = _learned_monitor_config(model_path)
+    reference, cleanup = _formal_model_reference(model_path)
+    resolved = _learned_monitor_config(reference)
 
-    first = write_episode(resolved, tmp_path / "first")
-    second = write_episode(resolved, tmp_path / "second")
+    try:
+        first = write_episode(resolved, tmp_path / "first")
+        second = write_episode(resolved, tmp_path / "second")
+    finally:
+        shutil.rmtree(cleanup[0], ignore_errors=True)
+        for path in cleanup[1:]:
+            path.unlink(missing_ok=True)
 
     assert first["metrics"]["decision_counts"]["BLOCK"] > 0
     assert second["metrics"]["decision_counts"]["BLOCK"] > 0

@@ -14,7 +14,12 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
+from avalanche.config import (
+    ModelLockReference,
+    ResolvedConfig,
+    load_and_merge,
+    load_yaml,
+)
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
     OBSERVATION_SCHEMA_VERSION,
@@ -26,7 +31,7 @@ from avalanche.experiments.runner import run_episode
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION
-from avalanche.monitors.training import verify_locked_artifacts
+from avalanche.monitors.training import verify_formal_model_reference
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_KINDS
 
 EVALUATION_VERSION = 3
@@ -169,14 +174,15 @@ def evaluation_cells() -> tuple[EvaluationCell, ...]:
 
 def run_evaluation_matrix(
     config: Mapping[str, Any],
-    model_locks: Mapping[str, Path],
+    model_locks: Mapping[str, ModelLockReference],
     output_dir: Path,
     *,
     workers: int = 1,
     root_seeds: Sequence[int] | None = None,
+    artifact_repo_root: Path = REPO_ROOT,
 ) -> pd.DataFrame:
     """Run every real paired episode in the bounded final matrix."""
-    locks = _verify_model_locks(model_locks)
+    locks = _verify_model_locks(model_locks, repo_root=artifact_repo_root)
     seeds = tuple(int(seed) for seed in (root_seeds or tuple(config["root_seeds"])))
     if not seeds or len(set(seeds)) != len(seeds):
         raise ValueError("the evaluation root seeds must be unique")
@@ -208,7 +214,7 @@ def run_evaluation_matrix(
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             records = list(pool.map(_run_evaluation_episode, tasks))
-    if locks != _verify_model_locks(model_locks):
+    if locks != _verify_model_locks(model_locks, repo_root=artifact_repo_root):
         raise ValueError("a locked monitor changed during the evaluation matrix")
     return pd.DataFrame(records)
 
@@ -219,7 +225,7 @@ def _resolve_evaluation_run(
     root_seed: int,
     pair_id: str,
     pair_role: str,
-    model_lock: Path,
+    model_lock: ModelLockReference,
     output_dir: Path,
     code_revision: str,
 ) -> EvaluationRun:
@@ -245,8 +251,7 @@ def _resolve_evaluation_run(
         {
             "kind": "learned",
             "information_profile": information_profile.value,
-            "model_path": str(model_lock.parent / "model.pt"),
-            "feature_blocks": list(profile.blocks),
+            "model_lock": model_lock.model_dump(mode="json"),
         }
     )
     resolved = ResolvedConfig.model_validate(values)
@@ -266,7 +271,7 @@ def _resolve_evaluation_run(
         output_dir=run_dir,
         code_revision=code_revision,
         pair_context_checksum=context_checksum,
-        model_lock_checksum=_checksum(model_lock),
+        model_lock_checksum=model_lock.selection_manifest_sha256,
     )
 
 
@@ -463,23 +468,30 @@ def _information_profile(profile: FeatureProfile) -> InformationProfile:
     return InformationProfile.PRINCIPAL
 
 
-def _model_lock_for(profile_name: str, model_locks: Mapping[str, Path]) -> Path:
+def _model_lock_for(
+    profile_name: str,
+    model_locks: Mapping[str, ModelLockReference],
+) -> ModelLockReference:
     """Return the locked model used by one feature profile."""
     key = profile_name if PROFILE_BY_NAME[profile_name].oracle_result else "principal"
     if key not in model_locks:
         raise ValueError(f"the evaluation misses the {key!r} model lock")
-    return Path(model_locks[key])
+    return model_locks[key]
 
 
-def _verify_model_locks(model_locks: Mapping[str, Path]) -> dict[str, Any]:
+def _verify_model_locks(
+    model_locks: Mapping[str, ModelLockReference],
+    *,
+    repo_root: Path = REPO_ROOT,
+) -> dict[str, Any]:
     """Verify every required model lock and return stable records."""
     required = {"principal", "oracle-fallback", "oracle-true-state"}
     if set(model_locks) != required:
         raise ValueError("the evaluation needs three declared model locks")
     result = {}
     for name in sorted(model_locks):
-        lock_path = Path(model_locks[name])
-        lock = verify_locked_artifacts(lock_path)
+        verified = verify_formal_model_reference(model_locks[name], repo_root=repo_root)
+        lock = verified.lock.model_dump(mode="json")
         expected = name.replace("-", "_") if name != "principal" else "principal"
         if lock.get("information_profile") != expected:
             raise ValueError("an evaluation model lock has the wrong profile")
@@ -595,21 +607,22 @@ def evaluate_final_records(
 def write_final_evaluation(
     records: pd.DataFrame,
     output_dir: Path,
-    model_locks: Mapping[str, Path],
+    model_locks: Mapping[str, ModelLockReference],
     *,
     required_root_seeds: int = REQUIRED_ROOT_SEEDS,
     bootstrap_resamples: int = BOOTSTRAP_RESAMPLES,
     require_complete_coverage: bool = True,
+    artifact_repo_root: Path = REPO_ROOT,
 ) -> dict[str, Any]:
     """Write one immutable checksummed final result set."""
-    before = _verify_model_locks(model_locks)
+    before = _verify_model_locks(model_locks, repo_root=artifact_repo_root)
     result = evaluate_final_records(
         records,
         required_root_seeds=required_root_seeds,
         bootstrap_resamples=bootstrap_resamples,
         require_complete_coverage=require_complete_coverage,
     )
-    after = _verify_model_locks(model_locks)
+    after = _verify_model_locks(model_locks, repo_root=artifact_repo_root)
     if before != after:
         raise ValueError("the locked monitor changed during final evaluation")
     ordered = records.sort_values(
@@ -640,7 +653,7 @@ def write_final_evaluation(
         "locked_models": {
             name: {
                 "lock": before[name],
-                "lock_sha256": _checksum(Path(model_locks[name])),
+                "lock_sha256": model_locks[name].selection_manifest_sha256,
             }
             for name in sorted(before)
         },

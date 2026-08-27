@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/antonstrover/Avalanche/artifacts/monitor/selection-v1.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "attempt_lock_path": {
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "type": "string"
+    },
+    "attempt_lock_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "gate_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "profile": {
+      "enum": [
+        "principal",
+        "oracle_fallback",
+        "oracle_true_state"
+      ]
+    },
+    "role": {
+      "enum": [
+        "selected_pass",
+        "negative_core_baseline",
+        "failed_profile_ablation"
+      ]
+    },
+    "selection_protocol_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "selection_version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "selection_version",
+    "profile",
+    "role",
+    "attempt_lock_path",
+    "attempt_lock_sha256",
+    "gate_sha256",
+    "selection_protocol_sha256"
+  ],
+  "type": "object"
+}
