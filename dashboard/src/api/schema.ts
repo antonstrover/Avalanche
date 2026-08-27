@@ -545,6 +545,11 @@ export interface components {
             /** Control Interval Seconds */
             control_interval_seconds: number;
         };
+        /** NumericsConfig */
+        NumericsConfig: {
+            /** Time Epsilon Seconds */
+            time_epsilon_seconds: number;
+        };
         /**
          * LiveConfigSelection
          * @description Select each component of one resolved live configuration.
@@ -847,6 +852,7 @@ export interface components {
             mountain: components["schemas"]["MountainConfig"];
             population: components["schemas"]["PopulationConfig"];
             intervals: components["schemas"]["IntervalsConfig"];
+            numerics: components["schemas"]["NumericsConfig"];
             scenario: components["schemas"]["ScenarioConfig"];
             controller: components["schemas"]["ControllerConfig"];
             monitor: components["schemas"]["MonitorConfig"];
@@ -993,6 +999,7 @@ export interface components {
             compatible_mountain_ids: string[];
             scenario: components["schemas"]["ScenarioConfig"];
             intervals: components["schemas"]["IntervalsConfig"];
+            numerics: components["schemas"]["NumericsConfig"];
             /** Episode Duration Seconds */
             episode_duration_seconds: number;
             /** Snapshot Interval Seconds */

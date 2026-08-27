@@ -206,6 +206,9 @@ def test_a_lift_queue_stays_outside_the_onboard_occupancy():
     pop.location_index[:] = edge
     pop.location_kind[:capacity] = LocationKind.LIFT
     pop.location_kind[capacity:] = LocationKind.QUEUE
+    travel_seconds = topology.edge_nominal_travel_time[edge]
+    pop.required_travel_seconds[:capacity] = travel_seconds
+    pop.remaining_travel_seconds[:capacity] = travel_seconds
     pop.queue_ticket[capacity:] = np.arange(3)
     state = new_dynamic_state(topology)
 

@@ -28,6 +28,7 @@ from avalanche.config.models import (
     IntervalsConfig,
     MonitorConfig,
     MountainConfig,
+    NumericsConfig,
     PopulationConfig,
     ScenarioConfig,
 )
@@ -137,6 +138,7 @@ class ScenarioOption(BaseModel):
     compatible_mountain_ids: tuple[str, ...]
     scenario: ScenarioConfig
     intervals: IntervalsConfig
+    numerics: NumericsConfig
     episode_duration_seconds: float
     snapshot_interval_seconds: float
 
@@ -246,6 +248,7 @@ def _scenario_options() -> list[ScenarioOption]:
                 compatible_mountain_ids=compatible,
                 scenario=scenario,
                 intervals=IntervalsConfig.model_validate(values["intervals"]),
+                numerics=NumericsConfig.model_validate(values["numerics"]),
                 episode_duration_seconds=values.get(
                     "episode_duration_seconds", 28_800.0
                 ),

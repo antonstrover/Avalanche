@@ -14,9 +14,11 @@ from typing import Any
 import numpy as np
 
 from avalanche.config.models import (
+    PROTOCOL_TIME_EPSILON_SECONDS,
     AuditConfig,
     FailuresConfig,
     HazardConfig,
+    NumericsConfig,
     OperationalEventsConfig,
     PopulationConfig,
     WeatherConfig,
@@ -45,6 +47,7 @@ from avalanche.scenarios.weather import (
 from avalanche.sim.hazards import HazardEvent, update_hazards
 from avalanche.sim.movement import (
     DynamicState,
+    MovementTransitions,
     accumulate_times,
     advance_on_edges,
     arrive_at_nodes,
@@ -63,6 +66,7 @@ from avalanche.sim.population import (
     sample_population,
 )
 from avalanche.sim.routes import RouteTable, build_route_table
+from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import Topology, load_topology
 
 STREAM_NAMES = (
@@ -102,6 +106,9 @@ class MountainSim:
         """Store the mountain file. The reset loads it."""
         self.mountain_path = Path(mountain_path)
         self.tick_seconds = DEFAULT_TICK_SECONDS
+        self.time_epsilon_seconds = NumericsConfig(
+            time_epsilon_seconds=PROTOCOL_TIME_EPSILON_SECONDS
+        ).time_epsilon_seconds
         self.simulation_time = 0.0
         self.step = 0
         self.topology: Topology | None = None
@@ -122,6 +129,9 @@ class MountainSim:
         self.operational_event_schedule: OperationalEventSchedule | None = None
         self.active_operational_events: tuple[OperationalEvent, ...] = ()
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), DEFAULT_EPISODE_SECONDS)
+        self.last_movement_transitions = MovementTransitions(
+            np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
+        )
 
     def reset(
         self, seed: int, options: dict[str, Any] | None = None
@@ -188,6 +198,14 @@ class MountainSim:
             hazards = HazardConfig.model_validate(hazards)
         self.hazard_config = hazards
 
+        numerics = options.get(
+            "numerics",
+            NumericsConfig(time_epsilon_seconds=PROTOCOL_TIME_EPSILON_SECONDS),
+        )
+        if not isinstance(numerics, NumericsConfig):
+            numerics = NumericsConfig.model_validate(numerics)
+        self.time_epsilon_seconds = numerics.time_epsilon_seconds
+
         # 5. Clear the dynamic state, the trace buffers, and the metrics.
         self.tick_seconds = float(options.get("tick_seconds", DEFAULT_TICK_SECONDS))
         self.state = new_dynamic_state(self.topology)
@@ -198,6 +216,9 @@ class MountainSim:
             options.get("episode_duration_seconds", DEFAULT_EPISODE_SECONDS)
         )
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), episode_seconds)
+        self.last_movement_transitions = MovementTransitions(
+            np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
+        )
         self._update_weather()
         self._update_failures()
         self._update_operational_events()
@@ -207,7 +228,7 @@ class MountainSim:
         # 7. Return the observation and the run metadata.
         return self.observation(), self.metadata(seed)
 
-    def tick(self) -> None:
+    def tick(self) -> MovementTransitions:
         """Run one movement tick in the recorded order of the steps.
 
         Each step writes into the arrays of the population.
@@ -220,15 +241,29 @@ class MountainSim:
         pop = self.population
         # 1. Start the scheduled arrivals.
         start_arrivals(pop, self.simulation_time)
+        active_at_tick_start = (pop.status == Status.ACTIVE) & (
+            pop.location_kind != LocationKind.PENDING
+        )
+        stranded_at_tick_start = pop.status == Status.STRANDED
         # 2. Update the weather and the scheduled failures.
         self._update_weather()
         self._update_failures()
         # 3. Give lift service to the skiers in a queue.
         serve_lift_queues(pop, self.topology, self.state, self.tick_seconds)
+        queued_at_tick_start = active_at_tick_start & (
+            pop.location_kind == LocationKind.QUEUE
+        )
         # 4. Move the skiers on a piste and on a lift.
         advance_on_edges(pop, self.topology, self.state, self.tick_seconds)
         # 5. Move the skiers that finish an edge to the destination node.
-        arrive_at_nodes(pop, self.topology)
+        transitions = arrive_at_nodes(
+            pop,
+            self.topology,
+            self.simulation_time,
+            self.tick_seconds,
+            self.time_epsilon_seconds,
+        )
+        self.last_movement_transitions = transitions
         # 6. Select the next edge for each skier at a node.
         # 7. Apply the closures and the capacity limits.
         #    The step 6 applies both limits, because it chooses the edge.
@@ -241,6 +276,7 @@ class MountainSim:
             self.state,
             self.tick_seconds,
             self.hazard_config.stranded_after_seconds,
+            self.time_epsilon_seconds,
         )
         # 8. Calculate the occupancy, the speeds, and the hazards.
         update_congestion(pop, self.topology, self.state)
@@ -251,17 +287,29 @@ class MountainSim:
                 self.hazard_config,
                 self.tick_seconds,
                 self.simulation_time + self.tick_seconds,
+                self.time_epsilon_seconds,
             )
         )
         refresh_reported_telemetry(self.state, self.topology)
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
-        accumulate_times(pop, self.tick_seconds)
-        self.metrics.update(pop, self.state, self.tick_seconds)
+        accumulate_times(
+            pop,
+            self.tick_seconds,
+            active_at_tick_start=active_at_tick_start,
+            queued_at_tick_start=queued_at_tick_start,
+        )
+        self.metrics.update(
+            pop,
+            self.state,
+            self.tick_seconds,
+            stranded_at_tick_start=stranded_at_tick_start,
+        )
         # 10. Write the material events to the trace buffer. Stage 5 adds this.
 
         self.simulation_time += self.tick_seconds
         self.step += 1
         self._update_operational_events()
+        return transitions
 
     def _update_weather(self) -> None:
         """Apply the current scheduled weather to the simulator state."""
@@ -367,6 +415,7 @@ class MountainSim:
             "seed": seed,
             "streams": list(STREAM_NAMES),
             "tick_seconds": self.tick_seconds,
+            "time_epsilon_seconds": self.time_epsilon_seconds,
             "weather_schedule": [
                 {
                     "start_time_seconds": transition.start_time_seconds,
@@ -396,6 +445,11 @@ class MountainSim:
         _digest_array(digest, "simulation_time", np.array(self.simulation_time, "<f8"))
         _digest_array(digest, "step", np.array(self.step, "<i8"))
         _digest_array(digest, "tick_seconds", np.array(self.tick_seconds, "<f8"))
+        _digest_array(
+            digest,
+            "time_epsilon_seconds",
+            np.array(self.time_epsilon_seconds, "<f8"),
+        )
         _digest_array(
             digest,
             "population.arrived",

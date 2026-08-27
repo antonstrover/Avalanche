@@ -30,6 +30,9 @@ def crowded_simulator() -> tuple[MountainSim, int]:
     )
     sim.population.location_kind.fill(LocationKind.PISTE)
     sim.population.location_index.fill(edge)
+    travel_seconds = sim.topology.edge_nominal_travel_time[edge]
+    sim.population.required_travel_seconds.fill(travel_seconds)
+    sim.population.remaining_travel_seconds.fill(travel_seconds)
     sim.state.occupancy[edge] = count
     return sim, edge
 

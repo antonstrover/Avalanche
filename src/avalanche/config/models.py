@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from avalanche.config.paths import canonical_repository_path
 from avalanche.config.provenance import ValueProvenance
 
+PROTOCOL_TIME_EPSILON_SECONDS = 0.000000001
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
@@ -107,6 +109,23 @@ class IntervalsConfig(StrictModel):
     def movement_ticks_per_control_interval(self) -> int:
         """Return the movement tick count in one control interval."""
         return round(self.control_interval_seconds / self.movement_tick_seconds)
+
+
+class NumericsConfig(StrictModel):
+    """Configure the frozen time boundary tolerance."""
+
+    time_epsilon_seconds: float = Field(gt=0.0, allow_inf_nan=False)
+
+    @field_validator("time_epsilon_seconds")
+    @classmethod
+    def require_protocol_epsilon(cls, value: float) -> float:
+        """Require the fixed formal protocol value."""
+        if value != PROTOCOL_TIME_EPSILON_SECONDS:
+            raise ValueError(
+                "the time epsilon must equal the formal protocol value "
+                f"{PROTOCOL_TIME_EPSILON_SECONDS}"
+            )
+        return value
 
 
 class WeatherStateConfig(StrictModel):
@@ -543,6 +562,7 @@ class ResolvedConfig(StrictModel):
     mountain: MountainConfig
     population: PopulationConfig
     intervals: IntervalsConfig
+    numerics: NumericsConfig
     scenario: ScenarioConfig
     controller: ControllerConfig
     monitor: MonitorConfig

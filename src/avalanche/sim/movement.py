@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS
 from avalanche.sim.ability import ABILITY_NAMES, ability_allows_edges
 from avalanche.sim.population import (
     CUSTOMER_GROUP_NAMES,
@@ -19,6 +20,7 @@ from avalanche.sim.population import (
 )
 from avalanche.sim.routes import NO_EDGE, RouteTable
 from avalanche.sim.skier import LocationKind, Status
+from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
 
 LIFT_EDGE = EDGE_TYPE_NAMES.index("lift")
@@ -26,6 +28,15 @@ LIFT_EDGE = EDGE_TYPE_NAMES.index("lift")
 SECONDS_IN_HOUR = 3600.0
 
 ON_EDGE = (LocationKind.PISTE, LocationKind.LIFT)
+
+
+@dataclass(frozen=True)
+class MovementTransitions:
+    """Record the skier identities and times of edge completions."""
+
+    completed_skiers: np.ndarray
+    edge_completed_at: np.ndarray
+
 
 # These two values calibrate the congestion of Stage 3.
 # `CONGESTION_SLOPE` sets how fast the speed falls with the load.
@@ -319,7 +330,11 @@ def serve_lift_queues(
         state.lift_service_residual -= served_count
 
         pop.location_kind[served] = LocationKind.LIFT
-        pop.progress[served] = 0.0
+        travel_seconds = topology.edge_nominal_travel_time[served_edges].astype(
+            np.float64
+        )
+        pop.required_travel_seconds[served] = travel_seconds
+        pop.remaining_travel_seconds[served] = travel_seconds
         pop.queue_ticket[served] = -1
 
     state.lift_service_residual -= np.floor(state.lift_service_residual)
@@ -333,30 +348,41 @@ def advance_on_edges(
 ) -> None:
     """Advance each skier on a piste edge and on a lift edge.
 
-    The advance is the tick length divided by the nominal travel time of the edge.
-    The speed factor of the edge scales that advance, so a crowded edge is slow.
-    The progress stops at 1.0.
-    An edge with a travel time of zero takes the skier to 1.0 in one tick.
+    The speed factor scales the effective movement seconds for this tick.
+    The remaining travel seconds stop at zero.
     """
     moving = np.flatnonzero(np.isin(pop.location_kind, ON_EDGE))
     edges = pop.location_index[moving]
-    travel_time = topology.edge_nominal_travel_time[edges].astype(np.float64)
-    positive = travel_time > 0.0
-    step = (
-        tick_seconds * state.speed_factor[edges] / np.where(positive, travel_time, 1.0)
-    )
-    pop.progress[moving] = np.minimum(
-        1.0, np.where(positive, pop.progress[moving] + step, 1.0)
+    movement_seconds = tick_seconds * state.speed_factor[edges]
+    pop.remaining_travel_seconds[moving] = np.maximum(
+        pop.remaining_travel_seconds[moving] - movement_seconds,
+        0.0,
     )
 
 
-def arrive_at_nodes(pop: SkierArrays, topology: Topology) -> None:
-    """Move each skier that finishes an edge to the destination node of that edge."""
-    finished = np.isin(pop.location_kind, ON_EDGE) & (pop.progress >= 1.0)
-    destination = topology.edge_destination[pop.location_index[finished]]
-    pop.location_kind[finished] = LocationKind.NODE
-    pop.location_index[finished] = destination
-    pop.progress[finished] = 0.0
+def arrive_at_nodes(
+    pop: SkierArrays,
+    topology: Topology,
+    tick_start: float = 0.0,
+    tick_seconds: float = 0.0,
+    epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
+) -> MovementTransitions:
+    """Commit each edge completion and return its boundary timestamp."""
+    finished = np.isin(pop.location_kind, ON_EDGE) & (
+        pop.remaining_travel_seconds <= epsilon_seconds
+    )
+    completed_skiers = np.flatnonzero(finished)
+    destination = topology.edge_destination[pop.location_index[completed_skiers]]
+    edge_completed_at = np.full(
+        completed_skiers.size,
+        tick_start + tick_seconds,
+        dtype=np.float64,
+    )
+    pop.location_kind[completed_skiers] = LocationKind.NODE
+    pop.location_index[completed_skiers] = destination
+    pop.required_travel_seconds[completed_skiers] = 0.0
+    pop.remaining_travel_seconds[completed_skiers] = 0.0
+    return MovementTransitions(completed_skiers, edge_completed_at)
 
 
 def select_next_edges(
@@ -442,7 +468,9 @@ def select_next_edges(
     lift = lift[enters]
 
     pop.location_index[starters] = taken
-    pop.progress[starters] = 0.0
+    travel_seconds = topology.edge_nominal_travel_time[taken].astype(np.float64)
+    pop.required_travel_seconds[starters] = np.where(lift, 0.0, travel_seconds)
+    pop.remaining_travel_seconds[starters] = np.where(lift, 0.0, travel_seconds)
     pop.location_kind[starters] = np.where(lift, LocationKind.QUEUE, LocationKind.PISTE)
 
     # The joiners take the tickets in the ascending skier order, so the run is
@@ -452,16 +480,31 @@ def select_next_edges(
     pop.next_ticket += int(joiners.size)
 
 
-def accumulate_times(pop: SkierArrays, tick_seconds: float) -> None:
+def accumulate_times(
+    pop: SkierArrays,
+    tick_seconds: float,
+    *,
+    active_at_tick_start: np.ndarray | None = None,
+    queued_at_tick_start: np.ndarray | None = None,
+) -> None:
     """Add the tick length to the journey time and to the wait time.
 
     An active skier gains journey time.
     A skier in a lift queue also gains wait time.
     A pending skier gains no time.
     """
-    active = (pop.status == Status.ACTIVE) & (pop.location_kind != LocationKind.PENDING)
+    active = (
+        (pop.status == Status.ACTIVE) & (pop.location_kind != LocationKind.PENDING)
+        if active_at_tick_start is None
+        else active_at_tick_start
+    )
+    queued = (
+        active & (pop.location_kind == LocationKind.QUEUE)
+        if queued_at_tick_start is None
+        else queued_at_tick_start
+    )
     pop.journey_time[active] += tick_seconds
-    pop.wait_time[active & (pop.location_kind == LocationKind.QUEUE)] += tick_seconds
+    pop.wait_time[queued] += tick_seconds
 
 
 def update_stranded(
@@ -470,6 +513,7 @@ def update_stranded(
     state: DynamicState,
     tick_seconds: float,
     stranded_after_seconds: float,
+    epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
 ) -> np.ndarray:
     """Mark skiers after a route closure blocks them for too long."""
     active_nodes = (pop.status == Status.ACTIVE) & (
@@ -487,7 +531,11 @@ def update_stranded(
     pop.blocked_time[blocked_members] += tick_seconds
     pop.blocked_time[clear_members] = 0.0
     newly_stranded = blocked_members[
-        pop.blocked_time[blocked_members] >= stranded_after_seconds
+        time_boundary_reached(
+            pop.blocked_time[blocked_members],
+            stranded_after_seconds,
+            epsilon_seconds,
+        )
     ]
     pop.status[newly_stranded] = Status.STRANDED
     return newly_stranded

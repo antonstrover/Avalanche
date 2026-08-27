@@ -214,18 +214,10 @@ The validation and preflight commands print stable configuration evidence.
 `simulate` writes a run directory under `outputs/`.
 The command runs one resolved episode.
 It writes the events, the metrics, the snapshots, the model reference, and the final summary.
-Each snapshot records a version and the complete simulator state.
-The snapshot codec validates each field before it restores a simulator.
-Restore a snapshot into a reset simulator with the same configuration.
-
-```python
-import pyarrow.parquet as pq
-
-from avalanche.traces import restore_snapshot
-
-row = pq.read_table("outputs/example/snapshots.parquet").to_pylist()[0]
-restore_snapshot(sim, row)
-```
+Each version two snapshot stores a physical replay view.
+It derives legacy display progress from the formal travel-time state.
+It does not restore a formal simulator continuation.
+The codec rejects a version two snapshot used for continuation.
 
 ### The simulator, from Python
 

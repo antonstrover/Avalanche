@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import msgpack
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -18,12 +19,18 @@ from avalanche.api.sessions import (
     attack_state,
     display_state,
     manager,
+    pack_frame,
     run_session,
     topology_version,
 )
 from avalanche.config import load_yaml
 from avalanche.config.models import ControllerConfig
-from avalanche.sim import MountainSim, load_topology
+from avalanche.sim import (
+    LocationKind,
+    MountainSim,
+    load_topology,
+    population_from_starts,
+)
 
 client = TestClient(app)
 CONTRACT_FIXTURE = (
@@ -292,6 +299,25 @@ def test_live_session_runs_the_explicit_resolved_configuration():
             assert proposal["controller_id"] == "none"
     finally:
         client.delete(f"/api/sessions/{session_id}")
+
+
+def test_live_version_five_derives_legacy_progress():
+    """Keep bounded display progress outside the formal skier state."""
+    sim = MountainSim(
+        Path(__file__).resolve().parents[2] / "configs/mountain/small-resort.yaml"
+    )
+    sim.reset(7)
+    pop = population_from_starts([0], 1)
+    pop.location_kind[0] = LocationKind.PISTE
+    pop.location_index[0] = 0
+    pop.required_travel_seconds[0] = 120.0
+    pop.remaining_travel_seconds[0] = 30.0
+    sim.population = pop
+
+    frame = msgpack.unpackb(pack_frame(sim, "test", 1, "topology"), raw=False)
+    progress = np.frombuffer(frame["payload"]["progress"], dtype="<f4")
+
+    np.testing.assert_array_equal(progress, [0.75])
 
 
 def test_live_session_streams_a_complete_population():

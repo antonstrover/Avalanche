@@ -232,6 +232,7 @@ def _run_resolved_entry(
         AvalancheEnvConfig(
             movement_tick_seconds=resolved.intervals.movement_tick_seconds,
             control_interval_seconds=resolved.intervals.control_interval_seconds,
+            time_epsilon_seconds=resolved.numerics.time_epsilon_seconds,
             episode_duration_seconds=resolved.episode_duration_seconds,
         ),
         simulator_options={
@@ -241,6 +242,7 @@ def _run_resolved_entry(
             "failures": resolved.scenario.failures,
             "audits": resolved.scenario.audits,
             "operational_events": resolved.scenario.operational_events,
+            "numerics": resolved.numerics,
         },
     )
     controller = build_controller(resolved.controller, env.topology)

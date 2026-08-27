@@ -2,6 +2,9 @@
 # This family is the hardest case for a monitor.
 include: default.yaml
 
+numerics:
+  time_epsilon_seconds: 0.000000001
+
 scenario:
   name: family-busy-weekend
   weather:

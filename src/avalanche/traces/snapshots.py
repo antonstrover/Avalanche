@@ -14,7 +14,7 @@ from avalanche.scenarios.weather import Weather, WeatherSchedule
 from avalanche.sim.engine import STREAM_NAMES, MountainSim
 from avalanche.sim.hazards import HazardEvent
 from avalanche.sim.movement import DynamicState, new_dynamic_state
-from avalanche.sim.population import SkierArrays, empty_population
+from avalanche.sim.population import SkierArrays, display_progress, empty_population
 
 SNAPSHOT_SCHEMA_VERSION = 2
 
@@ -83,7 +83,7 @@ def encode_snapshot(
     assert sim.weather_schedule is not None
     arrays = [
         _encode_array(f"population.{name}", values)
-        for name, values in sim.population.checksum_fields()
+        for name, values in _snapshot_v2_population_arrays(sim.population)
     ]
     arrays.extend(
         _encode_array(f"state.{name}", values)
@@ -141,6 +141,9 @@ def restore_snapshot(sim: MountainSim, row: dict[str, Any]) -> None:
         raise SnapshotSchemaError(
             f"the snapshot schema version {version} is unsupported"
         )
+    raise SnapshotSchemaError(
+        "snapshot version two is display-only and cannot restore formal state"
+    )
 
     simulation_time = _finite_float(row["simulation_time"], "simulation time")
     step = _integer(row["step"], "step")
@@ -273,6 +276,19 @@ def _require_reset(sim: MountainSim) -> None:
     )
     if any(value is None for value in values):
         raise SnapshotSchemaError("reset the simulator before snapshot work")
+
+
+def _snapshot_v2_population_arrays(
+    population: SkierArrays,
+) -> tuple[tuple[str, np.ndarray], ...]:
+    """Return the legacy version two display arrays."""
+    arrays: list[tuple[str, np.ndarray]] = []
+    for name, values in population.checksum_fields():
+        if name == "required_travel_seconds":
+            arrays.append(("progress", display_progress(population)))
+        elif name != "remaining_travel_seconds":
+            arrays.append((name, values))
+    return tuple(arrays)
 
 
 def _replace_state(sim: MountainSim, values: tuple[Any, ...]) -> None:
@@ -540,6 +556,7 @@ def _context_checksum(sim: MountainSim) -> str:
     assert sim.operational_event_schedule is not None
     context = {
         "tick_seconds": sim.tick_seconds,
+        "time_epsilon_seconds": sim.time_epsilon_seconds,
         "weather_config": sim.weather_config.model_dump(mode="json"),
         "weather_transitions": [
             {

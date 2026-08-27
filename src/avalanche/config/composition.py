@@ -22,6 +22,7 @@ from avalanche.config.models import (
     IntervalsConfig,
     MonitorConfig,
     MountainConfig,
+    NumericsConfig,
     PopulationConfig,
     ResolvedConfig,
     ScenarioConfig,
@@ -48,6 +49,7 @@ class ScenarioComponent(_Envelope):
 
     scenario: ScenarioConfig
     intervals: IntervalsConfig
+    numerics: NumericsConfig
     seed: int = Field(ge=0, le=2**63 - 1)
     episode_duration_seconds: float = Field(gt=0.0)
     snapshot_interval_seconds: float = Field(gt=0.0)
@@ -104,6 +106,7 @@ _OWNER_KEYS: dict[Owner, frozenset[str]] = {
         {
             "scenario",
             "intervals",
+            "numerics",
             "seed",
             "episode_duration_seconds",
             "snapshot_interval_seconds",
@@ -260,6 +263,7 @@ def _owner_for_pointer(pointer: str) -> str:
     if head in {
         "scenario",
         "intervals",
+        "numerics",
         "seed",
         "episode_duration_seconds",
         "snapshot_interval_seconds",

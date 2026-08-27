@@ -17,6 +17,7 @@ import numpy as np
 
 from avalanche.config import load_yaml
 from avalanche.config.models import (
+    PROTOCOL_TIME_EPSILON_SECONDS,
     ControllerConfig,
     MonitorConfig,
     PopulationConfig,
@@ -46,6 +47,7 @@ from avalanche.env import (
 from avalanche.monitors import build_monitor
 from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
+from avalanche.sim.population import display_progress
 from avalanche.sim.skier import LocationKind
 
 STREAM_VERSION = 5
@@ -89,7 +91,7 @@ def pack_frame(
         "skier_count": len(population),
         "location_kind": population.location_kind.astype(np.int8, copy=False).tobytes(),
         "location_index": population.location_index.astype("<i4", copy=False).tobytes(),
-        "progress": population.progress.astype("<f4", copy=False).tobytes(),
+        "progress": display_progress(population).astype("<f4", copy=False).tobytes(),
         "display": display_state(sim, proposal, adjudication, approval, controller),
     }
     envelope = {
@@ -472,6 +474,7 @@ def run_session(
                 "hazards": resolved_config.scenario.hazards,
                 "failures": resolved_config.scenario.failures,
                 "audits": resolved_config.scenario.audits,
+                "numerics": resolved_config.numerics,
             }
         if demo_failure:
             options["failures"] = {
@@ -490,6 +493,11 @@ def run_session(
             AvalancheEnvConfig(
                 movement_tick_seconds=movement_tick_seconds,
                 control_interval_seconds=control_interval_seconds,
+                time_epsilon_seconds=(
+                    resolved_config.numerics.time_epsilon_seconds
+                    if resolved_config is not None
+                    else PROTOCOL_TIME_EPSILON_SECONDS
+                ),
                 episode_duration_seconds=episode_duration_seconds,
             ),
             simulator_options=options,

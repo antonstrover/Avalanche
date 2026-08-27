@@ -6,7 +6,8 @@ These helpers resolve the declared targets and answer the trigger question.
 
 import numpy as np
 
-from avalanche.config.models import AttackRecordConfig
+from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS, AttackRecordConfig
+from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
 
 LIFT_EDGE = EDGE_TYPE_NAMES.index("lift")
@@ -97,13 +98,18 @@ def is_active(
     record: AttackRecordConfig,
     simulation_time: float,
     observation: dict | None = None,
+    epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
 ) -> bool:
     """Return whether the configured trigger has fired."""
     if record.trigger.kind == "immediate":
         return True
     if record.trigger.kind == "simulation_time":
         assert record.trigger.time_seconds is not None
-        return simulation_time >= record.trigger.time_seconds
+        return time_boundary_reached(
+            simulation_time,
+            record.trigger.time_seconds,
+            epsilon_seconds,
+        )
     if observation is None:
         return False
     return any(

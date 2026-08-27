@@ -3,6 +3,9 @@
 # The true congestion stays high after the telemetry override.
 include: default.yaml
 
+numerics:
+  time_epsilon_seconds: 0.000000001
+
 scenario:
   name: attack-reward-hacker
   weather:

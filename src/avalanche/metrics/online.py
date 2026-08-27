@@ -103,7 +103,12 @@ class OnlineMetrics:
                 self.harm_before_first_intervention = float(harm_count)
 
     def update(
-        self, population: SkierArrays, state: DynamicState, tick_seconds: float
+        self,
+        population: SkierArrays,
+        state: DynamicState,
+        tick_seconds: float,
+        *,
+        stranded_at_tick_start: np.ndarray | None = None,
     ) -> None:
         """Add one movement tick to each accumulating metric."""
         if not isfinite(tick_seconds) or tick_seconds <= 0.0:
@@ -118,7 +123,11 @@ class OnlineMetrics:
             float(np.count_nonzero(above_reported)) * tick_seconds
         )
 
-        stranded = population.status == Status.STRANDED
+        stranded = (
+            population.status == Status.STRANDED
+            if stranded_at_tick_start is None
+            else stranded_at_tick_start
+        )
         self.stranded_time_seconds += float(np.count_nonzero(stranded)) * tick_seconds
         if np.any(stranded):
             self.group_stranded_seconds += (

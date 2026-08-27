@@ -6,7 +6,8 @@ Use an `include` field for a same-owner component include.
 Resolve an include from the directory of its declaring file.
 
 The mountain component owns `mountain` and `population`.
-The scenario component owns the intervals, schedules, seed, duration, snapshots, and trace level.
+The scenario component owns the intervals and the numerical boundary value.
+It also owns the schedules, seed, duration, snapshots, and trace level.
 The controller component owns only `controller`.
 The monitor component owns `monitor`, `fallback`, and `approval`.
 
@@ -23,6 +24,7 @@ The resolver defaults `output_root` to `outputs`.
 The resolver defaults `runtime.worker_count` to one.
 The resolved digest includes every logical configuration value.
 The scientific digest excludes the output root and worker count.
+The time epsilon must equal 0.000000001 seconds.
 
 ## Mountain validation
 

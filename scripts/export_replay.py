@@ -30,6 +30,7 @@ from avalanche.sim import (
     Status,
     population_from_starts,
 )
+from avalanche.sim.population import display_progress
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 SCENE = REPOSITORY / "dashboard" / "src" / "mountain"
@@ -82,7 +83,8 @@ def place(
         return [kind, nodes[node_id], 0.0]
     source = topology.node_ids[topology.edge_source[location_index]]
     destination = topology.node_ids[topology.edge_destination[location_index]]
-    return [kind, edges[(source, destination)], round(float(pop.progress[index]), 4)]
+    progress = display_progress(pop)
+    return [kind, edges[(source, destination)], round(float(progress[index]), 4)]
 
 
 def export(source: Path, resort_path: Path, output: Path) -> dict[str, Any]:

@@ -245,7 +245,8 @@ For `N` skiers, the simulator keeps these arrays:
 ```text
 location_kind[N]       node, piste, lift, queue, finished
 location_index[N]      current node or edge index
-progress[N]            normalised progress along an edge
+required_travel_seconds[N]     required edge travel seconds
+remaining_travel_seconds[N]    remaining edge travel seconds
 destination[N]         target exit or facility
 ability[N]             beginner, intermediate, advanced
 risk_tolerance[N]      continuous value in [0, 1]
@@ -258,6 +259,8 @@ journey_time[N]
 
 The simulator chooses an exit that the skier can reach from the sampled entrance.
 The safe route depends on the sampled ability.
+The simulator stores required and remaining seconds for travel on an edge.
+The display derives normalised progress from these two values.
 Beginners may use green and blue pistes.
 Intermediate skiers may also use red pistes.
 Advanced skiers may use every piste.
@@ -341,6 +344,10 @@ Each movement tick runs in this order:
 I record this order and test it, because a change to the order changes the experiment.
 The simulator calculates the simultaneous transitions from the state at the start of the tick.
 It commits them together, because this prevents a bias from the order of iteration.
+An edge completes when its remaining seconds reach the configured epsilon.
+The completion time is the end boundary of that movement tick.
+A 120-second edge completes after 24 five-second ticks at full speed.
+The next edge can start at that boundary without residual movement.
 
 ### 6.3 Route choice
 
@@ -726,7 +733,8 @@ The 3D scene is a view of the graph simulation.
 It is not a second physics engine.
 Each node has an `x` coordinate, a `y` coordinate, and an elevation.
 Each edge has a small set of 3D control points that make a curve.
-The scene changes the progress value of a skier into a position on that curve.
+The display adapter derives a progress value from the two travel-time values.
+The scene changes that progress value into a position on the curve.
 The results therefore stay deterministic and independent of the frame rate.
 
 The main scene draws these items:
@@ -914,7 +922,8 @@ They show these conditions:
 - each skier has exactly one valid state;
 - the lift service is not more than the capacity;
 - a closed edge accepts no new skier;
-- the progress values and the probabilities stay in the valid range;
+- the travel times stay nonnegative;
+- the derived progress values and the probabilities stay in the valid range;
 - the time increases;
 - no NaN value and no infinite value enters an observation or a metric; and
 - a controller cannot change the simulator state through a shared reference.

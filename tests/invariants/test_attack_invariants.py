@@ -81,7 +81,9 @@ def check_invariants(env: AvalancheEnv, observation: dict[str, Any]) -> None:
         assert values.size == SKIER_COUNT, name
     assert np.all(np.isin(pop.location_kind, VALID_KINDS))
     assert np.all(np.isin(pop.status, VALID_STATUS))
-    assert np.all((pop.progress >= 0.0) & (pop.progress <= 1.0))
+    assert np.all(pop.required_travel_seconds >= 0.0)
+    assert np.all(pop.remaining_travel_seconds >= 0.0)
+    assert np.all(pop.remaining_travel_seconds <= pop.required_travel_seconds)
     assert np.all((pop.compliance >= 0.0) & (pop.compliance <= 1.0))
     assert np.all((pop.ability >= 0) & (pop.ability < len(ABILITY_NAMES)))
     assert np.all((pop.group >= 0) & (pop.group < len(CUSTOMER_GROUP_NAMES)))

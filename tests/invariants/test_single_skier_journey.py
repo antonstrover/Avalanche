@@ -30,13 +30,14 @@ TICK_LIMIT = 2000
 CHOICE_SEED = 7
 
 
-def run_tick(pop, topology, routes, state, rng):
+def run_tick(pop, topology, routes, state, rng, tick_start=0.0):
     """Run the steps 3 to 6 of one movement tick."""
     serve_lift_queues(pop, topology, state, TICK_SECONDS)
     advance_on_edges(pop, topology, state, TICK_SECONDS)
-    arrive_at_nodes(pop, topology)
+    transitions = arrive_at_nodes(pop, topology, tick_start, TICK_SECONDS)
     select_next_edges(pop, topology, routes, state, rng)
     accumulate_times(pop, TICK_SECONDS)
+    return transitions
 
 
 @pytest.fixture(scope="module")
@@ -54,24 +55,27 @@ def journey():
 
     kinds = []
     journey_times = []
-    for _ in range(TICK_LIMIT):
-        run_tick(pop, topology, routes, state, rng)
+    completion_records = []
+    for tick in range(TICK_LIMIT):
+        transitions = run_tick(pop, topology, routes, state, rng, tick * TICK_SECONDS)
+        if transitions.completed_skiers.size:
+            completion_records.append((tick, transitions.edge_completed_at.copy()))
         kinds.append(LocationKind(pop.location_kind[0]))
         journey_times.append(float(pop.journey_time[0]))
         if pop.status[0] == Status.COMPLETE:
             break
 
-    return pop, kinds, journey_times
+    return pop, kinds, journey_times, completion_records
 
 
 def test_the_skier_completes_the_journey(journey):
-    pop, _, _ = journey
+    pop, _, _, _ = journey
     assert pop.status[0] == Status.COMPLETE
     assert pop.location_kind[0] == LocationKind.FINISHED
 
 
 def test_the_journey_time_increases_in_each_tick(journey):
-    _, kinds, journey_times = journey
+    _, kinds, journey_times, _ = journey
     # The last tick makes the skier complete, so it gains no journey time.
     active_times = journey_times[: kinds.index(LocationKind.FINISHED)]
     assert active_times == sorted(set(active_times))
@@ -79,11 +83,19 @@ def test_the_journey_time_increases_in_each_tick(journey):
 
 
 def test_the_skier_passes_through_a_lift_queue_and_a_lift(journey):
-    pop, kinds, _ = journey
+    pop, kinds, _, _ = journey
     assert LocationKind.QUEUE in kinds
     assert LocationKind.LIFT in kinds
     assert LocationKind.PISTE in kinds
     assert pop.wait_time[0] > 0.0
+
+
+def test_arrival_timestamp_matches_completion_boundary(journey):
+    """Record each edge arrival at the end of its completion tick."""
+    _, _, _, completion_records = journey
+    assert completion_records
+    for tick, completed_at in completion_records:
+        np.testing.assert_array_equal(completed_at, [(tick + 1) * TICK_SECONDS])
 
 
 def test_a_skier_completes_the_medium_resort_fractional_lift_journey():

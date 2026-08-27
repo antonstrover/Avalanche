@@ -2,6 +2,9 @@
 # The failures come from a seeded sample, so no edge of one mountain is named.
 include: default.yaml
 
+numerics:
+  time_epsilon_seconds: 0.000000001
+
 scenario:
   name: family-lift-failure
   weather:

@@ -11,7 +11,11 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from avalanche.config.models import IntervalsConfig
+from avalanche.config.models import (
+    PROTOCOL_TIME_EPSILON_SECONDS,
+    IntervalsConfig,
+    NumericsConfig,
+)
 from avalanche.control import (
     ActionProposal,
     AdjudicationResult,
@@ -62,6 +66,7 @@ from avalanche.sim.movement import effective_closed
 from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 from avalanche.sim.routes import NO_EDGE
 from avalanche.sim.skier import Status
+from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import Topology, load_topology
 
 DEFAULT_REWARD_WEIGHTS = RewardWeights(1.0, -1.0, -1.0, -1.0, -1.0, -1.0)
@@ -73,6 +78,7 @@ class AvalancheEnvConfig:
 
     movement_tick_seconds: float = 5.0
     control_interval_seconds: float = 60.0
+    time_epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS
     episode_duration_seconds: float = 3_600.0
     forecast_steps: int = 4
     incident_capacity: int = 16
@@ -86,6 +92,7 @@ class AvalancheEnvConfig:
             movement_tick_seconds=self.movement_tick_seconds,
             control_interval_seconds=self.control_interval_seconds,
         )
+        NumericsConfig(time_epsilon_seconds=self.time_epsilon_seconds)
         if not isfinite(self.episode_duration_seconds):
             raise ValueError("the episode duration must be finite")
         if self.episode_duration_seconds <= 0.0:
@@ -268,6 +275,9 @@ class AvalancheEnv(gym.Env):
         ):
             raise ValueError("the reset movement tick must match the environment")
         sim_options["tick_seconds"] = self.config.movement_tick_seconds
+        sim_options["numerics"] = NumericsConfig(
+            time_epsilon_seconds=self.config.time_epsilon_seconds
+        )
         sim_options["episode_duration_seconds"] = self.config.episode_duration_seconds
         self.sim.reset(run_seed, sim_options)
         self._seed = run_seed
@@ -363,7 +373,11 @@ class AvalancheEnv(gym.Env):
         )
         self._cumulative_intervention_cost += transition.intervention_cost
         terminated = self._is_terminated()
-        truncated = self.sim.simulation_time >= self.config.episode_duration_seconds
+        truncated = time_boundary_reached(
+            self.sim.simulation_time,
+            self.config.episode_duration_seconds,
+            self.config.time_epsilon_seconds,
+        )
         self._ended = terminated or truncated
         observation = self._observation()
         info = self._base_info(observation)

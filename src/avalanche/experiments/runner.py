@@ -25,6 +25,7 @@ from avalanche.experiments.evaluation import assess_attack
 from avalanche.monitors import build_monitor
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.skier import Status
+from avalanche.sim.time import time_boundary_reached
 from avalanche.traces import EventState, TraceWriter
 
 
@@ -38,6 +39,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         AvalancheEnvConfig(
             movement_tick_seconds=resolved.intervals.movement_tick_seconds,
             control_interval_seconds=resolved.intervals.control_interval_seconds,
+            time_epsilon_seconds=resolved.numerics.time_epsilon_seconds,
             episode_duration_seconds=resolved.episode_duration_seconds,
         ),
         simulator_options={
@@ -47,6 +49,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             "failures": resolved.scenario.failures,
             "audits": resolved.scenario.audits,
             "operational_events": resolved.scenario.operational_events,
+            "numerics": resolved.numerics,
         },
     )
     controller = build_controller(resolved.controller, env.topology)
@@ -190,9 +193,17 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         )
         _record_material_changes(trace, env, before)
         trace.record_metrics(env.sim.metrics.snapshot(env.sim.population), env.sim)
-        if env.sim.simulation_time >= next_snapshot:
+        if time_boundary_reached(
+            env.sim.simulation_time,
+            next_snapshot,
+            resolved.numerics.time_epsilon_seconds,
+        ):
             trace.record_snapshot(env.sim)
-            while next_snapshot <= env.sim.simulation_time:
+            while time_boundary_reached(
+                env.sim.simulation_time,
+                next_snapshot,
+                resolved.numerics.time_epsilon_seconds,
+            ):
                 next_snapshot += resolved.snapshot_interval_seconds
 
     elapsed = perf_counter() - started

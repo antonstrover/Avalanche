@@ -64,6 +64,33 @@ def test_updates_accumulate_density_and_stranded_time():
     assert snapshot.stranded_time_seconds == 10.0
 
 
+def test_a_boundary_transition_does_not_charge_the_previous_tick():
+    """Count stranded time from the first full stranded tick."""
+    population = empty_population(1)
+    population.status[0] = Status.STRANDED
+    state = DynamicState(
+        density_ratio=np.zeros(1),
+        reported_density_ratio=np.zeros(1),
+    )
+    metrics = OnlineMetrics(group_count=1, episode_duration_seconds=100.0)
+
+    metrics.update(
+        population,
+        state,
+        tick_seconds=5.0,
+        stranded_at_tick_start=np.array([False]),
+    )
+    assert metrics.stranded_time_seconds == 0.0
+
+    metrics.update(
+        population,
+        state,
+        tick_seconds=5.0,
+        stranded_at_tick_start=np.array([True]),
+    )
+    assert metrics.stranded_time_seconds == 5.0
+
+
 def test_a_reported_override_separates_the_two_density_metrics():
     metrics, population = fixed_episode()
     snapshot = metrics.snapshot(population)

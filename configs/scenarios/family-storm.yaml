@@ -1,5 +1,8 @@
 include: default.yaml
 
+numerics:
+  time_epsilon_seconds: 0.000000001
+
 # The storm family. The wind rises and the visibility falls.
 # The weather comes from a seeded sample, so no edge of one mountain is named.
 scenario:

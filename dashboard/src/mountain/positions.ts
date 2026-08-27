@@ -3,7 +3,7 @@ import { liftShape, pisteCurve } from "./curves";
 import { defaultResortModel, type ResortModel } from "./resort";
 
 // A skier marker sits on the curve of its edge.
-// The replay file gives the place of a skier: the kind, the index, and the progress.
+// The replay adapter derives progress from the formal travel-time state.
 
 export type Place = [kind: string, index: number, progress: number];
 
