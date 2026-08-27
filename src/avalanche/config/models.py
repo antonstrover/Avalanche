@@ -6,9 +6,11 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from avalanche.config.provenance import ValueProvenance
+
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 
 class ModelLockReference(StrictModel):
@@ -38,6 +40,12 @@ class MountainConfig(StrictModel):
     node_count: int
     edge_count: int
     path: str = "configs/mountain/medium-resort.yaml"
+
+
+class RuntimeConfig(StrictModel):
+    """Configure execution without changing scientific behavior."""
+
+    worker_count: int = Field(default=1, ge=1)
 
 
 class PopulationConfig(StrictModel):
@@ -539,10 +547,19 @@ class ResolvedConfig(StrictModel):
     monitor: MonitorConfig
     fallback: FallbackConfig
     approval: ApprovalConfig = ApprovalConfig()
-    seed: int
+    seed: int = Field(ge=0, le=2**63 - 1)
     trace_level: Literal["debug", "decision", "summary"]
     episode_duration_seconds: float = Field(default=3_600.0, gt=0.0)
     snapshot_interval_seconds: float = Field(default=60.0, gt=0.0)
+    output_root: str = "outputs"
+    runtime: RuntimeConfig = RuntimeConfig()
+    provenance: tuple[ValueProvenance, ...] = ()
+    resolved_configuration_sha256: str = Field(
+        default="0" * 64, pattern=r"^[0-9a-f]{64}$"
+    )
+    scientific_configuration_sha256: str = Field(
+        default="0" * 64, pattern=r"^[0-9a-f]{64}$"
+    )
 
     @model_validator(mode="after")
     def check_attack_trigger(self) -> ResolvedConfig:
@@ -552,26 +569,4 @@ class ResolvedConfig(StrictModel):
             return self
         if attack.trigger.time_seconds >= self.episode_duration_seconds:
             raise ValueError("the attack trigger must precede the episode end")
-        return self
-
-    @model_validator(mode="after")
-    def check_mountain_counts(self) -> ResolvedConfig:
-        """Require each declared mountain count to match its topology."""
-        from avalanche.config.loader import ConfigLoadError
-        from avalanche.sim.topology import load_topology
-
-        path = Path(self.mountain.path)
-        try:
-            topology = load_topology(path)
-        except ConfigLoadError as error:
-            raise ValueError(str(error)) from error
-        for field, declared, loaded in (
-            ("node_count", self.mountain.node_count, topology.node_count),
-            ("edge_count", self.mountain.edge_count, topology.edge_count),
-        ):
-            if declared != loaded:
-                raise ValueError(
-                    f"the mountain {path} declares {field} {declared} "
-                    f"but loads {loaded}"
-                )
         return self

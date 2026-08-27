@@ -70,7 +70,13 @@ describe("App shell", () => {
                                 topology: resort,
                             },
                         ],
-                        scenarios: [{ id: "default", label: "Default" }],
+                        scenarios: [
+                            {
+                                id: "default",
+                                label: "Default",
+                                compatible_mountain_ids: ["medium-resort"],
+                            },
+                        ],
                         controllers: [
                             {
                                 id: "honest",
@@ -79,7 +85,13 @@ describe("App shell", () => {
                                 controller: { kind: "honest" },
                             },
                         ],
-                        monitors: [{ id: "none", label: "None" }],
+                        monitors: [
+                            {
+                                id: "none",
+                                label: "None",
+                                compatible_mountain_ids: ["medium-resort"],
+                            },
+                        ],
                     };
                 } else if (url.endsWith("/api/config-options/resolve")) {
                     body = {

@@ -40,7 +40,9 @@ function App() {
         controller: "honest",
         monitor: "none",
         seed: 0,
-        skier_count: 5000,
+        population: { skier_count: 5000 },
+        frame_interval_ms: 250,
+        simulation_speed: 20,
     });
     const [resolvedConfig, setResolvedConfig] = useState<ResolvedLiveConfig | null>(null);
     const [session, setSession] = useState<LiveSession | null>(null);
@@ -95,7 +97,7 @@ function App() {
         setDisplay(INITIAL_DISPLAY);
         try {
             const created = await createLiveSession(
-                resolvedConfig,
+                selection,
                 demoFailure,
                 demoMonitor,
                 demoApproval,

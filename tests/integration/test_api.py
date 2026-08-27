@@ -86,7 +86,6 @@ def test_config_options_serves_each_validated_configuration_choice():
         item for item in body["controllers"] if item["id"] == "small-resort/honest"
     )["compatible_mountain_ids"] == ["small-resort"]
     assert {item["monitor"]["kind"] for item in body["monitors"]} == {
-        "learned",
         "none",
         "outcome",
         "rules",
@@ -104,6 +103,11 @@ def test_openapi_document_is_generated():
     assert response.status_code == 200
     assert "/api/config-options" in response.json()["paths"]
     assert "/api/config-options/resolve" in response.json()["paths"]
+    assert "/api/demo-sessions" in response.json()["paths"]
+    session_fields = response.json()["components"]["schemas"]["SessionCreate"][
+        "properties"
+    ]
+    assert not {"demo_failure", "demo_monitor", "demo_approval"} & set(session_fields)
 
 
 def test_live_configuration_resolution_combines_every_selected_part():
@@ -115,7 +119,7 @@ def test_live_configuration_resolution_combines_every_selected_part():
             "controller": "small-resort/honest",
             "monitor": "none",
             "seed": 17,
-            "skier_count": 20,
+            "population": {"skier_count": 20},
         },
     )
 
@@ -135,10 +139,36 @@ def test_live_configuration_resolution_combines_every_selected_part():
     assert "control_interval_seconds" not in resolved["scenario"]
 
 
-def test_the_api_rejects_rule_monitor_replacement():
+def test_display_timing_does_not_change_configuration_identity():
+    first = client.post(
+        "/api/config-options/resolve",
+        json={"frame_interval_ms": 16, "simulation_speed": 1.0},
+    )
+    second = client.post(
+        "/api/config-options/resolve",
+        json={"frame_interval_ms": 1000, "simulation_speed": 80.0},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert (
+        first.json()["resolved_configuration_sha256"]
+        == second.json()["resolved_configuration_sha256"]
+    )
+    assert (
+        first.json()["scientific_configuration_sha256"]
+        == second.json()["scientific_configuration_sha256"]
+    )
+
+
+def test_the_api_rejects_client_supplied_resolved_configuration():
     resolved = client.post(
         "/api/config-options/resolve",
-        json={"mountain": "small-resort", "controller": "none", "skier_count": 20},
+        json={
+            "mountain": "small-resort",
+            "controller": "none",
+            "population": {"skier_count": 20},
+        },
     ).json()
     resolved["monitor"] = {
         "kind": "rules",
@@ -148,24 +178,34 @@ def test_the_api_rejects_rule_monitor_replacement():
     response = client.post("/api/sessions", json={"config": resolved})
 
     assert response.status_code == 422
-    assert "rule monitor cannot use a REPLACE" in response.text
+    assert "Extra inputs are not permitted" in response.text
+
+
+@pytest.mark.parametrize("field", ["demo_failure", "demo_monitor", "demo_approval"])
+def test_a_formal_live_session_rejects_demo_fields(field):
+    response = client.post("/api/sessions", json={field: True})
+
+    assert response.status_code == 422
+    assert "Extra inputs are not permitted" in response.text
 
 
 @pytest.mark.parametrize(("field", "loaded"), [("node_count", 10), ("edge_count", 12)])
-def test_the_api_rejects_an_unverified_mountain_count(field, loaded):
+def test_the_api_rejects_a_forbidden_live_field(field, loaded):
     resolved = client.post(
         "/api/config-options/resolve",
-        json={"mountain": "small-resort", "controller": "none", "skier_count": 20},
+        json={
+            "mountain": "small-resort",
+            "controller": "none",
+            "population": {"skier_count": 20},
+        },
     ).json()
     resolved["mountain"][field] = loaded + 1
 
-    response = client.post("/api/sessions", json={"config": resolved})
+    response = client.post("/api/sessions", json={"mountain_config": resolved})
 
     assert response.status_code == 422
-    assert resolved["mountain"]["path"] in response.text
-    assert field in response.text
-    assert str(loaded + 1) in response.text
-    assert str(loaded) in response.text
+    assert response.status_code == 422
+    assert "Extra inputs are not permitted" in response.text
 
 
 def test_live_configuration_resolution_rejects_an_unknown_choice():
@@ -181,25 +221,32 @@ def test_live_configuration_resolution_rejects_an_incompatible_pair():
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == {
-        "message": "the controller is incompatible with the mountain",
-        "mountain": "small-resort",
-        "controller": "honest",
-    }
+    assert "unknown edge" in response.text
 
 
 @pytest.mark.parametrize("mountain", ["medium-resort", "small-resort"])
 def test_the_shared_controller_resolves_for_each_mountain(mountain: str):
     response = client.post(
         "/api/config-options/resolve",
-        json={"mountain": mountain, "controller": "none", "skier_count": 20},
+        json={
+            "mountain": mountain,
+            "controller": "none",
+            "population": {"skier_count": 20},
+        },
     )
 
     assert response.status_code == 200
     resolved = response.json()
     assert resolved["mountain"]["path"].endswith(f"/{mountain}.yaml")
     assert resolved["controller"]["kind"] == "none"
-    session = client.post("/api/sessions", json={"config": resolved})
+    session = client.post(
+        "/api/sessions",
+        json={
+            "mountain": mountain,
+            "controller": "none",
+            "population": {"skier_count": 20},
+        },
+    )
     assert session.status_code == 201
     deleted = client.delete(f"/api/sessions/{session.json()['session_id']}")
     assert deleted.status_code == 204
@@ -214,10 +261,20 @@ def test_live_session_runs_the_explicit_resolved_configuration():
             "controller": "none",
             "monitor": "none",
             "seed": 17,
-            "skier_count": 20,
+            "population": {"skier_count": 20},
         },
     ).json()
-    response = client.post("/api/sessions", json={"config": resolved})
+    response = client.post(
+        "/api/sessions",
+        json={
+            "mountain": "small-resort",
+            "scenario": "default",
+            "controller": "none",
+            "monitor": "none",
+            "seed": 17,
+            "population": {"skier_count": 20},
+        },
+    )
     assert response.status_code == 201
     session = response.json()
     session_id = session["session_id"]
@@ -238,7 +295,9 @@ def test_live_session_runs_the_explicit_resolved_configuration():
 
 
 def test_live_session_streams_a_complete_population():
-    response = client.post("/api/sessions", json={"seed": 7, "skier_count": 5000})
+    response = client.post(
+        "/api/sessions", json={"seed": 7, "population": {"skier_count": 5000}}
+    )
     assert response.status_code == 201
     session = response.json()
     session_id = session["session_id"]
@@ -297,7 +356,7 @@ def test_the_scene_indices_match_the_live_topology():
 
 
 def test_live_session_rejects_an_invalid_population_size():
-    response = client.post("/api/sessions", json={"skier_count": 10001})
+    response = client.post("/api/sessions", json={"population": {"skier_count": 10001}})
     assert response.status_code == 422
 
 
@@ -308,8 +367,12 @@ def test_unknown_live_session_is_not_found():
 
 
 def test_live_commands_change_only_the_addressed_session():
-    first = client.post("/api/sessions", json={"seed": 7, "skier_count": 20}).json()
-    second = client.post("/api/sessions", json={"seed": 8, "skier_count": 20}).json()
+    first = client.post(
+        "/api/sessions", json={"seed": 7, "population": {"skier_count": 20}}
+    ).json()
+    second = client.post(
+        "/api/sessions", json={"seed": 8, "population": {"skier_count": 20}}
+    ).json()
     first_id = first["session_id"]
     second_id = second["session_id"]
 
@@ -367,7 +430,7 @@ def test_live_commands_change_only_the_addressed_session():
 
 
 def test_live_commands_reject_invalid_values_and_states():
-    response = client.post("/api/sessions", json={"skier_count": 20})
+    response = client.post("/api/sessions", json={"population": {"skier_count": 20}})
     session_id = response.json()["session_id"]
     try:
         assert (
@@ -404,8 +467,12 @@ def test_python_decodes_the_stream_contract_fixture():
 
 def test_failure_demo_streams_one_stable_timeline_marker():
     response = client.post(
-        "/api/sessions",
-        json={"seed": 7, "skier_count": 20, "demo_failure": True},
+        "/api/demo-sessions",
+        json={
+            "seed": 7,
+            "population": {"skier_count": 20},
+            "demo_failure": True,
+        },
     )
     session = response.json()
     session_id = session["session_id"]
@@ -434,8 +501,12 @@ def test_failure_demo_streams_one_stable_timeline_marker():
 
 def test_monitor_demo_streams_one_blocked_rule():
     response = client.post(
-        "/api/sessions",
-        json={"seed": 7, "skier_count": 20, "demo_monitor": True},
+        "/api/demo-sessions",
+        json={
+            "seed": 7,
+            "population": {"skier_count": 20},
+            "demo_monitor": True,
+        },
     )
     session_id = response.json()["session_id"]
 
@@ -450,8 +521,12 @@ def test_monitor_demo_streams_one_blocked_rule():
 
 def test_an_approval_demo_pauses_and_accepts_the_proposal():
     response = client.post(
-        "/api/sessions",
-        json={"seed": 7, "skier_count": 20, "demo_approval": True},
+        "/api/demo-sessions",
+        json={
+            "seed": 7,
+            "population": {"skier_count": 20},
+            "demo_approval": True,
+        },
     )
     session_id = response.json()["session_id"]
 
@@ -483,8 +558,12 @@ def test_an_approval_demo_pauses_and_accepts_the_proposal():
 
 def test_an_invalid_manual_replacement_is_rejected():
     response = client.post(
-        "/api/sessions",
-        json={"seed": 7, "skier_count": 20, "demo_approval": True},
+        "/api/demo-sessions",
+        json={
+            "seed": 7,
+            "population": {"skier_count": 20},
+            "demo_approval": True,
+        },
     )
     session_id = response.json()["session_id"]
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:

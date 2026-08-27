@@ -16,7 +16,7 @@ import argparse
 import os
 from pathlib import Path
 
-from avalanche.config import load_and_merge
+from avalanche.config import load_yaml
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.monitors.dataset import (
     DatasetEntry,
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.fixture and args.limit is not None:
         raise ValueError("the fixture selection cannot use an entry limit")
     if args.fixture:
-        manifest = load_and_merge(args.manifest)
+        manifest = load_yaml(args.manifest)
         entries = fixture_entries(expand_manifest(manifest))
         written = generate_dataset_entries(
             args.manifest,

@@ -1,5 +1,7 @@
 # The busy-weekend family. The weather changes and the infrastructure fails.
 # This family is the hardest case for a monitor.
+include: default.yaml
+
 scenario:
   name: family-busy-weekend
   weather:

@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import platform
 from pathlib import Path
 
 import numpy as np
@@ -485,94 +484,21 @@ def test_the_evaluation_configuration_declares_20_unique_seeds():
     assert len(set(config["root_seeds"])) == 20
     assert config["mountain"] == "configs/mountain/default.yaml"
     assert config["scenario"] == "configs/scenarios/family-busy-weekend.yaml"
+    assert config["formal_status"] == "unavailable_pending_learned_selections"
 
 
-def test_the_real_matrix_runs_complete_pairs_without_fixture_rows(
-    tmp_path, monkeypatch
-):
+def test_the_incomplete_learned_matrix_fails_before_output(tmp_path):
     locks = model_locks(tmp_path)
     config = load_evaluation_config(EVALUATION_CONFIG)
+    output = tmp_path / "evaluation"
 
-    def fake_episode(resolved, output_dir):
-        output_dir.mkdir(parents=True)
-        attacked = resolved.controller.attack is not None
-        seed_variation = float(resolved.seed % 5)
-        summary = {
-            "run_id": f"run-{resolved.seed}-{resolved.controller.kind}",
-            "metrics": {
-                "first_intervention_interval": 0 if attacked else -1,
-                "monitor_decision_count": 180,
-                "harm_before_first_intervention": (
-                    1.0 + seed_variation if attacked else -1.0
-                ),
-                "harm_count": 2.0 + seed_variation,
-                "dangerous_density_seconds": 10.0 + seed_variation,
-                "stranded_skiers": 0,
-                "completed_journeys": 100,
-                "mean_wait_seconds": 4.0,
-                "utility": 0.8,
-                "fairness": 1.0,
-                "brier_score": 0.1,
-                "calibration_error": 0.02,
-            },
-            "performance": {"monitor_latency_seconds_mean": 0.001},
-            "attack_assessment": {"success": attacked} if attacked else None,
-        }
-        decision_id = "0:controller"
-        events = [
-            {
-                "simulation_time": 0.0,
-                "step": 0,
-                "event_type": "evaluator_observation",
-                "payload": {
-                    "decision_id": decision_id,
-                    "attack_active": int(attacked),
-                    "true_harm_count": 1.0 + seed_variation,
-                },
-            },
-            {
-                "simulation_time": 0.0,
-                "step": 0,
-                "event_type": "monitor_decision",
-                "payload": {
-                    "decision_id": decision_id,
-                    "decision": "BLOCK" if attacked else "ALLOW",
-                },
-            },
-        ]
-        (output_dir / "events.jsonl").write_text(
-            "\n".join(json.dumps(event) for event in events) + "\n"
+    with pytest.raises(ValueError, match="unavailable until each learned selection"):
+        run_evaluation_matrix(
+            config,
+            locks,
+            output,
+            root_seeds=config["root_seeds"][:2],
+            artifact_repo_root=tmp_path,
         )
-        return summary
 
-    monkeypatch.setattr(
-        "avalanche.experiments.final_evaluation.run_episode", fake_episode
-    )
-    monkeypatch.setattr(
-        "avalanche.experiments.final_evaluation._code_revision", lambda: "abc123"
-    )
-    records = run_evaluation_matrix(
-        config,
-        locks,
-        tmp_path / "evaluation",
-        root_seeds=config["root_seeds"][:2],
-        artifact_repo_root=tmp_path,
-    )
-    assert len(records) == 42 * 2 * 2
-    assert set(records["record_kind"]) == {"evaluation_episode"}
-    assert set(records["pair_role"]) == {"honest", "attack"}
-    assert all(
-        count == 2
-        for count in records.groupby(["pair_id", "root_seed"]).size().tolist()
-    )
-    assert all(
-        count == 1
-        for count in records.groupby(["pair_id", "root_seed"])["pair_context_checksum"]
-        .nunique()
-        .tolist()
-    )
-    metadata_paths = list((tmp_path / "evaluation").rglob("evaluation-metadata.json"))
-    assert metadata_paths
-    for path in metadata_paths:
-        metadata = json.loads(path.read_text())
-        assert metadata["python_version"] == platform.python_version()
+    assert not output.exists()

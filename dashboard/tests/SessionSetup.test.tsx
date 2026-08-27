@@ -8,7 +8,13 @@ const options = {
         { id: "medium-resort", label: "Val Tarin" },
         { id: "small-resort", label: "Small Resort" },
     ],
-    scenarios: [{ id: "default", label: "Default" }],
+    scenarios: [
+        {
+            id: "default",
+            label: "Default",
+            compatible_mountain_ids: ["medium-resort", "small-resort"],
+        },
+    ],
     controllers: [
         {
             id: "honest",
@@ -29,7 +35,13 @@ const options = {
             controller: { kind: "honest" },
         },
     ],
-    monitors: [{ id: "none", label: "None" }],
+    monitors: [
+        {
+            id: "none",
+            label: "None",
+            compatible_mountain_ids: ["medium-resort", "small-resort"],
+        },
+    ],
 } as unknown as ConfigOptionsResponse;
 
 const selection = {
@@ -38,7 +50,9 @@ const selection = {
     controller: "honest",
     monitor: "none",
     seed: 0,
-    skier_count: 20,
+    population: { skier_count: 20 },
+    frame_interval_ms: 250,
+    simulation_speed: 20,
 };
 
 describe("SessionSetup", () => {

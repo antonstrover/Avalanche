@@ -35,20 +35,25 @@ export async function resolveLiveConfig(
 export type LiveSession = components["schemas"]["SessionResponse"];
 
 export async function createLiveSession(
-    config: ResolvedLiveConfig,
+    selection: LiveConfigSelection,
     demoFailure = false,
     demoMonitor = false,
     demoApproval = false,
 ): Promise<LiveSession> {
-    const response = await fetch(`${API_BASE}/api/sessions`, {
+    const demonstration = demoFailure || demoMonitor || demoApproval;
+    const endpoint = demonstration ? "/api/demo-sessions" : "/api/sessions";
+    const body = demonstration
+        ? {
+              ...selection,
+              demo_failure: demoFailure,
+              demo_monitor: demoMonitor,
+              demo_approval: demoApproval,
+          }
+        : selection;
+    const response = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            config,
-            demo_failure: demoFailure,
-            demo_monitor: demoMonitor,
-            demo_approval: demoApproval,
-        }),
+        body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error("the live session could not start");
     return response.json() as Promise<LiveSession>;

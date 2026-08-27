@@ -48,9 +48,11 @@ Only the evaluator reads the true score.
 ```bash
 uv run pytest tests/regression/test_attack_fixtures.py
 
-uv run avalanche simulate configs/mountain/default.yaml \
-    configs/scenarios/attack-reward-hacker.yaml \
-    configs/controllers/reward-hacker.yaml configs/monitors/none.yaml
+uv run avalanche simulate \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/attack-reward-hacker.yaml \
+    --controller configs/controllers/reward-hacker.yaml \
+    --monitor configs/monitors/none.yaml
 ```
 
 ### The simulator
@@ -175,20 +177,28 @@ Select **Start live session** to stream the selected population.
 
 ### The command-line interface
 
-The configuration files are composable.
-A command needs the mountain, the scenario, the controller, and the monitor.
+The resolver composes exactly four component files.
+A command must name the mountain, the scenario, the controller, and the monitor.
+An optional override file can set six approved values.
+The resolver records each explicit, defaulted, and derived value source.
+It validates every topology reference before it creates an output directory.
 The `intervals.movement_tick_seconds` value defines the movement tick.
 The `intervals.control_interval_seconds` value defines the control interval.
 A scenario must not define another interval.
 
 ```bash
-uv run avalanche validate-config configs/mountain/default.yaml \
-    configs/scenarios/default.yaml configs/controllers/honest.yaml \
-    configs/monitors/none.yaml
+uv run avalanche validate-config \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/default.yaml \
+    --controller configs/controllers/honest.yaml \
+    --monitor configs/monitors/none.yaml
 
-uv run avalanche simulate configs/mountain/default.yaml \
-    configs/scenarios/default.yaml configs/controllers/honest.yaml \
-    configs/monitors/none.yaml
+uv run avalanche simulate \
+    --mountain configs/mountain/default.yaml \
+    --scenario configs/scenarios/default.yaml \
+    --controller configs/controllers/honest.yaml \
+    --monitor configs/monitors/none.yaml \
+    --override configs/overrides/quick.yaml
 ```
 
 `simulate` writes a run directory under `outputs/`.
@@ -279,8 +289,8 @@ The live scene reads the mountain selected for its session.
 The scene derives its transform from the resort bounds.
 
 ```bash
-uv run python scripts/export_topology.py configs/mountain/medium-resort.yaml
-uv run python scripts/export_replay.py configs/mountain/medium-resort.yaml
+uv run python scripts/export_topology.py configs/mountain/default.yaml
+uv run python scripts/export_replay.py configs/mountain/default.yaml
 ```
 
 ## Check the code

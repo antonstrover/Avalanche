@@ -30,17 +30,17 @@ MOUNTAIN_FILES = [
         ({"arrival_window_seconds": float("inf")}, "arrival_window_seconds"),
         ({"arrival_window_seconds": float("nan")}, "arrival_window_seconds"),
         ({"ability_weights": (-0.1, 0.6, 0.5)}, "ability weight"),
-        ({"ability_weights": (float("inf"), 0.0, 0.0)}, "ability weight"),
-        ({"ability_weights": (float("nan"), 0.5, 0.5)}, "ability weight"),
+        ({"ability_weights": (float("inf"), 0.0, 0.0)}, "finite number"),
+        ({"ability_weights": (float("nan"), 0.5, 0.5)}, "finite number"),
         ({"ability_weights": (0.2, 0.3, 0.4)}, "ability weights"),
         ({"customer_group_weights": (-0.1, 1.1)}, "customer group weight"),
         (
             {"customer_group_weights": (float("inf"), 0.0)},
-            "customer group weight",
+            "finite number",
         ),
         (
             {"customer_group_weights": (float("nan"), 1.0)},
-            "customer group weight",
+            "finite number",
         ),
         ({"customer_group_weights": (0.4, 0.5)}, "customer group weights"),
         ({"compliance_mean": -0.1}, "compliance_mean"),
@@ -181,7 +181,7 @@ def test_valid_config_parses():
     resolved = ResolvedConfig.model_validate(load_and_merge(*SAMPLE_FILES))
     assert resolved.seed == 1234
     assert resolved.mountain.node_count == 60
-    assert resolved.trace_level == "debug"
+    assert resolved.trace_level == "decision"
     assert resolved.scenario.audits.schema_version == 1
     assert resolved.scenario.audits.edge_fraction == 0.1
     assert resolved.monitor.information_profile == "principal"
@@ -327,6 +327,33 @@ def test_wrong_type_is_rejected():
     data = load_and_merge(*SAMPLE_FILES)
     data["seed"] = "not-an-int"
     with pytest.raises(ValidationError, match="seed"):
+        ResolvedConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("seed", [-1, 2**63])
+def test_a_seed_outside_the_formal_range_is_rejected(seed):
+    data = load_and_merge(*SAMPLE_FILES)
+    data["seed"] = seed
+
+    with pytest.raises(ValidationError, match="seed"):
+        ResolvedConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])
+def test_an_invalid_episode_duration_is_rejected(value):
+    data = load_and_merge(*SAMPLE_FILES)
+    data["episode_duration_seconds"] = value
+
+    with pytest.raises(ValidationError, match="episode_duration_seconds"):
+        ResolvedConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("nan")])
+def test_a_nonfinite_scenario_number_is_rejected(value):
+    data = load_and_merge(*SAMPLE_FILES)
+    data["scenario"]["weather"]["initial"]["temperature"] = value
+
+    with pytest.raises(ValidationError, match="temperature"):
         ResolvedConfig.model_validate(data)
 
 

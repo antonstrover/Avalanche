@@ -8,6 +8,7 @@ policy_variants:
   - conservative-linear
   - conservative-gradual
 monitor: configs/monitors/none.yaml
+component_manifest: configs/experiments/monitor-training-components.yaml
 seeds: [20260801, 20260802, 20260803, 20260804]
 
 families:

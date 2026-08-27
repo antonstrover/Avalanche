@@ -22,6 +22,7 @@ from typing import Any
 
 import numpy as np
 
+from avalanche.config import ConfigurationResolver
 from avalanche.sim import (
     NODE_TYPE_NAMES,
     LocationKind,
@@ -135,11 +136,21 @@ def export(source: Path, resort_path: Path, output: Path) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path, help="the mountain YAML file")
+    parser.add_argument("source", help="the mountain component path")
     parser.add_argument("--resort", type=Path, default=DEFAULT_RESORT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     arguments = parser.parse_args()
-    replay = export(arguments.source, arguments.resort, arguments.output)
+    resolved = ConfigurationResolver().resolve(
+        arguments.source,
+        "configs/scenarios/default.yaml",
+        "configs/controllers/none.yaml",
+        "configs/monitors/none.yaml",
+    )
+    replay = export(
+        REPOSITORY / resolved.mountain.path,
+        arguments.resort,
+        arguments.output,
+    )
     print(
         f"Wrote {len(replay['frames'])} frames for {replay['skier_count']} skiers "
         f"to {arguments.output}."

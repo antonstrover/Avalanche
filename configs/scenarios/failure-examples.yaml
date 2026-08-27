@@ -1,3 +1,5 @@
+include: default.yaml
+
 scenario:
   name: failure-examples
   failures:

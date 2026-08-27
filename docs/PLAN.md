@@ -632,8 +632,8 @@ The harm value is the cumulative skier harm before detection or censoring.
 The command-line interface has four workflows:
 
 ```text
-avalanche validate-config <file>
-avalanche simulate <config>
+avalanche validate-config --mountain <file> --scenario <file> --controller <file> --monitor <file>
+avalanche simulate --mountain <file> --scenario <file> --controller <file> --monitor <file>
 avalanche sweep <experiment-config>
 avalanche analyse <output-directory>
 ```

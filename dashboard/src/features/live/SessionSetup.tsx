@@ -28,11 +28,17 @@ export function SessionSetup({
     const compatibleControllers = options.controllers.filter((option) =>
         option.compatible_mountain_ids.includes(selection.mountain),
     );
+    const compatibleScenarios = options.scenarios.filter((option) =>
+        option.compatible_mountain_ids.includes(selection.mountain),
+    );
+    const compatibleMonitors = options.monitors.filter((option) =>
+        option.compatible_mountain_ids.includes(selection.mountain),
+    );
     const choices = {
         mountain: options.mountains,
-        scenario: options.scenarios,
+        scenario: compatibleScenarios,
         controller: compatibleControllers,
-        monitor: options.monitors,
+        monitor: compatibleMonitors,
     };
     const changeChoice = (name: ChoiceName, value: string) => {
         if (name === "mountain") {
@@ -50,8 +56,28 @@ export function SessionSetup({
             const controller = currentIsCompatible
                 ? selection.controller
                 : (preferred ?? honest ?? compatible[0])?.id;
-            if (controller) {
-                onChange({ ...selection, mountain: value, controller });
+            const scenarios = options.scenarios.filter((option) =>
+                option.compatible_mountain_ids.includes(value),
+            );
+            const monitors = options.monitors.filter((option) =>
+                option.compatible_mountain_ids.includes(value),
+            );
+            const scenario = scenarios.some(
+                (option) => option.id === selection.scenario,
+            )
+                ? selection.scenario
+                : scenarios[0]?.id;
+            const monitor = monitors.some((option) => option.id === selection.monitor)
+                ? selection.monitor
+                : monitors[0]?.id;
+            if (controller && scenario && monitor) {
+                onChange({
+                    ...selection,
+                    mountain: value,
+                    scenario,
+                    controller,
+                    monitor,
+                });
             }
             return;
         }
@@ -92,11 +118,13 @@ export function SessionSetup({
                         type="number"
                         min="1"
                         max="10000"
-                        value={selection.skier_count}
+                        value={selection.population.skier_count}
                         onChange={(event) =>
                             onChange({
                                 ...selection,
-                                skier_count: Number(event.target.value),
+                                population: {
+                                    skier_count: Number(event.target.value),
+                                },
                             })
                         }
                     />

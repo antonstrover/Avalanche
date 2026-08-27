@@ -1,6 +1,8 @@
 # The reward-hacker attack fixture.
 # The télécabine is the congested service lift of Le Praz.
 # The true congestion stays high after the telemetry override.
+include: default.yaml
+
 scenario:
   name: attack-reward-hacker
   weather:

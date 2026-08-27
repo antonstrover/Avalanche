@@ -1,6 +1,8 @@
 # The sleeper attack fixture.
 # The Grand Col lift is the escape route out of the Bonneval valley.
 # The trigger follows a stable honest period.
+include: default.yaml
+
 scenario:
   name: attack-sleeper-saboteur
   weather:

@@ -21,7 +21,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from avalanche.config import ResolvedConfig, load_and_merge, run_id
+from avalanche.config import (
+    ConfigurationResolver,
+    ResolvedConfig,
+    load_yaml,
+    run_id,
+)
 from avalanche.config.models import ControllerConfig
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
@@ -124,6 +129,14 @@ class DatasetEntry:
 
 
 @dataclass(frozen=True)
+class ResolvedDatasetEntry:
+    """Pair one matrix entry with its validated configuration."""
+
+    entry: DatasetEntry
+    resolved: ResolvedConfig
+
+
+@dataclass(frozen=True)
 class LabelSelection:
     """Store validated rows and the number of removed unknown labels."""
 
@@ -194,8 +207,22 @@ def run_entry(
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> pd.DataFrame:
     """Run one episode and return its labelled rows."""
+    return _run_resolved_entry(
+        ResolvedDatasetEntry(entry, resolve_entry(entry)),
+        horizon,
+        information_profile,
+    )
+
+
+def _run_resolved_entry(
+    selected: ResolvedDatasetEntry,
+    horizon: int,
+    information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+) -> pd.DataFrame:
+    """Run one previously validated dataset entry."""
+    entry = selected.entry
     profile = InformationProfile(information_profile)
-    resolved = resolve_entry(entry)
+    resolved = selected.resolved
     mountain_path = Path(resolved.mountain.path)
     if not mountain_path.is_absolute():
         mountain_path = REPO_ROOT / mountain_path
@@ -300,17 +327,26 @@ def reference_controller(resolved: ResolvedConfig) -> ControllerConfig:
 
 def resolve_entry(entry: DatasetEntry) -> ResolvedConfig:
     """Resolve one matrix entry into an immutable run configuration."""
-    merged = load_and_merge(*(REPO_ROOT / path for path in entry.config_paths))
-    merged["seed"] = entry.seed
+    if len(entry.config_paths) != 4:
+        raise ValueError("a dataset entry must select four configuration components")
+    mountain, scenario, controller, monitor = entry.config_paths
+    resolver = ConfigurationResolver()
+    resolved = resolver.resolve_live(
+        mountain,
+        scenario,
+        controller,
+        monitor,
+        seed=entry.seed,
+    )
     if (
-        entry.attack_strength is not None
-        and merged["controller"].get("attack") is not None
+        entry.policy_variant is not None
+        and resolved.controller.policy_variant != entry.policy_variant
     ):
-        attack = merged["controller"]["attack"]
-        attack["action_budget"]["strength"] = entry.attack_strength
-    if entry.policy_variant is not None:
-        merged["controller"]["policy_variant"] = entry.policy_variant
-    return ResolvedConfig.model_validate(merged)
+        raise ValueError("the controller component has the wrong policy variant")
+    attack = resolved.controller.attack
+    if attack is not None and attack.action_budget.strength != entry.attack_strength:
+        raise ValueError("the controller component has the wrong attack strength")
+    return resolved
 
 
 def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
@@ -323,6 +359,7 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     families = _required_axis(manifest, "families")
     mountains = _required_axis(manifest, "mountains")
     _repo_path(str(manifest["monitor"]))
+    components = _component_manifest(manifest)
     controllers = _resolved_manifest_controllers(mountains)
     if controllers and not strengths:
         raise ValueError("attack strengths are required for attack controllers")
@@ -367,7 +404,9 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                         config_paths=(
                                             _repo_relative(mountain["config"]),
                                             _repo_relative(family["config"]),
-                                            _repo_relative(mountain["honest_config"]),
+                                            _honest_component(
+                                                components, mountain["id"], variant
+                                            ),
                                             _repo_relative(manifest["monitor"]),
                                         ),
                                         pair_role="honest",
@@ -378,8 +417,13 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                         config_paths=(
                                             _repo_relative(mountain["config"]),
                                             _repo_relative(family["config"]),
-                                            _repo_relative(mountain["honest_config"]),
-                                            _repo_relative(controller["config"]),
+                                            _attack_component(
+                                                components,
+                                                mountain["id"],
+                                                controller["id"],
+                                                variant,
+                                                strength,
+                                            ),
                                             _repo_relative(manifest["monitor"]),
                                         ),
                                         pair_role="attack",
@@ -400,6 +444,47 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     return entries
 
 
+def _component_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Load the explicit training component selections."""
+    path = _repo_path(str(manifest["component_manifest"]))
+    components = load_yaml(path)
+    if components.get("component_version") != 1:
+        raise ValueError("the training component manifest version is incompatible")
+    return components
+
+
+def _honest_component(components: dict[str, Any], mountain: str, variant: str) -> str:
+    """Return one declared honest controller component."""
+    try:
+        path = components["honest"][mountain][variant]
+    except KeyError as error:
+        raise ValueError("the honest controller component is not declared") from error
+    return _repo_relative(str(path))
+
+
+def _attack_component(
+    components: dict[str, Any],
+    mountain: str,
+    controller: str,
+    variant: str,
+    strength: float,
+) -> str:
+    """Return one declared attack controller component."""
+    try:
+        selections = components["attacks"][mountain][controller]
+    except KeyError as error:
+        raise ValueError("the attack controller component is not declared") from error
+    matches = [
+        value
+        for value in selections
+        if value.get("policy_variant") == variant
+        and float(value.get("attack_strength", -1.0)) == strength
+    ]
+    if len(matches) != 1:
+        raise ValueError("the attack controller component selection is not unique")
+    return _repo_relative(str(matches[0]["config"]))
+
+
 def _required_axis(manifest: dict[str, Any], name: str) -> tuple[Any, ...]:
     """Return one declared axis and reject an empty value."""
     values = tuple(manifest.get(name, ()))
@@ -417,7 +502,9 @@ def _resolved_manifest_controllers(
         _repo_path(str(mountain["config"]))
         honest_path = _repo_path(str(mountain["honest_config"]))
         honest = ControllerConfig.model_validate(
-            load_and_merge(honest_path)["controller"]
+            ConfigurationResolver().component_values(
+                "controller", honest_path.relative_to(REPO_ROOT).as_posix()
+            )["controller"]
         )
         if honest.kind != "honest" or honest.attack is not None:
             raise ValueError("the matrix honest controller must contain no attack")
@@ -427,7 +514,9 @@ def _resolved_manifest_controllers(
                 raise ValueError("the matrix controller uses the obsolete attack flag")
             controller_path = _repo_path(str(controller["config"]))
             config = ControllerConfig.model_validate(
-                load_and_merge(honest_path, controller_path)["controller"]
+                ConfigurationResolver().component_values(
+                    "controller", controller_path.relative_to(REPO_ROOT).as_posix()
+                )["controller"]
             )
             if config.attack is None:
                 raise ValueError("each matrix attack controller needs an attack record")
@@ -558,7 +647,7 @@ def generate_dataset(
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> Path:
     """Run the declared matrix and write one labelled Parquet file."""
-    manifest = load_and_merge(manifest_path)
+    manifest = load_yaml(manifest_path)
     entries = expand_manifest(manifest)[:limit]
     return generate_dataset_entries(
         manifest_path,
@@ -580,11 +669,14 @@ def generate_dataset_entries(
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
 ) -> Path:
     """Run a declared entry subset and write its dataset artifacts."""
-    manifest = source_manifest or load_and_merge(manifest_path)
+    manifest = source_manifest or load_yaml(manifest_path)
     horizon = int(manifest.get("harm_horizon_intervals", 5))
     _validate_pairs(entries)
+    selected = tuple(
+        ResolvedDatasetEntry(entry, resolve_entry(entry)) for entry in entries
+    )
     profile = InformationProfile(information_profile)
-    frames = _run_entries(entries, horizon, workers, profile)
+    frames = _run_entries(selected, horizon, workers, profile)
     if not frames:
         raise ValueError("the dataset entry subset must not be empty")
     frame = pd.concat(frames, ignore_index=True)
@@ -603,19 +695,22 @@ def generate_dataset_entries(
 
 
 def _run_entries(
-    entries: Sequence[DatasetEntry],
+    entries: Sequence[ResolvedDatasetEntry],
     horizon: int,
     workers: int,
     information_profile: InformationProfile,
 ) -> list[pd.DataFrame]:
     """Run each entry, in one process or in a pool."""
     if workers <= 1:
-        return [run_entry(entry, horizon, information_profile) for entry in entries]
+        return [
+            _run_resolved_entry(entry, horizon, information_profile)
+            for entry in entries
+        ]
     # ponytail: a plain pool. The sweep executor of the next stage supersedes it.
     with ProcessPoolExecutor(max_workers=workers) as pool:
         return list(
             pool.map(
-                run_entry,
+                _run_resolved_entry,
                 entries,
                 [horizon] * len(entries),
                 [information_profile] * len(entries),
@@ -640,8 +735,14 @@ def _validate_pairs(entries: Sequence[DatasetEntry]) -> None:
 def pair_context_checksum(entry: DatasetEntry) -> str:
     """Return the paired weather, failure, demand, event, and policy identity."""
     resolved = resolve_entry(entry).model_dump(mode="json")
-    resolved.pop("controller")
-    resolved.pop("monitor")
+    for field in (
+        "controller",
+        "monitor",
+        "provenance",
+        "resolved_configuration_sha256",
+        "scientific_configuration_sha256",
+    ):
+        resolved.pop(field)
     canonical = json.dumps(
         {"resolved": resolved, "policy_variant": entry.policy_variant},
         sort_keys=True,

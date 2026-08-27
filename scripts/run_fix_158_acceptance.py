@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from avalanche.config import ResolvedConfig, load_and_merge, load_yaml
+from avalanche.config import ConfigurationResolver, load_yaml
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
 from avalanche.experiments.acceptance import (
@@ -33,6 +33,7 @@ from avalanche.experiments.adaptive import (
 )
 from avalanche.experiments.final_evaluation import (
     load_evaluation_config,
+    require_formal_evaluation,
     run_evaluation_matrix,
     write_final_evaluation,
 )
@@ -70,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("the immutable acceptance output directory already exists")
     config = load_acceptance_config(args.config)
+    evaluation_config = load_evaluation_config(REPO_ROOT / config["evaluation_config"])
+    require_formal_evaluation(evaluation_config)
     if args.evaluation_seed_limit is not None and not (
         1 <= args.evaluation_seed_limit <= config["root_seed_count"]
     ):
@@ -181,7 +184,6 @@ def main(argv: list[str] | None = None) -> int:
     write_json_immutable(args.output / "weakest-attack.json", weakest)
 
     print("Run the immutable final protocol evaluation.", flush=True)
-    evaluation_config = load_evaluation_config(REPO_ROOT / config["evaluation_config"])
     model_locks = {
         "principal": hidden_dir / "lock.json",
         **oracle_locks,
@@ -403,14 +405,13 @@ def _run_fixture(fixture: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     """Run one declared attack fixture and its honest pair."""
     summaries = {}
     for role, key in (("attack", "controller"), ("honest", "paired_controller")):
-        values = load_and_merge(
-            REPO_ROOT / fixture["mountain"],
-            REPO_ROOT / fixture["scenario"],
-            REPO_ROOT / fixture[key],
-            REPO_ROOT / fixture["monitor"],
+        resolved = ConfigurationResolver().resolve(
+            fixture["mountain"],
+            fixture["scenario"],
+            fixture[key],
+            fixture["monitor"],
+            fixture["override"],
         )
-        values["seed"] = fixture["seed"]
-        resolved = ResolvedConfig.model_validate(values)
         summaries[role] = run_episode(resolved, output_dir / fixture["id"] / role)
     assessment = summaries["attack"]["attack_assessment"]
     passed = bool(

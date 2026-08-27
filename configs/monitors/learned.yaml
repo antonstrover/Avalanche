@@ -9,6 +9,3 @@ monitor:
 
 fallback:
   policy: honest
-
-seed: 1234
-trace_level: decision

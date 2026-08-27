@@ -81,6 +81,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/demo-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create one display-only demonstration session. */
+        post: operations["create_demo_session_api_demo_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/approvals/{decision_id}": {
         parameters: {
             query?: never;
@@ -558,11 +575,51 @@ export interface components {
              * @default 0
              */
             seed: number;
+            /** Episode Duration Seconds */
+            episode_duration_seconds?: number | null;
+            /**
+             * @default {
+             *       "skier_count": 5000
+             *     }
+             */
+            population: components["schemas"]["LivePopulationOverride"];
+            /** Trace Level */
+            trace_level?: ("debug" | "decision" | "summary") | null;
+            /**
+             * Frame Interval Ms
+             * @default 250
+             */
+            frame_interval_ms: number;
+            /**
+             * Simulation Speed
+             * @default 20
+             */
+            simulation_speed: number;
+        };
+        /**
+         * LivePopulationOverride
+         * @description Set the live skier count.
+         */
+        LivePopulationOverride: {
             /**
              * Skier Count
              * @default 5000
              */
             skier_count: number;
+        };
+        /**
+         * ModelLockReference
+         * @description Identify one content-addressed formal model selection.
+         */
+        ModelLockReference: {
+            /** Registry Path */
+            registry_path: string;
+            /** Registry Sha256 */
+            registry_sha256: string;
+            /** Selection Manifest Path */
+            selection_manifest_path: string;
+            /** Selection Manifest Sha256 */
+            selection_manifest_sha256: string;
         };
         /** MonitorConfig */
         MonitorConfig: {
@@ -582,8 +639,7 @@ export interface components {
              * @default 1
              */
             decision_threshold: number;
-            /** Model Path */
-            model_path?: string | null;
+            model_lock?: components["schemas"]["ModelLockReference"] | null;
             /** Feature Blocks */
             feature_blocks?: ("action" | "fallback" | "state" | "context" | "true-state" | "prediction" | "history")[] | null;
             /**
@@ -647,13 +703,10 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Compatible Mountain Ids */
+            compatible_mountain_ids: string[];
             monitor: components["schemas"]["MonitorConfig"];
             fallback: components["schemas"]["FallbackConfig"];
-            /**
-             * Trace Level
-             * @enum {string}
-             */
-            trace_level: "debug" | "decision" | "summary";
         };
         /** MountainConfig */
         MountainConfig: {
@@ -822,6 +875,43 @@ export interface components {
              * @default 60
              */
             snapshot_interval_seconds: number;
+            /**
+             * Output Root
+             * @default outputs
+             */
+            output_root: string;
+            /**
+             * @default {
+             *       "worker_count": 1
+             *     }
+             */
+            runtime: components["schemas"]["RuntimeConfig"];
+            /**
+             * Provenance
+             * @default []
+             */
+            provenance: components["schemas"]["ValueProvenance"][];
+            /**
+             * Resolved Configuration Sha256
+             * @default 0000000000000000000000000000000000000000000000000000000000000000
+             */
+            resolved_configuration_sha256: string;
+            /**
+             * Scientific Configuration Sha256
+             * @default 0000000000000000000000000000000000000000000000000000000000000000
+             */
+            scientific_configuration_sha256: string;
+        };
+        /**
+         * RuntimeConfig
+         * @description Configure execution without changing scientific behavior.
+         */
+        RuntimeConfig: {
+            /**
+             * Worker Count
+             * @default 1
+             */
+            worker_count: number;
         };
         /** ScenarioConfig */
         ScenarioConfig: {
@@ -899,6 +989,8 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Compatible Mountain Ids */
+            compatible_mountain_ids: string[];
             scenario: components["schemas"]["ScenarioConfig"];
             intervals: components["schemas"]["IntervalsConfig"];
             /** Episode Duration Seconds */
@@ -925,15 +1017,53 @@ export interface components {
          */
         SessionCreate: {
             /**
+             * Mountain
+             * @default medium-resort
+             */
+            mountain: string;
+            /**
+             * Scenario
+             * @default default
+             */
+            scenario: string;
+            /**
+             * Controller
+             * @default honest
+             */
+            controller: string;
+            /**
+             * Monitor
+             * @default none
+             */
+            monitor: string;
+            /**
              * Seed
              * @default 0
              */
             seed: number;
+            /** Episode Duration Seconds */
+            episode_duration_seconds?: number | null;
             /**
-             * Skier Count
-             * @default 5000
+             * @default {
+             *       "skier_count": 5000
+             *     }
              */
-            skier_count: number;
+            population: components["schemas"]["LivePopulationOverride"];
+            /** Trace Level */
+            trace_level?: ("debug" | "decision" | "summary") | null;
+            /**
+             * Frame Interval Ms
+             * @default 250
+             */
+            frame_interval_ms: number;
+            /**
+             * Simulation Speed
+             * @default 20
+             */
+            simulation_speed: number;
+        };
+        /** Select isolated display-only demonstration behaviour. */
+        DemoSessionCreate: components["schemas"]["SessionCreate"] & {
             /**
              * Demo Failure
              * @default false
@@ -949,7 +1079,6 @@ export interface components {
              * @default false
              */
             demo_approval: boolean;
-            config?: components["schemas"]["ResolvedConfig"] | null;
         };
         /**
          * SessionResponse
@@ -988,6 +1117,41 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * ValueProvenance
+         * @description Record one explicit, defaulted, or derived value source.
+         */
+        ValueProvenance: {
+            /** Pointer */
+            pointer: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "explicit" | "schema_default" | "derived";
+            /**
+             * Owner
+             * @enum {string}
+             */
+            owner: "mountain" | "scenario" | "controller" | "monitor" | "override" | "resolver";
+            /** Source Path */
+            source_path?: string | null;
+            /** Line */
+            line?: number | null;
+            /** Column */
+            column?: number | null;
+            /** Source Sha256 */
+            source_sha256?: string | null;
+            /** Schema Path */
+            schema_path?: string | null;
+            /** Formula Version */
+            formula_version?: string | null;
+            /**
+             * Input Paths
+             * @default []
+             */
+            input_paths: string[];
         };
         /**
          * WeatherConfig
@@ -1229,6 +1393,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_demo_session_api_demo_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DemoSessionCreate"];
             };
         };
         responses: {

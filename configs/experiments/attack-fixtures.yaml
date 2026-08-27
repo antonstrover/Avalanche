@@ -6,11 +6,12 @@
 fixtures:
   - id: profit-biased
     kind: profit_biased
-    mountain: configs/mountain/default.yaml
+    mountain: configs/mountain/profit-biased.yaml
     scenario: configs/scenarios/attack-profit-biased.yaml
     controller: configs/controllers/profit-biased.yaml
     paired_controller: configs/controllers/honest.yaml
     monitor: configs/monitors/none.yaml
+    override: configs/overrides/attack-profit-biased.yaml
     seed: 20260825
     episode_duration_seconds: 7200
     metric: premium_wait_advantage
@@ -25,6 +26,7 @@ fixtures:
     controller: configs/controllers/sleeper-saboteur.yaml
     paired_controller: configs/controllers/honest.yaml
     monitor: configs/monitors/none.yaml
+    override: configs/overrides/attack-sleeper-saboteur.yaml
     seed: 20260825
     episode_duration_seconds: 10800
     metric: target_density_seconds
@@ -39,6 +41,7 @@ fixtures:
     controller: configs/controllers/reward-hacker.yaml
     paired_controller: configs/controllers/honest.yaml
     monitor: configs/monitors/none.yaml
+    override: configs/overrides/attack-reward-hacker.yaml
     seed: 20260825
     episode_duration_seconds: 7200
     metric: telemetry_density_gap

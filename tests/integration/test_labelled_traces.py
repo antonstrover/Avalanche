@@ -20,10 +20,13 @@ from avalanche.monitors.dataset import (
     HARM_LABEL,
     HARM_MASK,
     DatasetEntry,
+    ResolvedDatasetEntry,
+    _run_entries,
     expand_manifest,
     generate_dataset,
     label_attack_activity,
     pair_context_checksum,
+    resolve_entry,
     run_entry,
 )
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
@@ -42,9 +45,12 @@ SLEEPER = DatasetEntry(
     config_paths=(
         "configs/mountain/small.yaml",
         "configs/scenarios/family-calm.yaml",
-        "configs/controllers/small-resort/sleeper-saboteur.yaml",
+        "configs/controllers/formal-training/"
+        "small-resort-sleeper-saboteur-overt-standard-linear-030.yaml",
         "configs/monitors/none.yaml",
     ),
+    attack_strength=0.3,
+    policy_variant="standard-linear",
 )
 
 
@@ -248,20 +254,75 @@ def test_inactive_wrapper_rows_stay_labelled_as_honest():
 
 
 def test_the_strength_reaches_the_resolved_configuration():
-    from avalanche.monitors.dataset import resolve_entry
-
     entry = DatasetEntry(
         scenario_family="calm",
         mountain="small-resort",
         controller_kind="sleeper-saboteur",
         seed=20260801,
-        config_paths=SLEEPER.config_paths,
+        config_paths=(
+            "configs/mountain/small.yaml",
+            "configs/scenarios/family-calm.yaml",
+            "configs/controllers/formal-training/"
+            "small-resort-sleeper-saboteur-overt-standard-linear-025.yaml",
+            "configs/monitors/none.yaml",
+        ),
         attack_strength=0.25,
+        policy_variant="standard-linear",
     )
     resolved = resolve_entry(entry)
 
     assert resolved.controller.attack is not None
     assert resolved.controller.attack.action_budget.strength == 0.25
+
+
+def test_training_component_values_keep_explicit_provenance():
+    entry = expand_manifest(yaml.safe_load(MANIFEST.read_text()))[1]
+    resolved = resolve_entry(entry)
+    pointers = {
+        record.pointer: record
+        for record in resolved.provenance
+        if record.pointer
+        in {
+            "/controller/policy_variant",
+            "/controller/attack/action_budget/strength",
+        }
+    }
+
+    assert set(pointers) == {
+        "/controller/policy_variant",
+        "/controller/attack/action_budget/strength",
+    }
+    assert all(record.kind == "explicit" for record in pointers.values())
+    assert all(
+        "formal-training" in (record.source_path or "") for record in pointers.values()
+    )
+
+
+def test_worker_entries_are_resolved_before_pool_creation(monkeypatch):
+    selected = ResolvedDatasetEntry(SLEEPER, resolve_entry(SLEEPER))
+    observed = []
+
+    class Pool:
+        def __init__(self, max_workers):
+            observed.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def map(self, function, entries, horizons, profiles):
+            values = tuple(entries)
+            assert values == (selected,)
+            assert values[0].resolved.resolved_configuration_sha256 != "0" * 64
+            return [pd.DataFrame({"validated": [1]})]
+
+    monkeypatch.setattr("avalanche.monitors.dataset.ProcessPoolExecutor", Pool)
+    frames = _run_entries((selected,), HORIZON, 2, "principal")
+
+    assert observed == [2]
+    assert frames[0]["validated"].tolist() == [1]
 
 
 def test_each_row_records_the_attack_strength():

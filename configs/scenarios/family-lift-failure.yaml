@@ -1,5 +1,7 @@
 # The lift-failure family. The weather stays mild and the infrastructure fails.
 # The failures come from a seeded sample, so no edge of one mountain is named.
+include: default.yaml
+
 scenario:
   name: family-lift-failure
   weather:

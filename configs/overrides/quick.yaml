@@ -1,0 +1,5 @@
+seed: 7
+episode_duration_seconds: 900
+population:
+  skier_count: 200
+trace_level: summary

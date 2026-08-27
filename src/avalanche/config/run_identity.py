@@ -15,9 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def run_id(resolved: ResolvedConfig) -> str:
-    """Return a stable hash of the resolved configuration."""
-    canonical = json.dumps(resolved.model_dump(), sort_keys=True)
-    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+    """Return the scientific and resolved configuration prefixes."""
+    return (
+        f"{resolved.scientific_configuration_sha256[:12]}-"
+        f"{resolved.resolved_configuration_sha256[:12]}"
+    )
 
 
 def _lock_hash() -> str:
@@ -36,15 +38,16 @@ def _git_commit() -> str:
     return result.stdout.strip()
 
 
-def make_run_dir(
-    resolved: ResolvedConfig, outputs_root: Path = REPO_ROOT / "outputs"
-) -> Path:
+def make_run_dir(resolved: ResolvedConfig, outputs_root: Path | None = None) -> Path:
     """Create the run output directory and write its config and metadata."""
     identity = run_id(resolved)
+    outputs_root = outputs_root or REPO_ROOT / resolved.output_root
     run_dir = outputs_root / identity
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    (run_dir / "config.resolved.yaml").write_text(yaml.safe_dump(resolved.model_dump()))
+    (run_dir / "config.resolved.yaml").write_text(
+        yaml.safe_dump(resolved.model_dump(mode="json"), sort_keys=True)
+    )
 
     metadata = {
         "run_id": identity,
@@ -53,6 +56,8 @@ def make_run_dir(
         "python_version": platform.python_version(),
         "dependency_lock_hash": _lock_hash(),
         "git_commit": _git_commit(),
+        "resolved_configuration_sha256": resolved.resolved_configuration_sha256,
+        "scientific_configuration_sha256": resolved.scientific_configuration_sha256,
     }
     (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 

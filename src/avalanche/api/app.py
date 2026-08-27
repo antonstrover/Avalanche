@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 import msgpack
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from avalanche.api.sessions import (
     MAX_SKIERS,
@@ -16,7 +16,12 @@ from avalanche.api.sessions import (
     snapshot_message,
     validate_replacement_action,
 )
-from avalanche.config import ResolvedConfig, load_yaml, merge_configs
+from avalanche.config import (
+    ConfigurationResolutionError,
+    ConfigurationResolver,
+    ResolvedConfig,
+    load_yaml,
+)
 from avalanche.config.models import (
     ControllerConfig,
     FallbackConfig,
@@ -42,15 +47,37 @@ app = FastAPI(title="avalanche", lifespan=lifespan)
 CONFIG_ROOT = REPO_ROOT / "configs"
 
 
+class LivePopulationOverride(BaseModel):
+    """Set the live skier count."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skier_count: int = Field(default=5000, ge=1, le=MAX_SKIERS)
+
+
 class SessionCreate(BaseModel):
     """Validate the inputs of a live session."""
 
-    seed: int = 0
-    skier_count: int = Field(default=5000, ge=1, le=MAX_SKIERS)
+    model_config = ConfigDict(extra="forbid")
+
+    mountain: str = "medium-resort"
+    scenario: str = "default"
+    controller: str = "honest"
+    monitor: str = "none"
+    seed: int = Field(default=0, ge=0, le=2**63 - 1)
+    episode_duration_seconds: float | None = Field(default=None, gt=0.0)
+    population: LivePopulationOverride = LivePopulationOverride()
+    trace_level: Literal["debug", "decision", "summary"] | None = None
+    frame_interval_ms: int = Field(default=250, ge=16, le=10_000)
+    simulation_speed: float = Field(default=20.0, gt=0.0)
+
+
+class DemoSessionCreate(SessionCreate):
+    """Select isolated display-only demonstration behaviour."""
+
     demo_failure: bool = False
     demo_monitor: bool = False
     demo_approval: bool = False
-    config: ResolvedConfig | None = None
 
 
 class SessionResponse(BaseModel):
@@ -107,6 +134,7 @@ class ScenarioOption(BaseModel):
 
     id: str
     label: str
+    compatible_mountain_ids: tuple[str, ...]
     scenario: ScenarioConfig
     intervals: IntervalsConfig
     episode_duration_seconds: float
@@ -127,9 +155,9 @@ class MonitorOption(BaseModel):
 
     id: str
     label: str
+    compatible_mountain_ids: tuple[str, ...]
     monitor: MonitorConfig
     fallback: FallbackConfig
-    trace_level: Literal["debug", "decision", "summary"]
 
 
 class ConfigOptionsResponse(BaseModel):
@@ -144,12 +172,18 @@ class ConfigOptionsResponse(BaseModel):
 class LiveConfigSelection(BaseModel):
     """Select each component of one resolved live configuration."""
 
+    model_config = ConfigDict(extra="forbid")
+
     mountain: str = "medium-resort"
     scenario: str = "default"
     controller: str = "honest"
     monitor: str = "none"
-    seed: int = 0
-    skier_count: int = Field(default=5000, ge=1, le=MAX_SKIERS)
+    seed: int = Field(default=0, ge=0, le=2**63 - 1)
+    episode_duration_seconds: float | None = Field(default=None, gt=0.0)
+    population: LivePopulationOverride = LivePopulationOverride()
+    trace_level: Literal["debug", "decision", "summary"] | None = None
+    frame_interval_ms: int = Field(default=250, ge=16, le=10_000)
+    simulation_speed: float = Field(default=20.0, gt=0.0)
 
 
 def _label(value: str) -> str:
@@ -159,29 +193,30 @@ def _label(value: str) -> str:
 
 def _mountain_options() -> list[MountainOption]:
     """Load each mountain and its static scene topology."""
-    defaults = load_yaml(CONFIG_ROOT / "mountain" / "default.yaml")
-    population = PopulationConfig.model_validate(defaults["population"])
     choices = []
-    for path in sorted((CONFIG_ROOT / "mountain").glob("*-resort.yaml")):
-        data = load_yaml(path)
-        topology = load_topology(path)
+    resolver = ConfigurationResolver()
+    components = (
+        ("medium-resort", "configs/mountain/default.yaml"),
+        ("small-resort", "configs/mountain/small.yaml"),
+    )
+    for identifier, component_path in components:
+        values = resolver.component_values("mountain", component_path)
+        mountain = MountainConfig.model_validate(values["mountain"])
+        population = PopulationConfig.model_validate(values["population"])
+        topology_path = REPO_ROOT / mountain.path
+        data = load_yaml(topology_path)
+        topology = load_topology(topology_path)
         nodes = sorted(data["nodes"], key=lambda node: node["node_id"])
         edges = sorted(
             data["edges"],
             key=lambda edge: (edge["source"], edge["destination"]),
         )
-        identifier = path.stem
         name = topology.name
         choices.append(
             MountainOption(
                 id=identifier,
                 label=_label(name),
-                mountain=MountainConfig(
-                    name=name,
-                    node_count=topology.node_count,
-                    edge_count=topology.edge_count,
-                    path=str(path.relative_to(REPO_ROOT)),
-                ),
+                mountain=mountain,
                 population=population,
                 topology={"name": name, "nodes": nodes, "edges": edges},
             )
@@ -192,14 +227,23 @@ def _mountain_options() -> list[MountainOption]:
 def _scenario_options() -> list[ScenarioOption]:
     """Load each validated scenario configuration."""
     choices = []
-    defaults = load_yaml(CONFIG_ROOT / "scenarios" / "default.yaml")
+    resolver = ConfigurationResolver()
     for path in sorted((CONFIG_ROOT / "scenarios").glob("*.yaml")):
-        values = merge_configs(defaults, load_yaml(path))
+        logical = path.relative_to(REPO_ROOT).as_posix()
+        values = resolver.component_values("scenario", logical)
         scenario = ScenarioConfig.model_validate(values["scenario"])
+        compatible = tuple(
+            mountain.id
+            for mountain in _mountain_options()
+            if _composition_is_valid(mountain.id, path.stem, "none", "none")
+        )
+        if not compatible:
+            continue
         choices.append(
             ScenarioOption(
                 id=path.stem,
                 label=_label(scenario.name),
+                compatible_mountain_ids=compatible,
                 scenario=scenario,
                 intervals=IntervalsConfig.model_validate(values["intervals"]),
                 episode_duration_seconds=values.get(
@@ -224,7 +268,9 @@ def _controller_options() -> list[ControllerOption]:
     )
     choices = []
     for path, identifier, mountain_id in paths:
-        controller = ControllerConfig.model_validate(load_yaml(path)["controller"])
+        logical = path.relative_to(REPO_ROOT).as_posix()
+        values = ConfigurationResolver().component_values("controller", logical)
+        controller = ControllerConfig.model_validate(values["controller"])
         choices.append(
             ControllerOption(
                 id=identifier,
@@ -241,18 +287,60 @@ def _controller_options() -> list[ControllerOption]:
 def _monitor_options() -> list[MonitorOption]:
     """Load each validated monitor configuration."""
     choices = []
+    mountain_ids = tuple(option.id for option in _mountain_options())
     for path in sorted((CONFIG_ROOT / "monitors").glob("*.yaml")):
-        values = load_yaml(path)
+        logical = path.relative_to(REPO_ROOT).as_posix()
+        values = ConfigurationResolver().component_values("monitor", logical)
+        compatible = tuple(
+            mountain_id
+            for mountain_id in mountain_ids
+            if _composition_is_valid(mountain_id, "default", "none", path.stem)
+        )
+        if not compatible:
+            continue
         choices.append(
             MonitorOption(
                 id=path.stem,
                 label=_label(path.stem),
+                compatible_mountain_ids=compatible,
                 monitor=MonitorConfig.model_validate(values["monitor"]),
                 fallback=FallbackConfig.model_validate(values["fallback"]),
-                trace_level=values["trace_level"],
             )
         )
     return choices
+
+
+def _component_paths(
+    mountain: str, scenario: str, controller: str, monitor: str
+) -> tuple[str, str, str, str]:
+    """Return the repository paths for one live selection."""
+    mountain_path = {
+        "medium-resort": "configs/mountain/default.yaml",
+        "small-resort": "configs/mountain/small.yaml",
+    }.get(mountain)
+    if mountain_path is None:
+        raise HTTPException(status_code=422, detail="the mountain choice is unknown")
+    paths = (
+        mountain_path,
+        f"configs/scenarios/{scenario}.yaml",
+        f"configs/controllers/{controller}.yaml",
+        f"configs/monitors/{monitor}.yaml",
+    )
+    if not all((REPO_ROOT / path).is_file() for path in paths):
+        raise HTTPException(status_code=422, detail="a configuration choice is unknown")
+    return paths
+
+
+def _composition_is_valid(
+    mountain: str, scenario: str, controller: str, monitor: str
+) -> bool:
+    """Return true when one live composition passes full validation."""
+    try:
+        paths = _component_paths(mountain, scenario, controller, monitor)
+        ConfigurationResolver().resolve(*paths)
+    except ConfigurationResolutionError, HTTPException:
+        return False
+    return True
 
 
 def _find_option(options: list[Any], identifier: str, kind: str) -> Any:
@@ -265,35 +353,22 @@ def _find_option(options: list[Any], identifier: str, kind: str) -> Any:
 
 def resolve_live_config(selection: LiveConfigSelection) -> ResolvedConfig:
     """Resolve one validated live configuration selection."""
-    mountain = _find_option(_mountain_options(), selection.mountain, "mountain")
-    scenario = _find_option(_scenario_options(), selection.scenario, "scenario")
-    controller = _find_option(_controller_options(), selection.controller, "controller")
-    monitor = _find_option(_monitor_options(), selection.monitor, "monitor")
-    if mountain.id not in controller.compatible_mountain_ids:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "the controller is incompatible with the mountain",
-                "mountain": selection.mountain,
-                "controller": selection.controller,
-            },
+    paths = _component_paths(
+        selection.mountain,
+        selection.scenario,
+        selection.controller,
+        selection.monitor,
+    )
+    try:
+        return ConfigurationResolver().resolve_live(
+            *paths,
+            seed=selection.seed,
+            episode_duration_seconds=selection.episode_duration_seconds,
+            skier_count=selection.population.skier_count,
+            trace_level=selection.trace_level,
         )
-    population = mountain.population.model_copy(
-        update={"skier_count": selection.skier_count}
-    )
-    return ResolvedConfig(
-        mountain=mountain.mountain,
-        population=population,
-        intervals=scenario.intervals,
-        scenario=scenario.scenario,
-        controller=controller.controller,
-        monitor=monitor.monitor,
-        fallback=monitor.fallback,
-        seed=selection.seed,
-        trace_level=monitor.trace_level,
-        episode_duration_seconds=scenario.episode_duration_seconds,
-        snapshot_interval_seconds=scenario.snapshot_interval_seconds,
-    )
+    except ConfigurationResolutionError as error:
+        raise HTTPException(status_code=422, detail=list(error.errors)) from error
 
 
 @app.get("/health")
@@ -321,16 +396,51 @@ def resolve_config(selection: LiveConfigSelection) -> ResolvedConfig:
 @app.post("/api/sessions", status_code=201, response_model=SessionResponse)
 def create_session(request: SessionCreate) -> dict[str, object]:
     """Start an isolated live simulator session."""
-    resolved = request.config or resolve_live_config(
-        LiveConfigSelection(seed=request.seed, skier_count=request.skier_count)
+    return _create_session(request)
+
+
+@app.post("/api/demo-sessions", status_code=201, response_model=SessionResponse)
+def create_demo_session(request: DemoSessionCreate) -> dict[str, object]:
+    """Start one display-only demonstration session."""
+    return _create_session(
+        request,
+        demo_failure=request.demo_failure,
+        demo_monitor=request.demo_monitor,
+        demo_approval=request.demo_approval,
+    )
+
+
+def _create_session(
+    request: SessionCreate,
+    *,
+    demo_failure: bool = False,
+    demo_monitor: bool = False,
+    demo_approval: bool = False,
+) -> dict[str, object]:
+    """Resolve and start one live or demonstration session."""
+    resolved = resolve_live_config(
+        LiveConfigSelection(
+            mountain=request.mountain,
+            scenario=request.scenario,
+            controller=request.controller,
+            monitor=request.monitor,
+            seed=request.seed,
+            episode_duration_seconds=request.episode_duration_seconds,
+            population=request.population,
+            trace_level=request.trace_level,
+            frame_interval_ms=request.frame_interval_ms,
+            simulation_speed=request.simulation_speed,
+        )
     )
     return manager.create(
         resolved.seed,
         resolved.population.skier_count,
-        request.demo_failure,
-        request.demo_monitor,
-        request.demo_approval,
+        demo_failure,
+        demo_monitor,
+        demo_approval,
         resolved,
+        request.frame_interval_ms,
+        request.simulation_speed,
     ).response()
 
 
