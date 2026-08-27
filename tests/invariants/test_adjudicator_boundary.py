@@ -28,6 +28,30 @@ FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
 )
 
+TOPOLOGY_ARRAY_FIELDS = (
+    "node_x",
+    "node_y",
+    "node_elevation",
+    "node_type",
+    "node_capacity",
+    "node_controllable",
+    "edge_source",
+    "edge_destination",
+    "edge_type",
+    "edge_difficulty",
+    "edge_length",
+    "edge_nominal_travel_time",
+    "edge_safe_capacity",
+    "edge_critical_density",
+    "edge_lift_throughput",
+    "edge_wind_sensitivity",
+    "edge_visibility_sensitivity",
+    "edge_snow_sensitivity",
+    "edge_controllable",
+    "edge_offsets",
+    "outgoing_edges",
+)
+
 
 class AllowMonitor:
     def __init__(self) -> None:
@@ -83,6 +107,18 @@ class OutgoingMutatingController:
         """Attempt the forbidden outgoing edge write."""
         source = self.topology.node_index["base_village"]
         self.topology.edges_from(source)[0] = 0
+
+
+class FlagMutatingController:
+    """Try to restore writes on one shared topology array."""
+
+    def __init__(self, topology: Topology, field: str) -> None:
+        self.topology = topology
+        self.field = field
+
+    def propose(self, observation):
+        """Attempt the forbidden write-flag change."""
+        getattr(self.topology, self.field).setflags(write=True)
 
 
 def configured_env() -> AvalancheEnv:
@@ -185,6 +221,37 @@ def test_a_normal_proposal_keeps_the_shared_topology_identity():
         )
         == array_ids
     )
+
+
+@pytest.mark.parametrize("field", TOPOLOGY_ARRAY_FIELDS)
+def test_a_controller_cannot_restore_topology_writes(field):
+    env = configured_env()
+    topology = env.topology
+    before = {name: getattr(topology, name).tobytes() for name in TOPOLOGY_ARRAY_FIELDS}
+    controller = FlagMutatingController(topology, field)
+
+    with pytest.raises(ValueError):
+        controller.propose(env.controller_observation())
+
+    assert env.topology is topology
+    assert {
+        name: getattr(topology, name).tobytes() for name in TOPOLOGY_ARRAY_FIELDS
+    } == before
+
+
+def test_dynamic_arrays_remain_writable_inside_the_simulator():
+    env = configured_env()
+
+    for _, values in env.sim.state.checksum_fields():
+        assert values.flags.writeable
+    for _, values in env.sim.population.checksum_fields():
+        assert values.flags.writeable
+
+    env.sim.state.occupancy[0] += 1
+    env.sim.population.wait_time[0] += 1.0
+
+    assert env.sim.state.occupancy[0] == 1
+    assert env.sim.population.wait_time[0] == 1.0
 
 
 def test_a_malformed_proposal_does_not_reach_the_monitor():

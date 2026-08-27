@@ -144,7 +144,7 @@ edges:
   - source: lift2_top
     destination: mid_shelter
     edge_type: piste
-    difficulty: red
+    difficulty: blue
     length: 520.0
     nominal_travel_time: 260.0
     safe_capacity: 160

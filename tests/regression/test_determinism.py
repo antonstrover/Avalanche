@@ -118,6 +118,21 @@ def test_two_runs_with_one_seed_give_the_same_checksums():
     assert run(SEED) == run(SEED)
 
 
+def test_two_resets_share_one_static_route_identity():
+    first = MountainSim(FIXTURE)
+    second = MountainSim(FIXTURE)
+    first.reset(SEED)
+    second.reset(SEED)
+
+    assert first.topology is not None
+    assert second.topology is not None
+    assert first.routes is not None
+    assert second.routes is not None
+    assert first.topology.mountain_sha256 == second.topology.mountain_sha256
+    assert first.routes.cache_identity == second.routes.cache_identity
+    assert first.routes is second.routes
+
+
 def test_the_state_moves_during_the_run():
     checksums = run(SEED)
     assert len(set(checksums)) > 1

@@ -5,16 +5,31 @@ The table gives the first edge of the shortest path from a node to a destination
 A later stage adds the dynamic cost and the compliance model.
 """
 
+import hashlib
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 
-from avalanche.sim.ability import ABILITY_NAMES, ability_edge_mask
-from avalanche.sim.topology import Topology
+from avalanche.sim.ability import (
+    PISTE_LIMIT_BY_ABILITY,
+    ability_edge_mask,
+)
+from avalanche.sim.topology import NODE_TYPE_NAMES, Topology, immutable_array
 
 NO_EDGE = -1
+
+
+@dataclass(frozen=True)
+class RouteCacheIdentity:
+    """Identify every input to one static route table."""
+
+    mountain_sha256: str
+    ability_limits: tuple[int, ...]
+    required_destinations: tuple[int, ...]
+    routing_mapping_sha256: str
 
 
 @dataclass(frozen=True)
@@ -29,11 +44,73 @@ class RouteTable:
 
     next_edge: np.ndarray
     travel_time: np.ndarray
+    cache_identity: RouteCacheIdentity
+
+    def __post_init__(self) -> None:
+        """Store both route arrays on immutable bytes."""
+        object.__setattr__(self, "next_edge", immutable_array(self.next_edge, "<i4"))
+        object.__setattr__(
+            self, "travel_time", immutable_array(self.travel_time, "<f8")
+        )
 
     @property
     def node_count(self) -> int:
         """Return the count of the nodes."""
         return int(self.next_edge.shape[1])
+
+
+_ROUTE_CACHE: dict[RouteCacheIdentity, RouteTable] = {}
+
+
+def required_destinations(topology: Topology) -> tuple[int, ...]:
+    """Return every configured safe destination index."""
+    required_types = (
+        NODE_TYPE_NAMES.index("safe_zone"),
+        NODE_TYPE_NAMES.index("exit"),
+    )
+    return tuple(
+        int(value)
+        for value in np.flatnonzero(np.isin(topology.node_type, required_types))
+    )
+
+
+def _digest_array(digest: Any, name: str, values: np.ndarray) -> None:
+    """Add one typed array to a routing digest."""
+    encoded_name = name.encode("utf-8")
+    dtype = values.dtype.str.encode("ascii")
+    shape = np.asarray(values.shape, dtype="<i8").tobytes()
+    digest.update(len(encoded_name).to_bytes(4, "little"))
+    digest.update(encoded_name)
+    digest.update(len(dtype).to_bytes(4, "little"))
+    digest.update(dtype)
+    digest.update(len(shape).to_bytes(4, "little"))
+    digest.update(shape)
+    digest.update(values.tobytes(order="C"))
+
+
+def _routing_mapping_sha256(topology: Topology) -> str:
+    """Return the digest of every static routing mapping."""
+    digest = hashlib.sha256()
+    _digest_array(digest, "node_count", np.asarray(topology.node_count, dtype="<i8"))
+    for name in (
+        "edge_source",
+        "edge_destination",
+        "edge_type",
+        "edge_difficulty",
+        "edge_nominal_travel_time",
+    ):
+        _digest_array(digest, name, getattr(topology, name))
+    return digest.hexdigest()
+
+
+def _route_cache_identity(topology: Topology) -> RouteCacheIdentity:
+    """Return the complete identity of one static route table."""
+    return RouteCacheIdentity(
+        mountain_sha256=topology.mountain_sha256,
+        ability_limits=tuple(int(value) for value in PISTE_LIMIT_BY_ABILITY),
+        required_destinations=required_destinations(topology),
+        routing_mapping_sha256=_routing_mapping_sha256(topology),
+    )
 
 
 def build_route_table(topology: Topology) -> RouteTable:
@@ -42,23 +119,31 @@ def build_route_table(topology: Topology) -> RouteTable:
     The function runs one search on the reversed graph from each destination.
     One search then gives the next hop of every node towards that destination.
     """
+    identity = _route_cache_identity(topology)
+    cached = _ROUTE_CACHE.get(identity)
+    if cached is not None:
+        return cached
     tables = [
-        _build_ability_routes(topology, ability)
-        for ability in range(len(ABILITY_NAMES))
+        _build_ability_routes(topology, ability, limit)
+        for ability, limit in enumerate(identity.ability_limits)
     ]
-    return RouteTable(
+    table = RouteTable(
         next_edge=np.stack([table[0] for table in tables]),
         travel_time=np.stack([table[1] for table in tables]),
+        cache_identity=identity,
     )
+    return _ROUTE_CACHE.setdefault(identity, table)
 
 
 def _build_ability_routes(
-    topology: Topology, ability: int
+    topology: Topology, ability: int, piste_limit: int
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return the safe route arrays for one ability."""
     count = topology.node_count
     cost = topology.edge_nominal_travel_time.astype(np.float64)
-    allowed = np.flatnonzero(ability_edge_mask(topology, ability))
+    allowed = np.flatnonzero(
+        ability_edge_mask(topology, ability, piste_limit=piste_limit)
+    )
 
     # Keep the fastest edge of a pair of nodes.
     # The slow edge is written first, so the fast edge overwrites it.

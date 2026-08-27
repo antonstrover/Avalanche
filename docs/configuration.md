@@ -24,6 +24,20 @@ The resolver defaults `runtime.worker_count` to one.
 The resolved digest includes every logical configuration value.
 The scientific digest excludes the output root and worker count.
 
+## Mountain validation
+
+Load the selected mountain during configuration resolution.
+Reject a noninteger node capacity or edge capacity.
+Reject a nonfinite static value.
+Require every entrance to reach every safe zone and exit.
+Check every required route for each skier ability.
+Report the ability, entrance, and missing destination.
+
+The small mountain passes six required route checks.
+Its immutable topology and route arrays use 4,388 bytes.
+Val-Tarin passes 72 required route checks.
+Its immutable topology and route arrays use 134,684 bytes.
+
 Formal experiment manifests must select concrete component files.
 They must not change a resolved controller, scenario, or monitor.
 Resolve every worker configuration before creating the worker.

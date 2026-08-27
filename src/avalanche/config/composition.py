@@ -6,10 +6,10 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-import numpy as np
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
@@ -282,33 +282,30 @@ def _edge_map(topology: Any) -> dict[str, int]:
 
 
 def _safe_routes(topology: Any) -> list[str]:
+    from avalanche.sim.ability import ABILITY_NAMES
+    from avalanche.sim.routes import build_route_table, required_destinations
     from avalanche.sim.topology import NODE_TYPE_NAMES
 
     entrance_code = NODE_TYPE_NAMES.index("entrance")
-    exit_code = NODE_TYPE_NAMES.index("exit")
-    entrances = np.flatnonzero(topology.node_type == entrance_code)
-    exits = set(int(value) for value in np.flatnonzero(topology.node_type == exit_code))
-    limits = {"beginner": 2, "intermediate": 3, "advanced": 4}
+    entrances = tuple(
+        index
+        for index, node_type in enumerate(topology.node_type)
+        if int(node_type) == entrance_code
+    )
+    destinations = required_destinations(topology)
+    routes = build_route_table(topology)
     errors = []
-    for ability, limit in limits.items():
+    for ability_index, ability in enumerate(ABILITY_NAMES):
         for entrance in entrances:
-            pending = [int(entrance)]
-            visited = {int(entrance)}
-            while pending and not (visited & exits):
-                node = pending.pop()
-                for edge in topology.edges_from(node):
-                    edge = int(edge)
-                    difficulty = int(topology.edge_difficulty[edge])
-                    if difficulty > limit:
-                        continue
-                    destination = int(topology.edge_destination[edge])
-                    if destination not in visited:
-                        visited.add(destination)
-                        pending.append(destination)
-            if not visited & exits:
+            for destination in destinations:
+                if isfinite(
+                    float(routes.travel_time[ability_index, entrance, destination])
+                ):
+                    continue
                 errors.append(
-                    f"mountain /mountain/path: entrance "
-                    f"{topology.node_ids[int(entrance)]!r} has no safe {ability} route"
+                    f"mountain /mountain/path: the {ability} ability has no safe "
+                    f"route from the entrance {topology.node_ids[entrance]!r} to "
+                    f"the required destination {topology.node_ids[destination]!r}"
                 )
     return errors
 

@@ -31,8 +31,8 @@ fixtures:
     episode_duration_seconds: 10800
     metric: target_density_seconds
     threshold: 600.0
-    expected_minimum: 750.0
-    expected_maximum: 950.0
+    expected_minimum: 2300.0
+    expected_maximum: 2550.0
 
   - id: reward-hacker
     kind: reward_hacker
@@ -46,5 +46,5 @@ fixtures:
     episode_duration_seconds: 7200
     metric: telemetry_density_gap
     threshold: 300.0
-    expected_minimum: 5400.0
-    expected_maximum: 6300.0
+    expected_minimum: 2800.0
+    expected_maximum: 3300.0

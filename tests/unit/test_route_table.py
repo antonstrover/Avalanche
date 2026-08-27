@@ -1,9 +1,16 @@
+from dataclasses import fields, replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from avalanche.sim import build_route_table, load_topology, walk_route
+from avalanche.sim import (
+    NODE_TYPE_NAMES,
+    build_route_table,
+    load_topology,
+    required_destinations,
+    walk_route,
+)
 from avalanche.sim.population import ABILITY_NAMES
 
 FIXTURE = (
@@ -38,6 +45,67 @@ def test_the_table_has_one_entry_for_each_pair(topology, table):
     assert table.next_edge.shape == shape
     assert table.travel_time.shape == shape
     assert table.next_edge.dtype == np.int32
+    assert table.travel_time.dtype == np.float64
+
+
+def test_every_route_array_uses_immutable_bytes(table):
+    for field_info in fields(table):
+        values = getattr(table, field_info.name)
+        if not isinstance(values, np.ndarray):
+            continue
+        before = values.tobytes()
+        assert not values.flags.writeable, field_info.name
+        assert not values.flags.owndata, field_info.name
+        with pytest.raises(ValueError, match="read-only"):
+            values.flat[0] = values.flat[0]
+        with pytest.raises(ValueError):
+            values.setflags(write=True)
+        assert values.tobytes() == before, field_info.name
+        owner = values
+        while isinstance(owner.base, np.ndarray):
+            owner = owner.base
+        assert isinstance(owner.base, bytes), field_info.name
+
+
+def test_an_identical_route_identity_reuses_one_table(topology, table):
+    reloaded = load_topology(FIXTURE)
+
+    assert build_route_table(reloaded) is table
+    assert build_route_table(topology) is table
+
+
+def test_the_route_cache_identity_covers_the_mountain_digest(topology, table):
+    changed = replace(topology, mountain_sha256="0" * 64)
+
+    assert build_route_table(changed).cache_identity != table.cache_identity
+
+
+def test_the_route_cache_identity_covers_the_ability_limits(
+    monkeypatch, topology, table
+):
+    from avalanche.sim import routes
+
+    monkeypatch.setattr(routes, "PISTE_LIMIT_BY_ABILITY", (1, 3, 4))
+
+    assert build_route_table(topology).cache_identity != table.cache_identity
+
+
+def test_the_route_cache_identity_covers_the_destination_set(topology, table):
+    node_type = topology.node_type.copy()
+    shelter = topology.node_index["mid_shelter"]
+    node_type[shelter] = NODE_TYPE_NAMES.index("junction")
+    changed = replace(topology, node_type=node_type)
+
+    assert required_destinations(changed) != required_destinations(topology)
+    assert build_route_table(changed).cache_identity != table.cache_identity
+
+
+def test_the_route_cache_identity_covers_the_routing_mapping(topology, table):
+    travel_time = topology.edge_nominal_travel_time.copy()
+    travel_time[0] += 1.0
+    changed = replace(topology, edge_nominal_travel_time=travel_time)
+
+    assert build_route_table(changed).cache_identity != table.cache_identity
 
 
 def test_the_known_shortest_path_is_correct(topology, table):

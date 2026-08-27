@@ -40,6 +40,13 @@ def edge_with_difficulty(topology, difficulty: str) -> int:
     return int(matches[0])
 
 
+def topology_with_piste_difficulty(topology, difficulty: str):
+    """Return a topology with one difficulty for every piste."""
+    values = topology.edge_difficulty.copy()
+    values[topology.edge_type == PISTE] = DIFFICULTY_NAMES.index(difficulty)
+    return replace(topology, edge_difficulty=values)
+
+
 def try_advice(topology, ability: int, edge: int):
     """Return one skier after it receives one edge as advice."""
     routes = build_route_table(topology)
@@ -57,7 +64,7 @@ def try_advice(topology, ability: int, edge: int):
 @pytest.mark.parametrize("ability", range(len(ABILITY_NAMES)))
 @pytest.mark.parametrize("difficulty", ("green", "blue", "red", "black"))
 def test_each_ability_accepts_only_its_permitted_pistes(ability, difficulty):
-    topology = load_topology(SMALL)
+    topology = load_topology(MEDIUM)
     edge = edge_with_difficulty(topology, difficulty)
     population = try_advice(topology, ability, edge)
     permitted = DIFFICULTY_NAMES.index(difficulty) <= PISTE_LIMIT_BY_ABILITY[ability]
@@ -73,7 +80,7 @@ def test_each_ability_accepts_only_its_permitted_pistes(ability, difficulty):
 
 
 def test_a_beginner_cannot_follow_hostile_black_piste_advice():
-    topology = load_topology(SMALL)
+    topology = topology_with_piste_difficulty(load_topology(SMALL), "black")
     edge = edge_with_difficulty(topology, "black")
     population = try_advice(topology, ABILITY_NAMES.index("beginner"), edge)
 
@@ -94,7 +101,7 @@ def test_every_ability_can_board_a_lift_with_a_safe_onward_route(ability):
 
 
 def test_a_beginner_cannot_board_a_lift_without_a_safe_onward_route():
-    topology = load_topology(SMALL)
+    topology = topology_with_piste_difficulty(load_topology(SMALL), "black")
     routes = build_route_table(topology)
     ability = ABILITY_NAMES.index("beginner")
     source = topology.node_index["lift2_base"]
@@ -144,7 +151,7 @@ def test_a_beginner_uses_a_longer_safe_route():
 
 
 def test_a_skier_waits_when_no_safe_route_exists():
-    topology = load_topology(SMALL)
+    topology = topology_with_piste_difficulty(load_topology(SMALL), "black")
     routes = build_route_table(topology)
     ability = ABILITY_NAMES.index("beginner")
     source = topology.node_index["lift2_top"]
@@ -191,10 +198,7 @@ def test_population_destinations_are_safe_for_each_skier():
 
 
 def test_population_sampling_rejects_an_ability_without_a_safe_exit():
-    topology = load_topology(SMALL)
-    difficulty = topology.edge_difficulty.copy()
-    difficulty[topology.edge_type == PISTE] = DIFFICULTY_NAMES.index("black")
-    topology = replace(topology, edge_difficulty=difficulty)
+    topology = topology_with_piste_difficulty(load_topology(SMALL), "black")
     routes = build_route_table(topology)
     config = PopulationConfig(
         skier_count=10,

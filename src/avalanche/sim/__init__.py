@@ -25,7 +25,13 @@ from avalanche.sim.population import (
     population_from_starts,
     sample_population,
 )
-from avalanche.sim.routes import RouteTable, build_route_table, walk_route
+from avalanche.sim.routes import (
+    RouteCacheIdentity,
+    RouteTable,
+    build_route_table,
+    required_destinations,
+    walk_route,
+)
 from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import (
     DIFFICULTY_NAMES,
@@ -48,7 +54,9 @@ __all__ = [
     "EDGE_TYPE_NAMES",
     "DIFFICULTY_NAMES",
     "RouteTable",
+    "RouteCacheIdentity",
     "build_route_table",
+    "required_destinations",
     "walk_route",
     "SkierArrays",
     "empty_population",

@@ -4,6 +4,7 @@ The loader calls NetworkX one time.
 The simulator then uses only the arrays in `Topology`.
 """
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -27,6 +28,7 @@ class Topology:
     """
 
     name: str
+    mountain_sha256: str
 
     node_ids: tuple[str, ...]
     node_index: Mapping[str, int]
@@ -55,11 +57,13 @@ class Topology:
     outgoing_edges: np.ndarray
 
     def __post_init__(self) -> None:
-        """Protect every static array and the node mapping from writes."""
+        """Store every static array on immutable bytes."""
         for field_info in fields(self):
+            dtype = _TOPOLOGY_ARRAY_DTYPES.get(field_info.name)
+            if dtype is None:
+                continue
             value = getattr(self, field_info.name)
-            if isinstance(value, np.ndarray):
-                value.setflags(write=False)
+            object.__setattr__(self, field_info.name, immutable_array(value, dtype))
         object.__setattr__(self, "node_index", MappingProxyType(dict(self.node_index)))
 
     @property
@@ -85,6 +89,47 @@ def _code(names: tuple[str, ...], value: str, kind: str) -> int:
         return names.index(value)
     except ValueError:
         raise ValueError(f"the {kind} {value!r} is unknown") from None
+
+
+_TOPOLOGY_ARRAY_DTYPES = {
+    "node_x": "<f4",
+    "node_y": "<f4",
+    "node_elevation": "<f4",
+    "node_type": "|i1",
+    "node_capacity": "<i4",
+    "node_controllable": "|b1",
+    "edge_source": "<i4",
+    "edge_destination": "<i4",
+    "edge_type": "|i1",
+    "edge_difficulty": "|i1",
+    "edge_length": "<f4",
+    "edge_nominal_travel_time": "<f4",
+    "edge_safe_capacity": "<i4",
+    "edge_critical_density": "<f4",
+    "edge_lift_throughput": "<f4",
+    "edge_wind_sensitivity": "<f4",
+    "edge_visibility_sensitivity": "<f4",
+    "edge_snow_sensitivity": "<f4",
+    "edge_controllable": "|b1",
+    "edge_offsets": "<i4",
+    "outgoing_edges": "<i4",
+}
+
+
+def immutable_array(values: np.ndarray, dtype: str) -> np.ndarray:
+    """Return an array view backed by immutable bytes."""
+    if not isinstance(values, np.ndarray):
+        raise TypeError("a static value must be a NumPy array")
+    if values.dtype.hasobject:
+        raise TypeError("a static array must not use an object dtype")
+    if not isinstance(dtype, str):
+        raise TypeError("a static dtype must declare its byte order")
+    declared = np.dtype(dtype)
+    if declared.itemsize > 1 and not dtype.startswith(("<", ">")):
+        raise TypeError("a static dtype must declare its byte order")
+    normalized = np.ascontiguousarray(values, dtype=declared)
+    buffer = normalized.tobytes(order="C")
+    return np.frombuffer(buffer, dtype=declared).reshape(normalized.shape)
 
 
 def load_topology(path: Path) -> Topology:
@@ -118,6 +163,7 @@ def load_topology(path: Path) -> Topology:
 
     return Topology(
         name=str(graph.graph.get("name", path.stem)),
+        mountain_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         node_ids=node_ids,
         node_index=node_index,
         node_x=np.array([n["x"] for n in nodes], dtype=np.float32),
@@ -144,7 +190,9 @@ def load_topology(path: Path) -> Topology:
         ),
         edge_length=edge_float("length"),
         edge_nominal_travel_time=edge_float("nominal_travel_time"),
-        edge_safe_capacity=edge_float("safe_capacity"),
+        edge_safe_capacity=np.array(
+            [e[2]["safe_capacity"] for e in edges], dtype="<i4"
+        ),
         edge_critical_density=edge_float("critical_density"),
         edge_lift_throughput=np.array(
             [

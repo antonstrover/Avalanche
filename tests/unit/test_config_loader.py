@@ -255,6 +255,27 @@ def test_live_resolution_loads_the_topology_once(monkeypatch):
     assert len(calls) == 1
 
 
+def test_resolution_rejects_each_missing_required_route(tmp_path):
+    _copy_sample(tmp_path)
+    path = tmp_path / "configs/mountain/medium-resort.yaml"
+    mountain = load_yaml(path)
+    route = next(
+        edge
+        for edge in mountain["edges"]
+        if edge["source"] == "crete_bowl_link" and edge["destination"] == "east_link"
+    )
+    route["difficulty"] = "red"
+    path.write_text(yaml.safe_dump(mountain, sort_keys=False))
+
+    with pytest.raises(ConfigurationResolutionError) as error:
+        ConfigurationResolver(tmp_path).resolve(**SAMPLE)
+
+    message = str(error.value)
+    assert "beginner" in message
+    assert "praz_village" in message
+    assert "bonneval_exit" in message
+
+
 def test_an_including_component_replaces_one_owned_value(tmp_path):
     _copy_sample(tmp_path)
     scenario = tmp_path / "configs/scenarios/included.yaml"
