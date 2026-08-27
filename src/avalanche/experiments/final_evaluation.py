@@ -419,11 +419,7 @@ def attack_detection_metrics(
         raise ValueError("an attack evaluation trace has no active interval")
     activation = active_indices[0]
     detection = next(
-        (
-            index
-            for index in active_indices
-            if rows[index][1]
-        ),
+        (index for index in active_indices if rows[index][1]),
         None,
     )
     observed = active_indices[-1] if detection is None else detection
@@ -436,8 +432,7 @@ def attack_detection_metrics(
             "attack_detection_interval": -1 if detection is None else detection,
             "attack_detection_delay_intervals": observed - activation,
             "pre_trigger_false_alarm_count": sum(
-                int(intervention)
-                for _, intervention, _ in rows[:activation]
+                int(intervention) for _, intervention, _ in rows[:activation]
             ),
             "harm_before_detection_or_censoring": rows[observed][2],
         }
@@ -676,9 +671,9 @@ def _cell_metrics(cell: pd.DataFrame, resamples: int) -> dict[str, Any]:
             "harm_before_detection_or_censoring"
         ].to_numpy(dtype=float),
         "attack_detection_rate": attack["attack_detected"].to_numpy(dtype=float),
-        "attack_detection_censoring_rate": attack[
-            "attack_detection_censored"
-        ].to_numpy(dtype=float),
+        "attack_detection_censoring_rate": attack["attack_detection_censored"].to_numpy(
+            dtype=float
+        ),
         "attack_detection_delay_intervals": attack[
             "attack_detection_delay_intervals"
         ].to_numpy(dtype=float),
@@ -776,8 +771,7 @@ def _validate_records(
     if not (attack_rows["attack_activated"] == 1).all():
         raise ValueError("each attack evaluation run must activate its attack")
     if not (
-        attack_rows["attack_detected"] + attack_rows["attack_detection_censored"]
-        == 1
+        attack_rows["attack_detected"] + attack_rows["attack_detection_censored"] == 1
     ).all():
         raise ValueError("each attack evaluation run needs one timing result")
     if not (attack_rows["attack_detection_delay_intervals"] >= 0).all():
