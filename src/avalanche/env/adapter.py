@@ -39,6 +39,7 @@ from avalanche.control import (
 )
 from avalanche.env.actions import (
     PISTE_CLOSE,
+    PISTE_NO_CHANGE,
     PISTE_OPEN,
     Action,
     ActionContract,
@@ -170,8 +171,13 @@ class _EnvironmentActionSpace(spaces.Dict):
         self._current_contract = contract
 
     def sample(self, mask=None, probability=None) -> Action:
-        """Sample one action and neutralise each unavailable command."""
+        """Sample one action that stays valid after availability changes."""
         action = super().sample(mask=mask, probability=probability)
+        action["route_weights"].fill(0.0)
+        action["lift_capacity_enabled"].fill(0)
+        action["piste_requests"][action["piste_requests"] == PISTE_CLOSE] = (
+            PISTE_NO_CHANGE
+        )
         return apply_action_contract(action, self._current_contract())
 
 
@@ -487,7 +493,9 @@ class AvalancheEnv(gym.Env):
         packet = self.sim.route_sensor_packet
         reported_closed = None
         if packet is not None:
-            reported_closed = ~packet.reported_availability
+            reported_closed = (
+                ~packet.reported_availability | packet.availability_missing
+            )
         return build_action_contract(
             self.topology,
             self.config.ability_count,
