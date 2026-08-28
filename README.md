@@ -259,6 +259,9 @@ Do not overwrite the fixture during this refresh.
 
 Follow the [monitor refresh handoff](docs/monitor-refresh.md).
 It gives the exact trace, audit, training, calibration, and evaluation commands.
+The trace and training commands show a live progress report.
+Add `--no-progress` to disable only the terminal display.
+Each command still writes a structured observability log.
 
 ### The scene data
 

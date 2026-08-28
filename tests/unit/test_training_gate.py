@@ -12,6 +12,7 @@ from avalanche.monitors.perceptron import (
     TrainedModel,
     TrainingConfig,
     build_network,
+    train_perceptron,
 )
 from avalanche.monitors.shortcut_audit import run_shortcut_audit
 from avalanche.monitors.training import (
@@ -28,6 +29,7 @@ from avalanche.monitors.training import (
     calibrate_and_gate,
     fit_temperature,
     select_threshold,
+    train_gru,
     train_locked_monitor,
     verify_locked_artifacts,
 )
@@ -38,6 +40,23 @@ DATASET_CHECKSUMS = {
     "manifest_sha256": "b" * 64,
     "summary_sha256": "c" * 64,
 }
+
+
+class RecordingEmitter:
+    """Collect structured metric events for one focused test."""
+
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event) -> None:
+        self.events.append(event)
+
+
+class FailingEmitter:
+    """Raise for every attempted metric event."""
+
+    def emit(self, _event) -> None:
+        raise RuntimeError("reporting stopped")
 
 
 def frame(rows: int = 80) -> pd.DataFrame:
@@ -170,9 +189,120 @@ def test_threshold_selection_holds_the_false_alarm_budget():
 def test_calibration_requires_sleeper_recall_at_the_same_budget():
     validation = frame(80)
     logits = validation[SIGNAL].to_numpy() * 20.0 - 10.0
-    calibration = calibrate_and_gate(logits, validation)
+    emitter = RecordingEmitter()
+    calibration = calibrate_and_gate(
+        logits,
+        validation,
+        emitter=emitter,
+        stage_id="test-calibration",
+        model_name="perceptron",
+    )
     assert calibration.false_alarm_rate <= FALSE_ALARM_BUDGET
     assert calibration.sleeper_recall >= SLEEPER_RECALL_GATE
+    progress = [
+        event for event in emitter.events if event.kind == "calibration_progress"
+    ]
+    assert {event.values["phase"] for event in progress} == {
+        "temperature",
+        "threshold",
+    }
+    completed_rows = [event.values["rows"] for event in progress]
+    assert completed_rows == sorted(completed_rows)
+    assert progress[0].values["rows"] < progress[0].values["total_rows"]
+    assert progress[-1].values["rows"] == progress[-1].values["total_rows"]
+    assert any(event.kind == "calibration_started" for event in emitter.events)
+    assert any(event.kind == "calibration_completed" for event in emitter.events)
+    gate = next(event for event in emitter.events if event.kind == "gate_evaluated")
+    assert gate.stage_id == "test-calibration"
+    assert gate.values["criterion"] == "sleeper-recall-at-false-alarm-budget"
+    assert gate.values["observed"] == calibration.sleeper_recall
+    assert gate.values["required"] == SLEEPER_RECALL_GATE
+    assert gate.values["false_alarm_budget"] == FALSE_ALARM_BUDGET
+    assert gate.values["passed"] is True
+
+
+def test_perceptron_emits_batch_and_weighted_epoch_metrics():
+    rows = frame(80)
+    emitter = RecordingEmitter()
+    config = TrainingConfig(epochs=2, batch_size=30, hidden_sizes=())
+    instrumented = train_perceptron(
+        rows,
+        rows,
+        config,
+        emitter=emitter,
+        stage_id="test-perceptron",
+    )
+    plain = train_perceptron(rows, rows, config)
+
+    progress = [event for event in emitter.events if event.kind == "epoch_progress"]
+    batches = [event for event in progress if event.values["phase"] == "batch"]
+    epochs = [event for event in progress if event.values["phase"] == "epoch"]
+    assert len(batches) == 6
+    assert len(epochs) == 2
+    for epoch in epochs:
+        selected = [
+            event for event in batches if event.values["epoch"] == epoch.values["epoch"]
+        ]
+        weighted = sum(
+            event.values["training_loss"] * event.values["batch_samples"]
+            for event in selected
+        ) / sum(event.values["batch_samples"] for event in selected)
+        assert epoch.values["training_loss"] == pytest.approx(weighted)
+        assert epoch.values["epoch_seconds"] >= 0.0
+    assert epochs[-1].values["samples"] == 160
+    completed = next(
+        event for event in emitter.events if event.kind == "stage_completed"
+    )
+    assert completed.values["validation_brier_score"] >= 0.0
+    assert completed.values["validation_average_precision"] >= 0.0
+    values = rows.loc[:, list(FEATURE_NAMES)].to_numpy(dtype=np.float32)
+    assert np.array_equal(instrumented.logits(values), plain.logits(values))
+
+
+def test_gru_emits_one_metric_for_each_epoch():
+    windows = build_run_windows(frame(40), FEATURE_NAMES)
+    emitter = RecordingEmitter()
+    instrumented = train_gru(
+        windows,
+        FEATURE_NAMES,
+        epochs=2,
+        emitter=emitter,
+        stage_id="test-gru",
+    )
+    plain = train_gru(windows, FEATURE_NAMES, epochs=2)
+
+    epochs = [event for event in emitter.events if event.kind == "epoch_progress"]
+    assert len(epochs) == 2
+    assert epochs[-1].values["epoch"] == 2
+    assert epochs[-1].values["samples"] == 2 * len(windows.labels)
+    assert epochs[-1].values["training_loss"] >= 0.0
+    assert np.array_equal(
+        instrumented.logits(windows.features),
+        plain.logits(windows.features),
+    )
+
+
+def test_reporting_failures_do_not_change_training_or_calibration():
+    rows = frame(40)
+    config = TrainingConfig(epochs=2, batch_size=20, hidden_sizes=())
+    observed = train_perceptron(
+        rows,
+        rows,
+        config,
+        emitter=FailingEmitter(),
+    )
+    plain = train_perceptron(rows, rows, config)
+    values = rows.loc[:, list(FEATURE_NAMES)].to_numpy(dtype=np.float32)
+    assert np.array_equal(observed.logits(values), plain.logits(values))
+
+    logits = rows[SIGNAL].to_numpy() * 20.0 - 10.0
+    observed_calibration = calibrate_and_gate(
+        logits,
+        rows,
+        emitter=FailingEmitter(),
+    )
+    plain_calibration = calibrate_and_gate(logits, rows)
+    assert observed_calibration.as_dict() == plain_calibration.as_dict()
 
 
 def test_windows_never_cross_a_run_boundary():
@@ -206,6 +336,72 @@ def test_training_requires_an_approved_shortcut_report(tmp_path):
         train_locked_monitor(frame(), frame(), report, tmp_path / "model")
 
 
+def test_perceptron_training_failure_marks_the_base_stage(tmp_path, monkeypatch):
+    rows = frame()
+    report = approved_report(tmp_path, rows, rows)
+    emitter = RecordingEmitter()
+
+    def fail_training(*_args, **_kwargs):
+        raise RuntimeError("training stopped")
+
+    monkeypatch.setattr("avalanche.monitors.training.train_perceptron", fail_training)
+    with pytest.raises(RuntimeError, match="training stopped"):
+        train_locked_monitor(
+            rows,
+            rows,
+            report,
+            tmp_path / "model",
+            dataset_checksums=DATASET_CHECKSUMS,
+            emitter=emitter,
+            stage_id="test-monitor",
+        )
+
+    failed = [event for event in emitter.events if event.kind == "stage_failed"]
+    assert {event.stage_id for event in failed} == {
+        "test-monitor",
+        "test-monitor-perceptron",
+    }
+    base = next(event for event in failed if event.stage_id == "test-monitor")
+    assert base.values["phase"] == "training"
+    assert base.values["failed_model"] == "perceptron"
+
+
+def test_perceptron_calibration_failure_marks_the_base_stage(tmp_path, monkeypatch):
+    rows = frame()
+    report = approved_report(tmp_path, rows, rows)
+    emitter = RecordingEmitter()
+    monkeypatch.setattr(
+        "avalanche.monitors.training.train_perceptron",
+        lambda *_args, **_kwargs: fake_perceptron(separated=True),
+    )
+
+    def fail_calibration(*_args, **_kwargs):
+        raise RuntimeError("calibration stopped")
+
+    monkeypatch.setattr(
+        "avalanche.monitors.training.calibrate_and_gate", fail_calibration
+    )
+    with pytest.raises(RuntimeError, match="calibration stopped"):
+        train_locked_monitor(
+            rows,
+            rows,
+            report,
+            tmp_path / "model",
+            dataset_checksums=DATASET_CHECKSUMS,
+            emitter=emitter,
+            stage_id="test-monitor",
+        )
+
+    failed = [event for event in emitter.events if event.kind == "stage_failed"]
+    assert {event.stage_id for event in failed} == {
+        "test-monitor",
+        "test-monitor-perceptron-calibration",
+    }
+    base = next(event for event in failed if event.stage_id == "test-monitor")
+    assert base.values["phase"] == "calibration"
+    assert base.values["failed_model"] == "perceptron"
+
+
 def test_a_passing_perceptron_does_not_build_the_gru(tmp_path, monkeypatch):
     train = frame()
     validation = frame()
@@ -220,6 +416,7 @@ def test_a_passing_perceptron_does_not_build_the_gru(tmp_path, monkeypatch):
         raise AssertionError("the passing perceptron must not build the GRU")
 
     monkeypatch.setattr("avalanche.monitors.training.train_gru", fail_gru)
+    emitter = RecordingEmitter()
     result = train_locked_monitor(
         train,
         validation,
@@ -227,9 +424,15 @@ def test_a_passing_perceptron_does_not_build_the_gru(tmp_path, monkeypatch):
         tmp_path / "model",
         config=TrainingConfig(hidden_sizes=()),
         dataset_checksums=checksums,
+        emitter=emitter,
+        stage_id="test-monitor",
     )
     assert result["metadata"]["model_kind"] == "perceptron"
     assert result["calibration"]["sleeper_recall"] >= SLEEPER_RECALL_GATE
+    states = [
+        event.values["state"] for event in emitter.events if event.kind == "gru_state"
+    ]
+    assert states == ["not_evaluated", "not_required"]
 
 
 def test_training_rejects_an_audit_for_another_dataset(tmp_path, monkeypatch):
@@ -314,6 +517,7 @@ def test_a_failed_perceptron_builds_the_gru_and_stops_on_failure(tmp_path, monke
         return fake_gru()
 
     monkeypatch.setattr("avalanche.monitors.training.train_gru", failed_gru)
+    emitter = RecordingEmitter()
     with pytest.raises(ModelGateError, match="no declared model"):
         train_locked_monitor(
             train,
@@ -321,6 +525,8 @@ def test_a_failed_perceptron_builds_the_gru_and_stops_on_failure(tmp_path, monke
             report,
             tmp_path / "model",
             dataset_checksums=DATASET_CHECKSUMS,
+            emitter=emitter,
+            stage_id="test-monitor",
         )
     assert calls == [True]
     assert not (tmp_path / "model" / "lock.json").exists()
@@ -332,6 +538,11 @@ def test_a_failed_perceptron_builds_the_gru_and_stops_on_failure(tmp_path, monke
     assert not gru["gate_passed"]
     assert perceptron["attempt_name"] != gru["attempt_name"]
     assert perceptron["model_sha256"] != gru["model_sha256"]
+    states = [
+        event.values["state"] for event in emitter.events if event.kind == "gru_state"
+    ]
+    assert states == ["not_evaluated", "triggered", "training", "failed"]
+    assert emitter.events[-1].kind == "stage_failed"
 
 
 def test_the_lock_covers_model_calibration_threshold_and_metadata(

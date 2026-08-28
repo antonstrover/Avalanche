@@ -13,11 +13,15 @@ from avalanche.sim.movement import (
     accumulate_times,
     advance_on_edges,
     arrive_at_nodes,
+    lift_unavailable_mask,
     new_dynamic_state,
+    return_unavailable_lift_queues,
     select_next_edges,
     serve_lift_queues,
     start_arrivals,
     update_congestion,
+    update_lift_blocked_times,
+    update_stranded,
 )
 from avalanche.sim.population import (
     ABILITY_NAMES,
@@ -81,6 +85,8 @@ __all__ = [
     "MovementTransitions",
     "RouteDecisionSummary",
     "new_dynamic_state",
+    "lift_unavailable_mask",
+    "return_unavailable_lift_queues",
     "start_arrivals",
     "serve_lift_queues",
     "advance_on_edges",
@@ -88,6 +94,8 @@ __all__ = [
     "select_next_edges",
     "accumulate_times",
     "update_congestion",
+    "update_lift_blocked_times",
+    "update_stranded",
     "time_boundary_reached",
 ]
 

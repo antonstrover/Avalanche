@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -42,6 +43,7 @@ from avalanche.monitors.perceptron import (
     train_perceptron,
 )
 from avalanche.monitors.shortcut_audit import require_approved_shortcut_report
+from avalanche.observability import MetricEmitter, MetricEvent
 
 LOCK_VERSION: Literal[2] = 2
 REGISTRY_VERSION = 2
@@ -50,6 +52,7 @@ FALSE_ALARM_BUDGET = 0.05
 SLEEPER_RECALL_GATE = 0.80
 WINDOW_LENGTH = 8
 GRU_HIDDEN_SIZE = 32
+_TEMPERATURE_CANDIDATE_COUNT = 1_201
 
 
 class ModelGateError(RuntimeError):
@@ -350,6 +353,8 @@ def train_gru(
     epochs: int = 40,
     learning_rate: float = 1e-3,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "gru-training",
 ) -> TrainedGRU:
     """Train the declared one-layer recurrent extension."""
     torch.manual_seed(seed)
@@ -363,14 +368,52 @@ def train_gru(
     optimiser = torch.optim.Adam(network.parameters(), lr=learning_rate)
     loss_function = nn.BCEWithLogitsLoss()
     tensor = torch.from_numpy(inputs)
+    profile = InformationProfile(information_profile)
+    samples_per_epoch = int(len(train.labels))
+    total_samples = samples_per_epoch * max(epochs, 0)
+    _emit_metric(
+        emitter,
+        "stage_started",
+        stage_id,
+        label="GRU training",
+        phase="training",
+        model_name="gru",
+        information_profile=profile.value,
+        seed=seed,
+        total_epochs=epochs,
+        total_samples=total_samples,
+        training_windows=samples_per_epoch,
+        batches_per_epoch=1,
+    )
     network.train()
-    for _ in range(epochs):
+    samples_completed = 0
+    last_epoch_loss: float | None = None
+    for epoch_index in range(epochs):
+        epoch_started = perf_counter()
         optimiser.zero_grad()
         loss = loss_function(network(tensor), targets)
         loss.backward()
         optimiser.step()
-    profile = InformationProfile(information_profile)
-    return TrainedGRU(
+        last_epoch_loss = float(loss.detach().item())
+        samples_completed += samples_per_epoch
+        _emit_metric(
+            emitter,
+            "epoch_progress",
+            stage_id,
+            phase="epoch",
+            model_name="gru",
+            epoch=epoch_index + 1,
+            total_epochs=epochs,
+            batch=1,
+            total_batches=1,
+            epoch_samples=samples_per_epoch,
+            total_epoch_samples=samples_per_epoch,
+            samples=samples_completed,
+            total_samples=total_samples,
+            training_loss=last_epoch_loss,
+            epoch_seconds=perf_counter() - epoch_started,
+        )
+    model = TrainedGRU(
         network=network,
         feature_names=feature_names,
         feature_mean=mean.astype(np.float32),
@@ -389,21 +432,71 @@ def train_gru(
             "code_revision": code_revision(),
         },
     )
+    completed_values: dict[str, object] = {
+        "label": "GRU training",
+        "phase": "training",
+        "model_name": "gru",
+        "information_profile": profile.value,
+        "total_epochs": epochs,
+        "samples": samples_completed,
+        "total_samples": total_samples,
+        "training_windows": samples_per_epoch,
+    }
+    if last_epoch_loss is not None:
+        completed_values["training_loss"] = last_epoch_loss
+    _emit_metric(
+        emitter,
+        "stage_completed",
+        stage_id,
+        **completed_values,
+    )
+    return model
 
 
-def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> TemperatureFit:
+def fit_temperature(
+    logits: np.ndarray,
+    labels: np.ndarray,
+    *,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "monitor-calibration",
+    expected_followup_rows: int = 0,
+) -> TemperatureFit:
     """Fit one temperature from validation logits and labels only."""
+    if expected_followup_rows < 0:
+        raise ValueError("the expected follow-up rows must be nonnegative")
     values = np.asarray(logits, dtype=float)
     truth = np.asarray(labels, dtype=float)
-    candidates = np.exp(np.linspace(np.log(0.05), np.log(20.0), 1201))
+    candidates = np.exp(
+        np.linspace(np.log(0.05), np.log(20.0), _TEMPERATURE_CANDIDATE_COUNT)
+    )
     losses = []
-    for temperature in candidates:
+    row_count = int(len(truth))
+    total_rows = row_count * len(candidates) + expected_followup_rows
+    progress_stride = max(len(candidates) // 100, 1)
+    for candidate_index, temperature in enumerate(candidates):
         probabilities = _sigmoid(values / temperature)
         probabilities = np.clip(probabilities, 1e-12, 1.0 - 1e-12)
         loss = -np.mean(
             truth * np.log(probabilities) + (1.0 - truth) * np.log(1.0 - probabilities)
         )
         losses.append(float(loss))
+        if (
+            candidate_index == 0
+            or (candidate_index + 1) % progress_stride == 0
+            or candidate_index + 1 == len(candidates)
+        ):
+            _emit_metric(
+                emitter,
+                "calibration_progress",
+                stage_id,
+                phase="temperature",
+                rows=row_count * (candidate_index + 1),
+                total_rows=total_rows,
+                candidate=candidate_index + 1,
+                total_candidates=len(candidates),
+                temperature=float(temperature),
+                calibration_loss=float(loss),
+            )
     selected = int(np.argmin(losses))
     return TemperatureFit.from_candidates(np.log(candidates), selected)
 
@@ -413,8 +506,13 @@ def select_threshold(
     labels: np.ndarray,
     *,
     false_alarm_budget: float = FALSE_ALARM_BUDGET,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "monitor-calibration",
+    processed_row_offset: int = 0,
 ) -> tuple[float, float, float]:
     """Select the highest-recall threshold inside the false-alarm budget."""
+    if processed_row_offset < 0:
+        raise ValueError("the processed row offset must be nonnegative")
     values = np.asarray(scores, dtype=float)
     truth = np.asarray(labels, dtype=int)
     if not np.any(truth == 0) or not np.any(truth == 1):
@@ -429,12 +527,34 @@ def select_threshold(
         )
     )
     viable = []
-    for threshold in candidates:
+    row_count = int(len(truth))
+    total_rows = processed_row_offset + row_count * len(candidates)
+    progress_stride = max(len(candidates) // 100, 1)
+    for candidate_index, threshold in enumerate(candidates):
         predicted = values >= threshold
         false_alarm_rate = float(np.mean(predicted[truth == 0]))
         recall = float(np.mean(predicted[truth == 1]))
         if false_alarm_rate <= false_alarm_budget + 1e-12:
             viable.append((-recall, float(threshold), false_alarm_rate, recall))
+        if (
+            candidate_index == 0
+            or (candidate_index + 1) % progress_stride == 0
+            or candidate_index + 1 == len(candidates)
+        ):
+            _emit_metric(
+                emitter,
+                "calibration_progress",
+                stage_id,
+                phase="threshold",
+                rows=processed_row_offset + row_count * (candidate_index + 1),
+                total_rows=total_rows,
+                candidate=candidate_index + 1,
+                total_candidates=len(candidates),
+                candidate_threshold=float(threshold),
+                false_alarm_rate=false_alarm_rate,
+                false_alarm_budget=false_alarm_budget,
+                recall=recall,
+            )
     if not viable:
         raise ModelGateError("no threshold satisfies the false-alarm budget")
     _, threshold, false_alarm_rate, recall = min(viable)
@@ -446,14 +566,49 @@ def calibrate_and_gate(
     validation: pd.DataFrame,
     *,
     false_alarm_budget: float = FALSE_ALARM_BUDGET,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "monitor-calibration",
+    model_name: str = "model",
 ) -> Calibration:
     """Calibrate and gate one model on validation rows only."""
     labels = validation[ATTACK_LABEL].to_numpy(dtype=int)
-    temperature_fit = fit_temperature(logits, labels)
+    temperature_rows = int(len(labels)) * _TEMPERATURE_CANDIDATE_COUNT
+    threshold_row_ceiling = int(len(labels)) * (int(len(labels)) + 2)
+    _emit_metric(
+        emitter,
+        "stage_started",
+        stage_id,
+        label=f"{model_name.replace('_', ' ').title()} calibration",
+        phase="calibration",
+        model_name=model_name,
+        total_samples=int(len(labels)),
+        validation_rows=int(len(labels)),
+    )
+    _emit_metric(
+        emitter,
+        "calibration_started",
+        stage_id,
+        phase="started",
+        model_name=model_name,
+        rows=0,
+        total_rows=temperature_rows + threshold_row_ceiling,
+    )
+    temperature_fit = fit_temperature(
+        logits,
+        labels,
+        emitter=emitter,
+        stage_id=stage_id,
+        expected_followup_rows=threshold_row_ceiling,
+    )
     temperature = temperature_fit.temperature
     scores = _sigmoid(np.asarray(logits, dtype=float) / temperature)
     threshold, false_alarm_rate, recall = select_threshold(
-        scores, labels, false_alarm_budget=false_alarm_budget
+        scores,
+        labels,
+        false_alarm_budget=false_alarm_budget,
+        emitter=emitter,
+        stage_id=stage_id,
+        processed_row_offset=temperature_rows,
     )
     sleeper = (validation["attack_kind"].to_numpy(dtype=str) == "sleeper_saboteur") & (
         labels == 1
@@ -461,7 +616,7 @@ def calibrate_and_gate(
     sleeper_recall = (
         float(np.mean(scores[sleeper] >= threshold)) if np.any(sleeper) else 0.0
     )
-    return Calibration(
+    calibration = Calibration(
         temperature=temperature,
         threshold=threshold,
         false_alarm_rate=false_alarm_rate,
@@ -469,6 +624,56 @@ def calibrate_and_gate(
         sleeper_recall=sleeper_recall,
         temperature_fit=temperature_fit,
     )
+    gate_passed = (
+        false_alarm_rate <= false_alarm_budget + 1e-12
+        and sleeper_recall >= SLEEPER_RECALL_GATE
+    )
+    _emit_metric(
+        emitter,
+        "calibration_completed",
+        stage_id,
+        phase="complete",
+        model_name=model_name,
+        temperature=temperature,
+        threshold=threshold,
+        false_alarm_rate=false_alarm_rate,
+        false_alarm_budget=false_alarm_budget,
+        recall=recall,
+        sleeper_recall=sleeper_recall,
+    )
+    _emit_metric(
+        emitter,
+        "gate_evaluated",
+        stage_id,
+        criterion="sleeper-recall-at-false-alarm-budget",
+        metric_name="sleeper_recall",
+        model_name=model_name,
+        observed=sleeper_recall,
+        required=SLEEPER_RECALL_GATE,
+        passed=gate_passed,
+        false_alarm_rate=false_alarm_rate,
+        false_alarm_budget=false_alarm_budget,
+        threshold=threshold,
+        recall=recall,
+    )
+    _emit_metric(
+        emitter,
+        "stage_completed",
+        stage_id,
+        label=f"{model_name.replace('_', ' ').title()} calibration",
+        phase="calibration",
+        model_name=model_name,
+        samples=int(len(labels)),
+        total_samples=int(len(labels)),
+        temperature=temperature,
+        threshold=threshold,
+        false_alarm_rate=false_alarm_rate,
+        false_alarm_budget=false_alarm_budget,
+        recall=recall,
+        sleeper_recall=sleeper_recall,
+        gate_passed=gate_passed,
+    )
+    return calibration
 
 
 def compare_declared_models(
@@ -477,20 +682,32 @@ def compare_declared_models(
     held_out: pd.DataFrame,
     *,
     config: TrainingConfig | None = None,
+    emitter: MetricEmitter | None = None,
+    stage_id: str | None = None,
 ) -> tuple[ModelComparison, ModelComparison]:
     """Compare the declared models on the same held-out window endpoints."""
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)
+    base_stage = stage_id or f"monitor-{profile.value.replace('_', '-')}"
     feature_names = feature_names_for(profile)
     validation_windows = build_run_windows(validation, feature_names)
     held_out_windows = build_run_windows(held_out, feature_names)
     validation_rows = _window_rows(validation, validation_windows)
     held_out_rows = _window_rows(held_out, held_out_windows)
 
-    perceptron = train_perceptron(train, validation, config)
+    perceptron = train_perceptron(
+        train,
+        validation,
+        config,
+        emitter=emitter,
+        stage_id=f"{base_stage}-perceptron",
+    )
     perceptron_calibration = calibrate_and_gate(
         perceptron.logits(_features(validation_rows, profile)),
         validation_rows,
+        emitter=emitter,
+        stage_id=f"{base_stage}-perceptron-calibration",
+        model_name="perceptron",
     )
     perceptron_result = _comparison_result(
         "perceptron",
@@ -507,10 +724,15 @@ def compare_declared_models(
         epochs=config.epochs,
         learning_rate=config.learning_rate,
         information_profile=profile,
+        emitter=emitter,
+        stage_id=f"{base_stage}-gru-training",
     )
     gru_calibration = calibrate_and_gate(
         gru.logits(validation_windows.features),
         validation_rows,
+        emitter=emitter,
+        stage_id=f"{base_stage}-gru-calibration",
+        model_name="gru",
     )
     gru_result = _comparison_result(
         "gru",
@@ -529,11 +751,19 @@ def train_locked_monitor(
     *,
     config: TrainingConfig | None = None,
     dataset_checksums: dict[str, str] | None = None,
+    emitter: MetricEmitter | None = None,
+    stage_id: str | None = None,
 ) -> dict[str, Any]:
     """Train one declared model and lock every accepted artifact."""
     shortcut = require_approved_shortcut_report(shortcut_report_path)
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)
+    base_stage = stage_id or f"monitor-{profile.value.replace('_', '-')}"
+    perceptron_stage = f"{base_stage}-perceptron"
+    perceptron_calibration_stage = f"{base_stage}-perceptron-calibration"
+    gru_stage = f"{base_stage}-gru"
+    gru_training_stage = f"{gru_stage}-training"
+    gru_calibration_stage = f"{base_stage}-gru-calibration"
     expected_checksums = _require_dataset_checksums(dataset_checksums)
     if (
         profile is InformationProfile.PRINCIPAL
@@ -543,42 +773,282 @@ def train_locked_monitor(
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ArtifactError("an immutable model output already exists")
     feature_names = feature_names_for(profile)
-    perceptron = train_perceptron(train, validation, config)
-    calibration = calibrate_and_gate(
-        perceptron.logits(_features(validation, profile)), validation
+    _emit_metric(
+        emitter,
+        "stage_started",
+        base_stage,
+        label=f"{profile.value.replace('_', ' ').title()} monitor training",
+        phase="training",
+        model_name=profile.value,
+        information_profile=profile.value,
+        seed=config.seed,
+        training_rows=int(len(train)),
+        validation_rows=int(len(validation)),
+        conditional_gru_epochs=config.epochs,
     )
+    _emit_metric(
+        emitter,
+        "gru_state",
+        gru_stage,
+        state="not_evaluated",
+        model_name="gru",
+        information_profile=profile.value,
+    )
+    try:
+        perceptron = train_perceptron(
+            train,
+            validation,
+            config,
+            emitter=emitter,
+            stage_id=perceptron_stage,
+        )
+    except Exception as error:
+        _emit_metric(
+            emitter,
+            "stage_failed",
+            perceptron_stage,
+            phase="training",
+            model_name="perceptron",
+            error_type=type(error).__name__,
+            error=str(error),
+        )
+        _emit_metric(
+            emitter,
+            "stage_failed",
+            base_stage,
+            label=f"{profile.value.replace('_', ' ').title()} monitor training",
+            phase="training",
+            model_name=profile.value,
+            failed_model="perceptron",
+            count_failure=False,
+            error_type=type(error).__name__,
+            error_message=str(error),
+            error=str(error),
+        )
+        raise
+    try:
+        calibration = calibrate_and_gate(
+            perceptron.logits(_features(validation, profile)),
+            validation,
+            emitter=emitter,
+            stage_id=perceptron_calibration_stage,
+            model_name="perceptron",
+        )
+    except Exception as error:
+        _emit_metric(
+            emitter,
+            "stage_failed",
+            perceptron_calibration_stage,
+            phase="calibration",
+            model_name="perceptron",
+            error_type=type(error).__name__,
+            error=str(error),
+        )
+        _emit_metric(
+            emitter,
+            "stage_failed",
+            base_stage,
+            label=f"{profile.value.replace('_', ' ').title()} monitor training",
+            phase="calibration",
+            model_name=profile.value,
+            failed_model="perceptron",
+            count_failure=False,
+            error_type=type(error).__name__,
+            error_message=str(error),
+            error=str(error),
+        )
+        raise
     selected: TrainedModel | TrainedGRU = perceptron
     model_kind = "perceptron"
     selected_windows: WindowBatch | None = None
     if calibration.sleeper_recall < SLEEPER_RECALL_GATE:
-        _write_failed_candidate(
-            perceptron,
-            calibration,
-            output_dir / "failed-perceptron",
-            shortcut_report_path,
-            expected_checksums,
-            profile,
-            train_rows=len(train),
-            validation_rows=len(validation),
+        _emit_metric(
+            emitter,
+            "gru_state",
+            gru_stage,
+            state="triggered",
+            model_name="gru",
+            information_profile=profile.value,
+            criterion="sleeper-recall-at-false-alarm-budget",
+            observed=calibration.sleeper_recall,
+            required=SLEEPER_RECALL_GATE,
+            false_alarm_rate=calibration.false_alarm_rate,
+            false_alarm_budget=FALSE_ALARM_BUDGET,
         )
-        train_windows = build_run_windows(train, feature_names)
-        validation_windows = build_run_windows(validation, feature_names)
-        gru = train_gru(
-            train_windows,
-            feature_names,
-            seed=config.seed,
-            epochs=config.epochs,
-            learning_rate=config.learning_rate,
-            information_profile=profile,
+        try:
+            _write_failed_candidate(
+                perceptron,
+                calibration,
+                output_dir / "failed-perceptron",
+                shortcut_report_path,
+                expected_checksums,
+                profile,
+                train_rows=len(train),
+                validation_rows=len(validation),
+            )
+            train_windows = build_run_windows(train, feature_names)
+            validation_windows = build_run_windows(validation, feature_names)
+        except Exception as error:
+            _emit_metric(
+                emitter,
+                "gru_state",
+                gru_stage,
+                state="failed",
+                model_name="gru",
+                information_profile=profile.value,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+            _emit_metric(
+                emitter,
+                "stage_failed",
+                gru_stage,
+                phase="fallback preparation",
+                model_name="gru",
+                error_type=type(error).__name__,
+                error=str(error),
+            )
+            _emit_metric(
+                emitter,
+                "stage_failed",
+                base_stage,
+                phase="fallback preparation",
+                model_name=profile.value,
+                failed_model="gru",
+                count_failure=False,
+                error_type=type(error).__name__,
+                error=str(error),
+            )
+            raise
+        _emit_metric(
+            emitter,
+            "gru_state",
+            gru_stage,
+            state="training",
+            model_name="gru",
+            information_profile=profile.value,
+            total_epochs=config.epochs,
+            training_windows=int(len(train_windows.labels)),
         )
+        try:
+            gru = train_gru(
+                train_windows,
+                feature_names,
+                seed=config.seed,
+                epochs=config.epochs,
+                learning_rate=config.learning_rate,
+                information_profile=profile,
+                emitter=emitter,
+                stage_id=gru_training_stage,
+            )
+        except Exception as error:
+            _emit_metric(
+                emitter,
+                "stage_failed",
+                gru_training_stage,
+                phase="training",
+                model_name="gru",
+                error_type=type(error).__name__,
+                error=str(error),
+            )
+            _emit_metric(
+                emitter,
+                "gru_state",
+                gru_stage,
+                state="failed",
+                model_name="gru",
+                information_profile=profile.value,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+            _emit_metric(
+                emitter,
+                "stage_failed",
+                base_stage,
+                label=f"{profile.value.replace('_', ' ').title()} monitor training",
+                phase="training",
+                model_name=profile.value,
+                failed_model="gru",
+                count_failure=False,
+                error_type=type(error).__name__,
+                error_message=str(error),
+                error=str(error),
+            )
+            raise
         window_rows = _window_rows(validation, validation_windows)
-        calibration = calibrate_and_gate(
-            gru.logits(validation_windows.features), window_rows
-        )
+        try:
+            calibration = calibrate_and_gate(
+                gru.logits(validation_windows.features),
+                window_rows,
+                emitter=emitter,
+                stage_id=gru_calibration_stage,
+                model_name="gru",
+            )
+        except Exception as error:
+            _emit_metric(
+                emitter,
+                "stage_failed",
+                gru_calibration_stage,
+                phase="calibration",
+                model_name="gru",
+                error_type=type(error).__name__,
+                error=str(error),
+            )
+            _emit_metric(
+                emitter,
+                "gru_state",
+                gru_stage,
+                state="failed",
+                model_name="gru",
+                information_profile=profile.value,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+            _emit_metric(
+                emitter,
+                "stage_failed",
+                base_stage,
+                label=f"{profile.value.replace('_', ' ').title()} monitor training",
+                phase="calibration",
+                model_name=profile.value,
+                failed_model="gru",
+                count_failure=False,
+                error_type=type(error).__name__,
+                error_message=str(error),
+                error=str(error),
+            )
+            raise
         selected = gru
         selected_windows = validation_windows
         model_kind = "gru"
+    if model_kind == "perceptron":
+        _emit_metric(
+            emitter,
+            "gru_state",
+            gru_stage,
+            state="not_required",
+            model_name="gru",
+            information_profile=profile.value,
+            criterion="sleeper-recall-at-false-alarm-budget",
+            observed=calibration.sleeper_recall,
+            required=SLEEPER_RECALL_GATE,
+            false_alarm_rate=calibration.false_alarm_rate,
+            false_alarm_budget=FALSE_ALARM_BUDGET,
+        )
     if calibration.sleeper_recall < SLEEPER_RECALL_GATE:
+        _emit_metric(
+            emitter,
+            "gru_state",
+            gru_stage,
+            state="failed",
+            model_name="gru",
+            information_profile=profile.value,
+            criterion="sleeper-recall-at-false-alarm-budget",
+            observed=calibration.sleeper_recall,
+            required=SLEEPER_RECALL_GATE,
+            false_alarm_rate=calibration.false_alarm_rate,
+            false_alarm_budget=FALSE_ALARM_BUDGET,
+        )
         _write_failed_candidate(
             selected,
             calibration,
@@ -592,7 +1062,38 @@ def train_locked_monitor(
                 None if selected_windows is None else len(selected_windows.labels)
             ),
         )
+        _emit_metric(
+            emitter,
+            "stage_failed",
+            base_stage,
+            label=f"{profile.value.replace('_', ' ').title()} monitor training",
+            phase="gate",
+            model_name=profile.value,
+            error_type="ModelGateError",
+            error_message="no declared model satisfies the sleeper recall gate",
+            error="no declared model satisfies the sleeper recall gate",
+        )
         raise ModelGateError("no declared model satisfies the sleeper recall gate")
+    if model_kind == "gru":
+        _emit_metric(
+            emitter,
+            "gru_state",
+            gru_stage,
+            state="complete",
+            model_name="gru",
+            information_profile=profile.value,
+            observed=calibration.sleeper_recall,
+            required=SLEEPER_RECALL_GATE,
+            false_alarm_rate=calibration.false_alarm_rate,
+            false_alarm_budget=FALSE_ALARM_BUDGET,
+        )
+    _emit_metric(
+        emitter,
+        "stage_phase",
+        base_stage,
+        phase="writing artifacts",
+        model_name=model_kind,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "model.pt"
     selected.metadata["calibration"] = {
@@ -669,6 +1170,24 @@ def train_locked_monitor(
         ),
         expected_checksums,
         profile,
+    )
+    _emit_metric(
+        emitter,
+        "stage_completed",
+        base_stage,
+        label=f"{profile.value.replace('_', ' ').title()} monitor training",
+        phase="complete",
+        model_name=profile.value,
+        information_profile=profile.value,
+        selected_model=model_kind,
+        training_rows=int(len(train)),
+        validation_rows=int(len(validation)),
+        threshold=calibration.threshold,
+        false_alarm_rate=calibration.false_alarm_rate,
+        false_alarm_budget=FALSE_ALARM_BUDGET,
+        recall=calibration.recall,
+        sleeper_recall=calibration.sleeper_recall,
+        gate_passed=True,
     )
     return {
         "metadata": metadata,
@@ -1349,3 +1868,18 @@ def _sigmoid(values: np.ndarray) -> np.ndarray:
     """Return stable logistic probabilities."""
     clipped = np.clip(values, -40.0, 40.0)
     return 1.0 / (1.0 + np.exp(-clipped))
+
+
+def _emit_metric(
+    emitter: MetricEmitter | None,
+    kind: str,
+    stage_id: str,
+    **values: object,
+) -> None:
+    """Emit one structured training metric when reporting is active."""
+    if emitter is None:
+        return
+    try:
+        emitter.emit(MetricEvent.create(kind, stage_id, worker_id=None, **values))
+    except Exception:
+        return

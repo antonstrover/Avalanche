@@ -107,7 +107,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "envelope_version": 1,
         "evaluation_version": 3,
         "feature_version": 2,
-        "metrics_version": 8,
+        "metrics_version": 9,
         "model_version": 2,
         "observation_schema_version": 2,
         "operational_event_schema_version": 1,

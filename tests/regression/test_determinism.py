@@ -29,7 +29,7 @@ from avalanche.monitors.perceptron import (
     save_model,
 )
 from avalanche.monitors.training import AttemptLockV2, gate_digest
-from avalanche.sim import MountainSim, population_from_starts
+from avalanche.sim import LocationKind, MountainSim, population_from_starts
 from avalanche.sim.engine import STREAM_NAMES
 from tests.configuration import resolve_test_configuration
 
@@ -51,6 +51,8 @@ METRIC_NAMES = {
     "reported_density_limit_seconds",
     "stranded_skiers",
     "stranded_time_seconds",
+    "queue_no_route_blocked_seconds",
+    "onboard_blocked_seconds",
     "group_utility",
     "group_mean_wait_times",
     "fairness",
@@ -137,8 +139,8 @@ def test_two_resets_share_one_static_route_identity():
     assert first.routes is second.routes
 
 
-def test_appended_route_streams_preserve_each_existing_stream_state():
-    existing_names = STREAM_NAMES[:-2]
+def test_the_blocked_sensor_stream_preserves_each_existing_stream_state():
+    existing_names = STREAM_NAMES[:-1]
     original = np.random.default_rng(SEED).spawn(len(existing_names))
     extended = np.random.default_rng(SEED).spawn(len(STREAM_NAMES))
 
@@ -183,6 +185,29 @@ def test_route_tie_draws_do_not_change_external_schedules_or_sensor_packets():
     )
 
 
+def test_blocked_sensor_draws_do_not_change_operational_sensor_packets():
+    plain = MountainSim(FIXTURE)
+    plain.reset(SEED)
+    disturbed = MountainSim(FIXTURE)
+    disturbed.reset(SEED)
+    disturbed.streams["blocked_sensor"].random(100)
+
+    for _ in range(24):
+        plain.tick()
+        disturbed.tick()
+
+    assert plain.route_sensor_packet.sample_time == 60.0
+    assert disturbed.route_sensor_packet.sample_time == 60.0
+    np.testing.assert_array_equal(
+        plain.route_sensor_packet.reported_speed_factor,
+        disturbed.route_sensor_packet.reported_speed_factor,
+    )
+    np.testing.assert_array_equal(
+        plain.route_sensor_packet.speed_factor_missing,
+        disturbed.route_sensor_packet.speed_factor_missing,
+    )
+
+
 def test_the_state_moves_during_the_run():
     checksums = run(SEED)
     assert len(set(checksums)) > 1
@@ -196,6 +221,84 @@ def test_the_reset_gives_the_observation_and_the_metadata():
     assert len(observation["edge_closed"]) == metadata["edge_count"]
     assert metadata["seed"] == SEED
     assert metadata["mountain"] == "small-resort"
+
+
+def failure_recovery_run(seed: int) -> tuple[list[dict[str, Any]], tuple[tuple, ...]]:
+    """Return one deterministic failure and recovery replay."""
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "lift1_base->lift1_top",
+                "start_time_seconds": 0.0,
+                "duration_seconds": 10.0,
+                "controller_visible": True,
+            },
+            {
+                "kind": "lift_stoppage",
+                "target": "lift1_base->lift1_top",
+                "start_time_seconds": 15.0,
+                "duration_seconds": 5.0,
+                "controller_visible": True,
+            },
+        ]
+    }
+    sim = MountainSim(FIXTURE)
+    sim.reset(
+        seed,
+        {
+            "failures": failures,
+            "hazards": {"stranded_after_seconds": 20.0},
+        },
+    )
+    lift = sim.failure_schedule.events[0].target
+    source = int(sim.topology.edge_source[lift])
+    destination = sim.topology.node_index["base_exit"]
+    pop = population_from_starts([source, source], destination)
+    pop.location_kind[:] = (LocationKind.QUEUE, LocationKind.LIFT)
+    pop.location_index[:] = lift
+    pop.queue_ticket[0] = 0
+    pop.queue_source_node[0] = source
+    pop.chosen_edge[0] = lift
+    pop.required_travel_seconds[1] = 30.0
+    pop.remaining_travel_seconds[1] = 30.0
+    sim.population = pop
+
+    timeline = []
+    for _ in range(6):
+        sim.tick()
+        timeline.append(
+            (
+                sim.state_checksum(),
+                tuple(int(value) for value in pop.status),
+                tuple(float(value) for value in pop.queue_no_route_blocked_seconds),
+                tuple(float(value) for value in pop.onboard_blocked_seconds),
+                tuple(float(value) for value in pop.remaining_travel_seconds),
+                tuple(
+                    (event.kind.value, event.start_time_seconds)
+                    for event in sim.failure_transitions.started
+                ),
+                tuple(
+                    (event.kind.value, event.end_time_seconds)
+                    for event in sim.failure_transitions.ended
+                ),
+            )
+        )
+    schedule = sim.metadata(seed)["failure_schedule"]
+    return schedule, tuple(timeline)
+
+
+def test_failure_and_recovery_replay_is_deterministic():
+    """Repeat every transition and state in a failure recovery replay."""
+    first = failure_recovery_run(SEED)
+    second = failure_recovery_run(SEED)
+
+    assert first == second
+    assert len({tick[0] for tick in first[1]}) > 1
+    assert any(tick[2][0] > 0.0 for tick in first[1])
+    assert any(tick[3][1] > 0.0 for tick in first[1])
+    assert any(tick[5] for tick in first[1])
+    assert any(tick[6] for tick in first[1])
 
 
 POPULATION = PopulationConfig(

@@ -21,6 +21,8 @@ def fixed_episode() -> tuple[OnlineMetrics, object]:
         Status.COMPLETE,
     ]
     population.wait_time[:] = [10.0, 20.0, 30.0, 40.0]
+    population.queue_no_route_blocked_seconds[:] = [0.0, 5.0, 0.0, 10.0]
+    population.onboard_blocked_seconds[:] = [0.0, 0.0, 5.0, 0.0]
     state = DynamicState(
         density_ratio=np.array([1.1, 0.9, 1.5]),
         reported_density_ratio=np.array([1.1, 0.9, 0.4]),
@@ -40,6 +42,8 @@ def test_each_metric_formula_uses_the_fixed_episode():
     assert snapshot.reported_density_limit_seconds == 5.0
     assert snapshot.stranded_skiers == 1
     assert snapshot.stranded_time_seconds == 5.0
+    assert snapshot.queue_no_route_blocked_seconds == 10.0
+    assert snapshot.onboard_blocked_seconds == 5.0
     assert snapshot.group_utility == (0.35, 0.125, 0.0)
     assert snapshot.group_mean_wait_times == (15.0, 35.0, 0.0)
     assert snapshot.fairness == 20.0
@@ -68,6 +72,8 @@ def test_updates_accumulate_density_and_stranded_time():
     assert snapshot.density_limit_seconds == 20.0
     assert snapshot.reported_density_limit_seconds == 10.0
     assert snapshot.stranded_time_seconds == 10.0
+    assert snapshot.queue_no_route_blocked_seconds == 20.0
+    assert snapshot.onboard_blocked_seconds == 10.0
 
 
 def test_a_boundary_transition_does_not_charge_the_previous_tick():
@@ -106,7 +112,7 @@ def test_a_reported_override_separates_the_two_density_metrics():
 def test_the_snapshot_serialises_each_versioned_field():
     metrics, population = fixed_episode()
     values = metrics.snapshot(population).as_dict()
-    assert values["metrics_version"] == METRICS_VERSION == 8
+    assert values["metrics_version"] == METRICS_VERSION == 9
     assert values["reported_density_limit_seconds"] == 5.0
     assert set(values) == {
         "metrics_version",
@@ -116,6 +122,8 @@ def test_the_snapshot_serialises_each_versioned_field():
         "reported_density_limit_seconds",
         "stranded_skiers",
         "stranded_time_seconds",
+        "queue_no_route_blocked_seconds",
+        "onboard_blocked_seconds",
         "group_utility",
         "group_mean_wait_times",
         "fairness",
@@ -179,6 +187,8 @@ def test_a_new_accumulator_resets_each_running_total():
     assert snapshot.density_limit_seconds == 0.0
     assert snapshot.reported_density_limit_seconds == 0.0
     assert snapshot.stranded_time_seconds == 0.0
+    assert snapshot.queue_no_route_blocked_seconds == 0.0
+    assert snapshot.onboard_blocked_seconds == 0.0
     assert snapshot.route_decision_count == 0
     assert snapshot.missing_sensor_route_decision_count == 0
 

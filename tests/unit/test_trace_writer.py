@@ -68,12 +68,12 @@ def test_an_event_can_use_one_captured_boundary_state(tmp_path):
 def test_a_run_summary_rejects_an_old_metrics_version(tmp_path):
     writer = TraceWriter(tmp_path, "run-one", "episode-0", 4)
 
-    with pytest.raises(ValueError, match="metrics version 8"):
+    with pytest.raises(ValueError, match="metrics version 9"):
         writer.close({"metrics": {"metrics_version": 7}})
 
 
 def test_a_run_summary_requires_metrics(tmp_path):
     writer = TraceWriter(tmp_path, "run-one", "episode-0", 4)
 
-    with pytest.raises(ValueError, match="metrics version 8"):
+    with pytest.raises(ValueError, match="metrics version 9"):
         writer.close({"complete": True})

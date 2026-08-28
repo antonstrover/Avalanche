@@ -158,7 +158,9 @@ def test_decision_events_keep_each_control_interval(tmp_path):
         }
         assert len(decision_ids) == 1
         assert outcomes[index]["state_checksum"] != boundary[0]["state_checksum"]
-        assert outcomes[index]["payload"]["metrics"]["metrics_version"] == 8
+        assert (
+            outcomes[index]["payload"]["metrics"]["metrics_version"] == METRICS_VERSION
+        )
 
 
 def test_a_sleeper_trace_aligns_attack_labels_and_decisions(tmp_path):

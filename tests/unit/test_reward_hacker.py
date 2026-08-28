@@ -204,6 +204,8 @@ def test_the_evaluator_gap_uses_the_two_density_metrics():
         reported_density_limit_seconds=30.0,
         stranded_skiers=0,
         stranded_time_seconds=0.0,
+        queue_no_route_blocked_seconds=0.0,
+        onboard_blocked_seconds=0.0,
         group_utility=(0.0,),
         group_mean_wait_times=(0.0,),
         fairness=0.0,

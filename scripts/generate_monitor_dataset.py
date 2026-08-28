@@ -1,6 +1,6 @@
 """Make the labelled development traces for the learned process monitor.
 
-The script runs each entry of the training matrix without a display.
+The script runs each entry without the frontend.
 It writes one Parquet file of feature rows and labels, and a summary file.
 
 The monitor allows every proposal during a dataset run, so the rows record
@@ -24,6 +24,7 @@ from avalanche.monitors.dataset import (
     generate_dataset,
     generate_dataset_entries,
 )
+from avalanche.observability import MetricEvent, ObservabilitySession, StageStatus
 
 DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "datasets" / "monitor-training.parquet"
 
@@ -45,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[profile.value for profile in InformationProfile],
         default=InformationProfile.PRINCIPAL.value,
     )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="disable the live terminal report",
+    )
     return parser
 
 
@@ -52,25 +58,77 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.fixture and args.limit is not None:
         raise ValueError("the fixture selection cannot use an entry limit")
-    if args.fixture:
-        manifest = load_yaml(args.manifest)
-        entries = fixture_entries(expand_manifest(manifest))
-        written = generate_dataset_entries(
-            args.manifest,
-            args.output,
-            entries,
-            source_manifest=manifest,
-            information_profile=args.information_profile,
+    manifest = load_yaml(args.manifest)
+    profile = InformationProfile(args.information_profile)
+    stage_id = f"{profile.value.replace('_', '-')}-traces"
+    session = ObservabilitySession(
+        enabled=False if args.no_progress else None,
+        log_path=_log_path(args.output),
+        multiprocessing=True,
+    )
+    session.emitter.emit(
+        MetricEvent.create(
+            "run_config",
+            stage_id,
+            configuration=str(args.manifest),
+            dataset=str(args.output),
+            information_profile=profile.value,
+            seeds=manifest.get("seeds", ()),
+            scenario=[value.get("id") for value in manifest.get("families", ())],
         )
-    else:
-        written = generate_dataset(
-            args.manifest,
-            args.output,
-            limit=args.limit,
-            information_profile=args.information_profile,
-        )
+    )
+    with session:
+        try:
+            session.emitter.emit(
+                MetricEvent.create(
+                    "stage_phase",
+                    stage_id,
+                    phase="expanding matrix",
+                )
+            )
+            if args.fixture:
+                entries = fixture_entries(expand_manifest(manifest))
+                written = generate_dataset_entries(
+                    args.manifest,
+                    args.output,
+                    entries,
+                    source_manifest=manifest,
+                    information_profile=profile,
+                    emitter=session.process_emitter,
+                    stage_id=stage_id,
+                )
+            else:
+                written = generate_dataset(
+                    args.manifest,
+                    args.output,
+                    limit=args.limit,
+                    information_profile=profile,
+                    emitter=session.process_emitter,
+                    stage_id=stage_id,
+                )
+        except Exception as error:
+            session.drain_pending()
+            if not any(
+                stage.status == StageStatus.FAILED
+                for stage in session.aggregator.snapshot().stages
+            ):
+                session.emitter.emit(
+                    MetricEvent.create(
+                        "stage_failed",
+                        stage_id,
+                        phase="generation",
+                        error_type=type(error).__name__,
+                        error=str(error),
+                    )
+                )
+            raise
     print(f"Wrote the labelled rows to {written}")
     return 0
+
+
+def _log_path(output: Path) -> Path:
+    """Return the persistent generation log path."""
+    return output.with_suffix(output.suffix + ".observability.jsonl")
 
 
 def fixture_entries(entries: list[DatasetEntry]) -> list[DatasetEntry]:
