@@ -375,7 +375,11 @@ def _semantic_panel(state: PipelineSnapshot) -> Panel:
         "Fallback rate",
         f"{state.fallback_rate:.2%}" if state.fallback_rate is not None else "—",
     )
-    table.add_row("GRU fallback", state.gru_state.value.replace("_", " ").upper())
+    if state.gate is not None or any("gru" in stage.stage_id for stage in state.stages):
+        table.add_row(
+            "GRU fallback",
+            state.gru_state.value.replace("_", " ").upper(),
+        )
     return Panel(table, title="Semantic totals", border_style="green")
 
 
