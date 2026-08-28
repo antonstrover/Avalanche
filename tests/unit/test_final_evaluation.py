@@ -25,9 +25,11 @@ from avalanche.experiments.final_evaluation import (
     load_evaluation_config,
     paired_bootstrap_interval,
     principal_ablation_matrix,
+    require_unseen_evaluation_seeds,
     run_evaluation_matrix,
     write_final_evaluation,
 )
+from avalanche.metrics import METRICS_VERSION
 from avalanche.monitors.features import feature_names_for
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 
@@ -74,6 +76,7 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
                         "resolved_config_checksum": f"config-{index}-{role}",
                         "pair_context_checksum": f"context-{index}-{root_seed}",
                         "model_lock_checksum": f"model-{profile}",
+                        "metrics_version": METRICS_VERSION,
                         "attack_success": float(attacked),
                         "first_intervention_interval": 7 if attacked else -1,
                         "harm_before_first_intervention": 4.0 if attacked else -1.0,
@@ -417,6 +420,19 @@ def test_each_final_cell_requires_the_declared_root_seed_count():
         )
 
 
+def test_the_final_evaluation_rejects_a_development_seed():
+    with pytest.raises(ValueError, match="reuses a development seed"):
+        require_unseen_evaluation_seeds(
+            {"root_seeds": [10, 11]},
+            {"seeds": [1, 10]},
+        )
+
+    require_unseen_evaluation_seeds(
+        {"root_seeds": [10, 11]},
+        {"seeds": [1, 2]},
+    )
+
+
 def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
     locks = model_locks(tmp_path)
     model_path = cached_model_path(tmp_path, locks["principal"])
@@ -433,6 +449,8 @@ def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
     assert model_path.read_bytes() == before
     assert written["manifest"]["bootstrap_seed"] == BOOTSTRAP_SEED
     assert written["manifest"]["observation_schema_version"] == 2
+    assert written["manifest"]["metrics_version"] == METRICS_VERSION
+    assert written["results"]["metrics_version"] == METRICS_VERSION
     assert written["manifest"]["policy_version"] == 3
     assert written["manifest"]["required_root_seeds"] == 2
     assert set(written["manifest"]["locked_models"]) == set(locks)

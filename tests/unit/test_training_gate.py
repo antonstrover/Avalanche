@@ -20,6 +20,7 @@ from avalanche.monitors.training import (
     GRU_HIDDEN_SIZE,
     SLEEPER_RECALL_GATE,
     WINDOW_LENGTH,
+    ArtifactError,
     GRUNetwork,
     ModelGateError,
     TrainedGRU,
@@ -32,6 +33,11 @@ from avalanche.monitors.training import (
 )
 
 SIGNAL = FEATURE_NAMES[0]
+DATASET_CHECKSUMS = {
+    "dataset_sha256": "a" * 64,
+    "manifest_sha256": "b" * 64,
+    "summary_sha256": "c" * 64,
+}
 
 
 def frame(rows: int = 80) -> pd.DataFrame:
@@ -46,7 +52,13 @@ def frame(rows: int = 80) -> pd.DataFrame:
     return result
 
 
-def approved_report(tmp_path, train: pd.DataFrame, validation: pd.DataFrame):
+def approved_report(
+    tmp_path,
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+    dataset_checksums: dict[str, str] | None = None,
+):
+    dataset_checksums = dataset_checksums or DATASET_CHECKSUMS
     output = tmp_path / "audit"
     report = run_shortcut_audit(
         train,
@@ -58,6 +70,7 @@ def approved_report(tmp_path, train: pd.DataFrame, validation: pd.DataFrame):
             "__logistic__": "The model combines only declared process evidence.",
         },
         reviewed_perfect_separation=(SIGNAL,),
+        dataset_checksums=dataset_checksums,
     )
     assert report["approved"]
     return output / "shortcut-audit.json"
@@ -196,7 +209,8 @@ def test_training_requires_an_approved_shortcut_report(tmp_path):
 def test_a_passing_perceptron_does_not_build_the_gru(tmp_path, monkeypatch):
     train = frame()
     validation = frame()
-    report = approved_report(tmp_path, train, validation)
+    checksums = DATASET_CHECKSUMS
+    report = approved_report(tmp_path, train, validation, checksums)
     monkeypatch.setattr(
         "avalanche.monitors.training.train_perceptron",
         lambda *_args, **_kwargs: fake_perceptron(separated=True),
@@ -212,10 +226,77 @@ def test_a_passing_perceptron_does_not_build_the_gru(tmp_path, monkeypatch):
         report,
         tmp_path / "model",
         config=TrainingConfig(hidden_sizes=()),
-        dataset_checksums={"dataset_sha256": "abc"},
+        dataset_checksums=checksums,
     )
     assert result["metadata"]["model_kind"] == "perceptron"
     assert result["calibration"]["sleeper_recall"] >= SLEEPER_RECALL_GATE
+
+
+def test_training_rejects_an_audit_for_another_dataset(tmp_path, monkeypatch):
+    train = frame()
+    validation = frame()
+    report = approved_report(
+        tmp_path,
+        train,
+        validation,
+        {**DATASET_CHECKSUMS, "dataset_sha256": "d" * 64},
+    )
+    monkeypatch.setattr(
+        "avalanche.monitors.training.train_perceptron",
+        lambda *_args, **_kwargs: pytest.fail("training must not start"),
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        train_locked_monitor(
+            train,
+            validation,
+            report,
+            tmp_path / "model",
+            dataset_checksums={**DATASET_CHECKSUMS, "dataset_sha256": "e" * 64},
+        )
+
+
+def test_training_requires_every_dataset_artifact_checksum(tmp_path, monkeypatch):
+    train = frame()
+    validation = frame()
+    report = approved_report(tmp_path, train, validation)
+    monkeypatch.setattr(
+        "avalanche.monitors.training.train_perceptron",
+        lambda *_args, **_kwargs: pytest.fail("training must not start"),
+    )
+
+    with pytest.raises(ValueError, match="dataset, manifest, and summary"):
+        train_locked_monitor(
+            train,
+            validation,
+            report,
+            tmp_path / "model",
+            dataset_checksums={"dataset_sha256": "a" * 64},
+        )
+
+
+def test_training_does_not_replace_an_existing_output(tmp_path, monkeypatch):
+    train = frame()
+    validation = frame()
+    report = approved_report(tmp_path, train, validation)
+    output = tmp_path / "model"
+    output.mkdir()
+    (output / "lock.json").write_text("historical\n")
+    monkeypatch.setattr(
+        "avalanche.monitors.training.train_perceptron",
+        lambda *_args, **_kwargs: pytest.fail("training must not start"),
+    )
+
+    with pytest.raises(ArtifactError, match="immutable model output"):
+        train_locked_monitor(
+            train,
+            validation,
+            report,
+            output,
+            dataset_checksums=DATASET_CHECKSUMS,
+        )
+
+    assert (output / "lock.json").read_text() == "historical\n"
 
 
 def test_a_failed_perceptron_builds_the_gru_and_stops_on_failure(tmp_path, monkeypatch):
@@ -234,7 +315,13 @@ def test_a_failed_perceptron_builds_the_gru_and_stops_on_failure(tmp_path, monke
 
     monkeypatch.setattr("avalanche.monitors.training.train_gru", failed_gru)
     with pytest.raises(ModelGateError, match="no declared model"):
-        train_locked_monitor(train, validation, report, tmp_path / "model")
+        train_locked_monitor(
+            train,
+            validation,
+            report,
+            tmp_path / "model",
+            dataset_checksums=DATASET_CHECKSUMS,
+        )
     assert calls == [True]
     assert not (tmp_path / "model" / "lock.json").exists()
     perceptron = verify_locked_artifacts(
@@ -264,6 +351,7 @@ def test_the_lock_covers_model_calibration_threshold_and_metadata(
         report,
         output,
         config=TrainingConfig(hidden_sizes=()),
+        dataset_checksums=DATASET_CHECKSUMS,
     )
     lock = verify_locked_artifacts(output / "lock.json")
     assert result["lock"] == lock
@@ -310,6 +398,7 @@ def test_locked_training_preserves_each_oracle_profile(profile, tmp_path, monkey
         report,
         output,
         config=TrainingConfig(hidden_sizes=(), information_profile=profile.value),
+        dataset_checksums=DATASET_CHECKSUMS,
     )
     assert result["metadata"]["information_profile"] == profile.value
     assert (

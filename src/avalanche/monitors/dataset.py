@@ -12,7 +12,7 @@ shows harm in a later control interval.
 import hashlib
 import json
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +44,7 @@ from avalanche.controllers.factory import (
     selected_policy_variant,
 )
 from avalanche.controllers.honest import HONEST_POLICY_VERSION
-from avalanche.env import AvalancheEnv, AvalancheEnvConfig
+from avalanche.env import build_resolved_environment
 from avalanche.monitors.features import (
     FEATURE_VERSION,
     FeatureExtractor,
@@ -57,6 +57,11 @@ ATTACK_LABEL = "attack_active"
 HARM_LABEL = "harm_in_horizon"
 HARM_MASK = "harm_label_known"
 DATASET_VERSION = 4
+DATASET_CHECKSUM_NAMES = (
+    "dataset_sha256",
+    "manifest_sha256",
+    "summary_sha256",
+)
 KEY_COLUMNS = (
     "run_id",
     "scenario_family",
@@ -224,30 +229,7 @@ def _run_resolved_entry(
     entry = selected.entry
     profile = InformationProfile(information_profile)
     resolved = selected.resolved
-    mountain_path = Path(resolved.mountain.path)
-    if not mountain_path.is_absolute():
-        mountain_path = REPO_ROOT / mountain_path
-    env = AvalancheEnv(
-        mountain_path,
-        AvalancheEnvConfig(
-            movement_tick_seconds=resolved.intervals.movement_tick_seconds,
-            control_interval_seconds=resolved.intervals.control_interval_seconds,
-            time_epsilon_seconds=resolved.numerics.time_epsilon_seconds,
-            episode_duration_seconds=resolved.episode_duration_seconds,
-        ),
-        simulator_options={
-            "population": resolved.population,
-            "routing": resolved.routing,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-            "audits": resolved.scenario.audits,
-            "operational_events": resolved.scenario.operational_events,
-            "route_sensor": resolved.scenario.route_sensor,
-            "reported_risk": resolved.scenario.reported_risk,
-            "numerics": resolved.numerics,
-        },
-    )
+    env = build_resolved_environment(resolved)
     controller = build_controller(resolved.controller, env.topology)
     rows: list[dict[str, Any]] = []
     extractor = FeatureExtractor(
@@ -311,7 +293,11 @@ def _run_resolved_entry(
     frame.insert(17, "policy_version", resolved.controller.policy_version)
     frame.insert(18, "information_profile", profile.value)
     frame.insert(19, "resolved_config_checksum", _resolved_checksum(resolved))
-    frame.insert(20, "pair_context_checksum", pair_context_checksum(entry))
+    frame.insert(
+        20,
+        "pair_context_checksum",
+        pair_context_checksum(entry, resolved=resolved),
+    )
     frame["_evaluator_harm_count"] = evaluator_harm
     frame["_attack_active"] = attack_active
     frame = label_attack_activity(frame, resolved.controller)
@@ -729,13 +715,14 @@ def generate_resolved_dataset_entries(
     frame.to_parquet(output_path, index=False)
     _write_manifest_summary(
         frame,
-        entries,
+        selected,
         output_path,
         manifest_path,
         manifest,
         profile,
     )
     _write_fixture_metadata(frame, entries, output_path, manifest_path, profile)
+    validate_generated_dataset(output_path, frame, profile)
     return output_path
 
 
@@ -780,9 +767,13 @@ def _validate_pairs(entries: Sequence[DatasetEntry]) -> None:
             raise ValueError(f"the dataset pair {pair_id} changes external context")
 
 
-def pair_context_checksum(entry: DatasetEntry) -> str:
+def pair_context_checksum(
+    entry: DatasetEntry,
+    *,
+    resolved: ResolvedConfig | None = None,
+) -> str:
     """Return the paired weather, failure, demand, event, and policy identity."""
-    resolved = resolve_entry(entry).model_dump(mode="json")
+    values = (resolved or resolve_entry(entry)).model_dump(mode="json")
     for field in (
         "controller",
         "monitor",
@@ -790,9 +781,9 @@ def pair_context_checksum(entry: DatasetEntry) -> str:
         "resolved_configuration_sha256",
         "scientific_configuration_sha256",
     ):
-        resolved.pop(field)
+        values.pop(field)
     canonical = json.dumps(
-        {"resolved": resolved, "policy_variant": entry.policy_variant},
+        {"resolved": values, "policy_variant": entry.policy_variant},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -809,16 +800,18 @@ def _resolved_checksum(resolved: ResolvedConfig) -> str:
 
 def _write_manifest_summary(
     frame: pd.DataFrame,
-    entries: Sequence[DatasetEntry],
+    selected: Sequence[ResolvedDatasetEntry],
     output_path: Path,
     source_path: Path,
     source_manifest: dict[str, Any],
     information_profile: InformationProfile,
 ) -> None:
     """Record what the dataset holds beside the rows."""
+    entries = tuple(value.entry for value in selected)
     resolved_configs = []
-    for entry in entries:
-        resolved = resolve_entry(entry)
+    for value in selected:
+        entry = value.entry
+        resolved = value.resolved
         canonical = json.dumps(resolved.model_dump(mode="json"), sort_keys=True)
         resolved_configs.append(
             {
@@ -895,15 +888,11 @@ def load_dataset_fixture(
 ) -> pd.DataFrame:
     """Load one fixture after every compatibility and integrity check."""
     metadata_path = metadata_path or dataset_path.with_suffix(".metadata.json")
-    command = (
-        "uv run python scripts/generate_monitor_dataset.py "
-        "configs/experiments/monitor-training.yaml --fixture "
-        "--output tests/fixtures/monitor-dataset.parquet"
-    )
+    recovery = "restore the historical monitor fixture from version control"
     try:
         metadata = json.loads(metadata_path.read_text())
     except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"regenerate the dataset fixture with: {command}") from error
+        raise ValueError(recovery) from error
     expected = {
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
@@ -911,13 +900,101 @@ def load_dataset_fixture(
         "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
     }
     if any(metadata.get(name) != value for name, value in expected.items()):
-        raise ValueError(f"regenerate the dataset fixture with: {command}")
+        raise ValueError(recovery)
     if metadata.get("dataset_sha256") != _file_checksum(dataset_path):
-        raise ValueError(f"regenerate the dataset fixture with: {command}")
+        raise ValueError(recovery)
     frame = pd.read_parquet(dataset_path)
     if int(metadata.get("row_count", -1)) != len(frame):
-        raise ValueError(f"regenerate the dataset fixture with: {command}")
+        raise ValueError(recovery)
     return frame
+
+
+def validate_generated_dataset(
+    dataset_path: Path,
+    frame: pd.DataFrame,
+    information_profile: InformationProfile | str,
+) -> dict[str, str]:
+    """Validate the generated rows and their complete provenance."""
+    profile = InformationProfile(information_profile)
+    manifest_path = dataset_path.with_suffix(".manifest.json")
+    summary_path = dataset_path.with_suffix(".summary.json")
+    manifest = _artifact_mapping(manifest_path, "dataset manifest")
+    summary = _artifact_mapping(summary_path, "dataset summary")
+    expected_features = list(feature_names_for(profile))
+    expected = {
+        "dataset_version": DATASET_VERSION,
+        "feature_version": FEATURE_VERSION,
+        "information_profile": profile.value,
+        "feature_names": expected_features,
+        "code_revision": _code_revision(),
+    }
+    for name, value in expected.items():
+        if summary.get(name) != value or manifest.get(name) != value:
+            raise ValueError(f"the generated dataset has an invalid {name}")
+    if int(summary.get("row_count", -1)) != len(frame):
+        raise ValueError("the generated dataset has an invalid row count")
+    if frame.empty:
+        raise ValueError("the generated dataset must contain rows")
+    if set(frame["dataset_version"]) != {DATASET_VERSION}:
+        raise ValueError("the generated rows have an invalid dataset version")
+    if set(frame["feature_version"]) != {FEATURE_VERSION}:
+        raise ValueError("the generated rows have an invalid feature version")
+    if set(frame["information_profile"]) != {profile.value}:
+        raise ValueError("the generated rows have an invalid information profile")
+    if not set(expected_features).issubset(frame.columns):
+        raise ValueError("the generated rows miss a declared feature")
+    checksums = generated_dataset_checksums(dataset_path)
+    recorded_checksums = summary.get("checksums")
+    if not isinstance(recorded_checksums, Mapping):
+        raise ValueError("the dataset summary misses its checksums")
+    if recorded_checksums.get("dataset_sha256") != checksums["dataset_sha256"]:
+        raise ValueError("the generated dataset checksum has changed")
+    _validate_resolved_runs(manifest, int(summary.get("run_count", -1)))
+    return checksums
+
+
+def generated_dataset_checksums(dataset_path: Path) -> dict[str, str]:
+    """Return the three required generated dataset checksums."""
+    paths = {
+        "dataset_sha256": dataset_path,
+        "manifest_sha256": dataset_path.with_suffix(".manifest.json"),
+        "summary_sha256": dataset_path.with_suffix(".summary.json"),
+    }
+    return {name: _file_checksum(path) for name, path in paths.items()}
+
+
+def _artifact_mapping(path: Path, label: str) -> Mapping[str, Any]:
+    """Load one generated JSON mapping."""
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"the {label} is missing or invalid") from error
+    if not isinstance(value, Mapping):
+        raise ValueError(f"the {label} must contain one mapping")
+    return value
+
+
+def _validate_resolved_runs(manifest: Mapping[str, Any], run_count: int) -> None:
+    """Validate every recorded resolved run configuration."""
+    runs = manifest.get("resolved_runs")
+    if not isinstance(runs, list) or len(runs) != run_count or not runs:
+        raise ValueError("the dataset manifest has invalid resolved runs")
+    for run in runs:
+        if not isinstance(run, Mapping):
+            raise ValueError("a resolved run record must contain one mapping")
+        configuration = run.get("configuration")
+        if not isinstance(configuration, Mapping):
+            raise ValueError("a resolved run must record its configuration")
+        canonical = json.dumps(configuration, sort_keys=True)
+        if run.get("checksum") != hashlib.sha256(canonical.encode()).hexdigest():
+            raise ValueError("a resolved run configuration checksum has changed")
+        for name in (
+            "resolved_configuration_sha256",
+            "scientific_configuration_sha256",
+        ):
+            digest = configuration.get(name)
+            if not isinstance(digest, str) or digest == "0" * 64:
+                raise ValueError("a resolved run has an invalid configuration digest")
 
 
 def _write_fixture_metadata(

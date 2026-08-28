@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from avalanche.control import DecisionType
-from avalanche.metrics import OnlineMetrics
+from avalanche.metrics import METRICS_VERSION, OnlineMetrics
 from avalanche.scenarios.audits import AuditChannel, AuditMeasurement
 from avalanche.scenarios.sensors import ROUTE_SENSOR_CHANNELS
 from avalanche.scenarios.weather import Weather, WeatherSchedule
@@ -51,6 +51,7 @@ _POPULATION_KEYS = {"arrived", "next_ticket"}
 _WEATHER_KEYS = {"current", "next_transition"}
 _AUDIT_KEYS = {"measurements", "delivered"}
 _METRIC_KEYS = {
+    "metrics_version",
     "group_count",
     "episode_duration_seconds",
     "density_limit_seconds",
@@ -415,6 +416,7 @@ def _audit_state(sim: MountainSim) -> dict[str, Any]:
 def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
     """Return every mutable online metric accumulator."""
     return {
+        "metrics_version": METRICS_VERSION,
         "group_count": metrics.group_count,
         "episode_duration_seconds": metrics.episode_duration_seconds,
         "density_limit_seconds": metrics.density_limit_seconds,
@@ -442,6 +444,11 @@ def _metrics(value: Any) -> OnlineMetrics:
     """Validate and rebuild every online metric accumulator."""
     state = _mapping(value, "metric state")
     _require_keys(state, _METRIC_KEYS, "metric state")
+    version = _nonnegative_integer(state["metrics_version"], "metrics version")
+    if version != METRICS_VERSION:
+        raise SnapshotSchemaError(
+            f"the metrics schema version {version} is unsupported"
+        )
     group_count = _integer(state["group_count"], "metric group count")
     duration = _finite_float(
         state["episode_duration_seconds"], "metric episode duration"

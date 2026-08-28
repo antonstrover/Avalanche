@@ -28,6 +28,7 @@ from avalanche.control import (
 )
 from avalanche.controllers.policies import POLICY_VERSION
 from avalanche.experiments.runner import run_episode
+from avalanche.metrics import METRICS_VERSION
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION
@@ -146,6 +147,18 @@ def load_evaluation_config(path: Path) -> dict[str, Any]:
         if set(attacks.get(kind, ())) != set(ATTACK_TIERS):
             raise ValueError("the evaluation configuration misses an attack tier")
     return config
+
+
+def require_unseen_evaluation_seeds(
+    evaluation: Mapping[str, Any],
+    development: Mapping[str, Any],
+) -> None:
+    """Reject a final seed that occurs in the development matrix."""
+    final_seeds = {int(seed) for seed in evaluation.get("root_seeds", ())}
+    development_seeds = {int(seed) for seed in development.get("seeds", ())}
+    overlap = sorted(final_seeds & development_seeds)
+    if overlap:
+        raise ValueError("the final evaluation reuses a development seed")
 
 
 def evaluation_cells() -> tuple[EvaluationCell, ...]:
@@ -422,6 +435,7 @@ def _evaluation_record(
         "resolved_config_checksum": metadata["configuration_sha256"],
         "pair_context_checksum": task.pair_context_checksum,
         "model_lock_checksum": task.model_lock_checksum,
+        "metrics_version": int(metrics["metrics_version"]),
         "attack_success": float(
             task.pair_role == "attack"
             and assessment is not None
@@ -683,6 +697,7 @@ def evaluate_final_records(
         "evaluation_version": EVALUATION_VERSION,
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
+        "metrics_version": METRICS_VERSION,
         "model_version": MODEL_VERSION,
         "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "policy_version": POLICY_VERSION,
@@ -734,6 +749,7 @@ def write_final_evaluation(
         "evaluation_version": EVALUATION_VERSION,
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
+        "metrics_version": METRICS_VERSION,
         "model_version": MODEL_VERSION,
         "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "policy_version": POLICY_VERSION,
@@ -861,6 +877,7 @@ def _validate_records(
         "resolved_config_checksum",
         "pair_context_checksum",
         "model_lock_checksum",
+        "metrics_version",
         *CELL_COLUMNS,
     }
     missing = sorted(metric_columns - set(records.columns))
@@ -870,6 +887,10 @@ def _validate_records(
         raise ValueError("the final records contain an unknown feature profile")
     if set(records["record_kind"]) != {"evaluation_episode"}:
         raise ValueError("the final records must come from real evaluation episodes")
+    if not (records["metrics_version"] == METRICS_VERSION).all():
+        raise ValueError(
+            f"the final records must use metrics version {METRICS_VERSION}"
+        )
     attack_rows = records[records["pair_role"] == "attack"]
     honest_rows = records[records["pair_role"] == "honest"]
     if not (attack_rows["attack_activated"] == 1).all():

@@ -92,3 +92,7 @@ The cache uses `outputs/artifact-cache/<artifact_sha256>/`.
 The formal loader never fetches or retrains a missing artifact.
 The profile selections remain deferred until the model reconciliation.
 No usable principal model is selected here.
+
+The routing change makes every recorded learned result stale for a current comparison.
+Keep each locked reconstruction as historical evidence.
+Generate fresh traces before any new training or calibration.

@@ -15,6 +15,7 @@ import yaml
 
 from avalanche.config import ConfigurationResolver
 from avalanche.config.models import ControllerConfig
+from avalanche.control import InformationProfile
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     HARM_LABEL,
@@ -28,6 +29,7 @@ from avalanche.monitors.dataset import (
     pair_context_checksum,
     resolve_entry,
     run_entry,
+    validate_generated_dataset,
 )
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 
@@ -165,7 +167,24 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     assert summary["dataset_version"] == 4
     assert summary["policy_version"] == 3
     assert summary["checksums"]["dataset_sha256"]
-    assert output.with_suffix(".manifest.json").exists()
+    assert len(summary["code_revision"]) == 40
+    artifact_manifest = json.loads(output.with_suffix(".manifest.json").read_text())
+    assert artifact_manifest["code_revision"] == summary["code_revision"]
+    assert len(artifact_manifest["resolved_runs"]) == 2
+    assert all(
+        run["configuration"]["resolved_configuration_sha256"] != "0" * 64
+        for run in artifact_manifest["resolved_runs"]
+    )
+    assert set(
+        validate_generated_dataset(output, frame, InformationProfile.PRINCIPAL)
+    ) == {"dataset_sha256", "manifest_sha256", "summary_sha256"}
+
+    summary["code_revision"] = "0" * 40
+    output.with_suffix(".summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    )
+    with pytest.raises(ValueError, match="code_revision"):
+        validate_generated_dataset(output, frame, InformationProfile.PRINCIPAL)
 
 
 def test_the_matrix_carries_one_entry_for_each_attack_strength():

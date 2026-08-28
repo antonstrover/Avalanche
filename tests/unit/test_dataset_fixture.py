@@ -54,5 +54,5 @@ def test_the_validated_loader_rejects_a_changed_checksum(tmp_path):
     path = tmp_path / "metadata.json"
     path.write_text(json.dumps(metadata))
 
-    with pytest.raises(ValueError, match="generate_monitor_dataset"):
+    with pytest.raises(ValueError, match="historical monitor fixture"):
         load_dataset_fixture(FIXTURE, path)

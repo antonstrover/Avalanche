@@ -10,7 +10,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from avalanche.metrics import MetricSnapshot
+from avalanche.metrics import METRICS_VERSION, MetricSnapshot
 from avalanche.sim.engine import MountainSim
 from avalanche.traces.snapshots import encode_snapshot
 
@@ -93,6 +93,10 @@ class TraceWriter:
 
     def record_metrics(self, metrics: MetricSnapshot, sim: MountainSim) -> None:
         """Buffer one wide metric sample."""
+        if metrics.metrics_version != METRICS_VERSION:
+            raise ValueError(
+                f"a metric sample must use metrics version {METRICS_VERSION}"
+            )
         self.metric_rows.append(
             {
                 "run_id": self.run_id,
@@ -119,6 +123,13 @@ class TraceWriter:
         self, summary: dict[str, Any], model_reference: dict[str, Any] | None = None
     ) -> None:
         """Write each buffered artifact."""
+        summary_metrics = summary.get("metrics")
+        if not isinstance(summary_metrics, dict) or (
+            summary_metrics.get("metrics_version") != METRICS_VERSION
+        ):
+            raise ValueError(
+                f"a run summary must use metrics version {METRICS_VERSION}"
+            )
         self.output_dir.mkdir(parents=True, exist_ok=True)
         events_path = self.output_dir / "events.jsonl"
         with events_path.open("w", encoding="utf-8") as handle:
