@@ -387,6 +387,8 @@ A missing speed factor becomes 0.05.
 A missing queue length becomes the safe capacity.
 A missing throughput becomes one skier per minute.
 A missing availability becomes unavailable.
+A missing-sensor route decision selects an edge with a missing applicable channel.
+The metrics record its total and each channel count separately.
 It keeps the latest packet until a newer packet arrives.
 It recalculates a choice only at a node or after local unavailability.
 It keeps a chosen edge through a queue or a capacity delay.

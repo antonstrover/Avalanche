@@ -61,6 +61,9 @@ METRIC_NAMES = {
     "monitor_decision_count",
     "first_intervention_interval",
     "harm_before_first_intervention",
+    "route_decision_count",
+    "missing_sensor_route_decision_count",
+    "missing_sensor_route_decision_counts",
     "intervention_cost",
 }
 DETERMINISTIC_SUMMARY_FIELDS = (

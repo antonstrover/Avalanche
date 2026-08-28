@@ -17,6 +17,7 @@ from avalanche.config.models import (
     RoutingConfig,
 )
 from avalanche.scenarios.sensors import (
+    ROUTE_SENSOR_CHANNELS,
     RouteSensorPacket,
     perfect_route_sensor_packet,
 )
@@ -50,6 +51,15 @@ class MovementTransitions:
 
     completed_skiers: np.ndarray
     edge_completed_at: np.ndarray
+
+
+@dataclass(frozen=True)
+class RouteDecisionSummary:
+    """Count route choices made with complete or missing outgoing reports."""
+
+    decision_count: int
+    missing_sensor_decision_count: int
+    missing_sensor_channel_counts: tuple[int, ...]
 
 
 # These two values calibrate the congestion of Stage 3.
@@ -442,7 +452,7 @@ def select_next_edges(
     packet: RouteSensorPacket | None = None,
     routing: RoutingConfig | None = None,
     reported_risk_config: ReportedRiskConfig | None = None,
-) -> None:
+) -> RouteDecisionSummary:
     """Choose operational routes and enter each physically safe edge."""
     del routes
     routing = routing or RoutingConfig()
@@ -473,7 +483,7 @@ def select_next_edges(
 
     travelling = at_node[~arrived]
     if travelling.size == 0:
-        return
+        return RouteDecisionSummary(0, 0, (0,) * len(ROUTE_SENSOR_CHANNELS))
     nodes = pop.location_index[travelling]
     dests = pop.destination[travelling]
     abilities = pop.ability[travelling]
@@ -493,6 +503,7 @@ def select_next_edges(
     pop.chosen_edge[travelling[has_choice & ~chosen_available]] = NO_EDGE
 
     needs_choice = travelling[pop.chosen_edge[travelling] == NO_EDGE]
+    route_decisions = RouteDecisionSummary(0, 0, (0,) * len(ROUTE_SENSOR_CHANNELS))
     if needs_choice.size:
         choice_nodes = pop.location_index[needs_choice]
         choice_destinations = pop.destination[needs_choice]
@@ -569,6 +580,12 @@ def select_next_edges(
                 pop.chosen_edge[members] = candidates[selected_candidates]
 
         pop.locally_rejected_edge[needs_choice] = NO_EDGE
+        chosen = pop.chosen_edge[needs_choice]
+        route_decisions = _summarize_route_decisions(
+            topology,
+            packet,
+            chosen[chosen != NO_EDGE],
+        )
 
     next_edge = pop.chosen_edge[travelling]
     selected = np.flatnonzero(next_edge != NO_EDGE)
@@ -634,6 +651,35 @@ def select_next_edges(
     joiners = starters[lift]
     pop.queue_ticket[joiners] = pop.next_ticket + np.arange(joiners.size)
     pop.next_ticket += int(joiners.size)
+    return route_decisions
+
+
+def _summarize_route_decisions(
+    topology: Topology,
+    packet: RouteSensorPacket,
+    chosen_edges: np.ndarray,
+) -> RouteDecisionSummary:
+    """Count chosen edges with each missing applicable sensor channel."""
+    piste = topology.edge_type != LIFT_EDGE
+    lift = topology.edge_type == LIFT_EDGE
+    masks = (
+        packet.availability_missing,
+        packet.speed_factor_missing & piste,
+        packet.density_ratio_missing,
+        packet.weather_risk_missing,
+        packet.queue_length_missing & lift,
+        packet.boarding_throughput_missing & lift,
+    )
+    decision_missing = np.column_stack([missing[chosen_edges] for missing in masks])
+    return RouteDecisionSummary(
+        decision_count=int(chosen_edges.size),
+        missing_sensor_decision_count=int(
+            np.count_nonzero(np.any(decision_missing, axis=1))
+        ),
+        missing_sensor_channel_counts=tuple(
+            int(value) for value in np.count_nonzero(decision_missing, axis=0)
+        ),
+    )
 
 
 def accumulate_times(

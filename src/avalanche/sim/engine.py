@@ -307,7 +307,7 @@ class MountainSim:
         # 6. Select the next edge for each skier at a node.
         # 7. Apply the closures and the capacity limits.
         #    The step 6 applies both limits, because it chooses the edge.
-        select_next_edges(
+        route_decisions = select_next_edges(
             pop,
             self.topology,
             self.routes,
@@ -318,6 +318,7 @@ class MountainSim:
             self.routing_config,
             self.reported_risk_config,
         )
+        self.metrics.update_route_decisions(route_decisions)
         update_stranded(
             pop,
             self.routes,

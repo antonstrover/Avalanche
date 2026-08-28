@@ -9,6 +9,7 @@ from avalanche.sim.hazards import HazardEvent, HazardEventType, update_hazards
 from avalanche.sim.movement import (
     DynamicState,
     MovementTransitions,
+    RouteDecisionSummary,
     accumulate_times,
     advance_on_edges,
     arrive_at_nodes,
@@ -78,6 +79,7 @@ __all__ = [
     "Status",
     "DynamicState",
     "MovementTransitions",
+    "RouteDecisionSummary",
     "new_dynamic_state",
     "start_arrivals",
     "serve_lift_queues",

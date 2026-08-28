@@ -1,16 +1,17 @@
 """Accumulate bounded metrics during one episode."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from math import isfinite
 
 import numpy as np
 
 from avalanche.control import DecisionType, MonitorDecision
-from avalanche.sim.movement import DynamicState
+from avalanche.scenarios.sensors import ROUTE_SENSOR_CHANNELS
+from avalanche.sim.movement import DynamicState, RouteDecisionSummary
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 7
+METRICS_VERSION = 8
 PERFORMANCE_VERSION = 1
 
 
@@ -35,6 +36,9 @@ class MetricSnapshot:
     monitor_decision_count: int = 0
     first_intervention_interval: int = -1
     harm_before_first_intervention: float = -1.0
+    route_decision_count: int = 0
+    missing_sensor_route_decision_count: int = 0
+    missing_sensor_route_decision_counts: dict[str, int] = field(default_factory=dict)
 
     def as_dict(
         self,
@@ -79,6 +83,11 @@ class OnlineMetrics:
         self.monitor_decision_count = 0
         self.first_intervention_interval: int | None = None
         self.harm_before_first_intervention: float | None = None
+        self.route_decision_count = 0
+        self.missing_sensor_route_decision_count = 0
+        self.missing_sensor_route_decision_counts = {
+            name: 0 for name in ROUTE_SENSOR_CHANNELS
+        }
 
     def update_decision(
         self, decision: MonitorDecision, *, harm_count: float = 0.0
@@ -136,6 +145,31 @@ class OnlineMetrics:
                 ]
                 * tick_seconds
             )
+
+    def update_route_decisions(self, summary: RouteDecisionSummary) -> None:
+        """Add one tick's complete and missing-sensor route decisions."""
+        channel_counts = summary.missing_sensor_channel_counts
+        if len(channel_counts) != len(ROUTE_SENSOR_CHANNELS):
+            raise ValueError("the route decision channels must match the sensor packet")
+        counts = (
+            summary.decision_count,
+            summary.missing_sensor_decision_count,
+            *channel_counts,
+        )
+        if any(count < 0 for count in counts):
+            raise ValueError("a route decision count must be nonnegative")
+        if summary.missing_sensor_decision_count > summary.decision_count:
+            raise ValueError("missing route decisions must not exceed all decisions")
+        if any(count > summary.decision_count for count in channel_counts):
+            raise ValueError(
+                "a missing route channel count must not exceed all decisions"
+            )
+        self.route_decision_count += summary.decision_count
+        self.missing_sensor_route_decision_count += (
+            summary.missing_sensor_decision_count
+        )
+        for name, count in zip(ROUTE_SENSOR_CHANNELS, channel_counts, strict=True):
+            self.missing_sensor_route_decision_counts[name] += count
 
     def snapshot(self, population: SkierArrays) -> MetricSnapshot:
         """Return current cumulative and grouped values.
@@ -216,6 +250,13 @@ class OnlineMetrics:
                 -1.0
                 if self.harm_before_first_intervention is None
                 else self.harm_before_first_intervention
+            ),
+            route_decision_count=self.route_decision_count,
+            missing_sensor_route_decision_count=(
+                self.missing_sensor_route_decision_count
+            ),
+            missing_sensor_route_decision_counts=dict(
+                self.missing_sensor_route_decision_counts
             ),
         )
 

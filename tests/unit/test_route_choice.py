@@ -7,7 +7,10 @@ import numpy as np
 import pytest
 
 from avalanche.config.models import ReportedRiskConfig, RoutingConfig
-from avalanche.scenarios.sensors import perfect_route_sensor_packet
+from avalanche.scenarios.sensors import (
+    ROUTE_SENSOR_CHANNELS,
+    perfect_route_sensor_packet,
+)
 from avalanche.sim import (
     LocationKind,
     OperationalRouteCosts,
@@ -225,6 +228,101 @@ def test_capacity_delay_does_not_reroll_tie(choice_fixture):
     )
 
     assert pop.chosen_edge[0] == selected
+
+
+def test_lift_queue_delay_keeps_the_chosen_edge():
+    topology = load_topology(FIXTURE)
+    source = topology.node_index["lift1_base"]
+    destination = topology.node_index["base_exit"]
+    lift = edge_index(topology, "lift1_base", "lift1_top")
+    state = new_dynamic_state(topology)
+    pop = population_from_starts([source], destination)
+    pop.ability[:] = ADVANCED
+
+    select_next_edges(
+        pop,
+        topology,
+        build_route_table(topology),
+        state,
+        np.random.default_rng(1),
+        np.random.default_rng(2),
+        packet(topology),
+    )
+    assert pop.location_kind[0] == LocationKind.QUEUE
+    assert pop.chosen_edge[0] == lift
+
+    summary = select_next_edges(
+        pop,
+        topology,
+        build_route_table(topology),
+        state,
+        np.random.default_rng(3),
+        np.random.default_rng(4),
+        packet(topology),
+    )
+
+    assert summary.decision_count == 0
+    assert pop.location_kind[0] == LocationKind.QUEUE
+    assert pop.chosen_edge[0] == lift
+
+
+def test_an_available_traversed_edge_is_not_rerouted(choice_fixture):
+    pop, topology, state, first, second = choose(choice_fixture)
+    selected = int(pop.chosen_edge[0])
+    alternative = second if selected == first else first
+    assert pop.location_kind[0] == LocationKind.PISTE
+    state.route_preferences[ADVANCED, selected] = -1.0
+    state.route_preferences[ADVANCED, alternative] = 1.0
+
+    summary = select_next_edges(
+        pop,
+        topology,
+        build_route_table(topology),
+        state,
+        np.random.default_rng(5),
+        np.random.default_rng(6),
+        packet(topology),
+    )
+
+    assert summary.decision_count == 0
+    assert pop.location_kind[0] == LocationKind.PISTE
+    assert pop.chosen_edge[0] == selected
+
+
+def test_missing_chosen_route_channels_are_reported(choice_fixture):
+    topology, source, destination, first, second = choice_fixture
+    route_packet = packet(topology)
+    speed_missing = route_packet.speed_factor_missing.copy()
+    queue_missing = route_packet.queue_length_missing.copy()
+    speed_missing[first] = True
+    speed_missing[second] = True
+    queue_missing[first] = True
+    route_packet = replace(
+        route_packet,
+        speed_factor_missing=speed_missing,
+        queue_length_missing=queue_missing,
+    )
+    state = new_dynamic_state(topology)
+    pop = population_from_starts([source], destination)
+    pop.ability[:] = ADVANCED
+
+    summary = select_next_edges(
+        pop,
+        topology,
+        build_route_table(topology),
+        state,
+        np.random.default_rng(7),
+        np.random.default_rng(8),
+        route_packet,
+    )
+
+    channel_counts = dict(
+        zip(ROUTE_SENSOR_CHANNELS, summary.missing_sensor_channel_counts, strict=True)
+    )
+    assert summary.decision_count == 1
+    assert summary.missing_sensor_decision_count == 1
+    assert channel_counts["speed_factor"] == 1
+    assert channel_counts["queue_length"] == 0
 
 
 def test_hidden_failure_fails_at_physical_gate():
