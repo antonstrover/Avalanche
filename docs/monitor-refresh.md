@@ -120,6 +120,11 @@ It creates the selected lock only after the model gates pass.
 Preserve each failed attempt as negative evidence.
 Do not replace an existing historical lock.
 
+Keep the historical reconstruction publisher unchanged.
+It preserves its lock files and uploads its immutable artifact bytes.
+It is fixed to the two failed historical reconstructions.
+Use the same release and registry pattern for each new passing attempt.
+
 ## Final evaluation
 
 Create three registry-backed references after the required model gates pass.
