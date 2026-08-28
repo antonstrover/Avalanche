@@ -122,13 +122,15 @@ class RouteSensorChannel:
         self,
         policy: SensorPolicyConfig,
         control_interval_seconds: float,
-        rng: np.random.Generator,
+        route_rng: np.random.Generator,
+        blocked_rng: np.random.Generator,
     ) -> None:
         if control_interval_seconds <= 0.0:
             raise ValueError("the control interval must be positive")
         self.policy = policy
         self.control_interval_seconds = float(control_interval_seconds)
-        self.rng = rng
+        self.route_rng = route_rng
+        self.blocked_rng = blocked_rng
         self.policy_identity = route_sensor_policy_identity(policy)
         self.latest: RouteSensorPacket | None = None
         self.pending: list[RouteSensorPacket] = []
@@ -252,17 +254,17 @@ class RouteSensorChannel:
             source = np.asarray(values, dtype=np.float64)
             if source.shape != (edge_count,):
                 raise ValueError("each route sensor source must have one edge shape")
-            noise = self.rng.uniform(
+            noise = self.route_rng.uniform(
                 -self.policy.maximum_relative_noise,
                 self.policy.maximum_relative_noise,
                 edge_count,
             )
             numeric_values[name] = np.maximum(source * (1.0 + noise), 0.0)
             missing[name] = (
-                self.rng.random(edge_count) < self.policy.missing_probability
+                self.route_rng.random(edge_count) < self.policy.missing_probability
             )
         availability_missing = (
-            self.rng.random(edge_count) < self.policy.missing_probability
+            self.route_rng.random(edge_count) < self.policy.missing_probability
         )
         queued_source = np.asarray(queued_no_route_count, dtype=np.float64)
         if queued_source.ndim != 1:
@@ -276,7 +278,7 @@ class RouteSensorChannel:
             ("queued_no_route_count", queued_source),
             ("onboard_blocked_count", onboard_source),
         ):
-            noise = self.rng.uniform(
+            noise = self.blocked_rng.uniform(
                 -self.policy.maximum_relative_noise,
                 self.policy.maximum_relative_noise,
                 source.size,
@@ -286,7 +288,7 @@ class RouteSensorChannel:
                 0.0,
             )
             blocked_missing[name] = (
-                self.rng.random(source.size) < self.policy.missing_probability
+                self.blocked_rng.random(source.size) < self.policy.missing_probability
             )
         provenance = tuple(
             (name, self.policy.provenance)

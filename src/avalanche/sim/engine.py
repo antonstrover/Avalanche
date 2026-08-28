@@ -90,6 +90,7 @@ STREAM_NAMES = (
     *EVENT_STREAM_NAMES,
     "sensor",
     "route_tie",
+    "blocked_sensor",
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
@@ -262,6 +263,7 @@ class MountainSim:
             self.route_sensor_config,
             self.control_interval_seconds,
             self.streams["sensor"],
+            self.streams["blocked_sensor"],
         )
         self.route_sensor_packet = self.route_sensor_channel.bootstrap(
             **self._route_sensor_sources()
@@ -642,7 +644,7 @@ class MountainSim:
             _digest_array(digest, f"population.{name}", array)
         for name, array in self.state.checksum_fields():
             _digest_array(digest, f"state.{name}", array)
-        for stream_name in ("choice", "sensor", "route_tie"):
+        for stream_name in ("choice", "sensor", "route_tie", "blocked_sensor"):
             stream = self.streams.get(stream_name)
             if stream is None:
                 continue

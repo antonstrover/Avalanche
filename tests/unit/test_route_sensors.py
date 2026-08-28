@@ -33,6 +33,17 @@ FIXTURE = (
 ADVANCED = ABILITY_NAMES.index("advanced")
 
 
+def channel(seed: int) -> RouteSensorChannel:
+    """Return a sensor channel with two independent streams."""
+    route_rng, blocked_rng = np.random.default_rng(seed).spawn(2)
+    return RouteSensorChannel(
+        SensorPolicyConfig(),
+        60.0,
+        route_rng,
+        blocked_rng,
+    )
+
+
 def sources(
     edge_count: int,
     value: float = 1.0,
@@ -54,9 +65,9 @@ def sources(
 
 
 def test_bootstrap_packet_has_required_identity_and_times():
-    channel = RouteSensorChannel(SensorPolicyConfig(), 60.0, np.random.default_rng(4))
+    sensor = channel(4)
 
-    packet = channel.bootstrap(**sources(500))
+    packet = sensor.bootstrap(**sources(500))
 
     assert packet.schema_version == 2
     assert packet.sample_time == -60.0
@@ -69,10 +80,10 @@ def test_bootstrap_packet_has_required_identity_and_times():
 
 
 def test_numeric_noise_is_relative_and_availability_has_no_noise():
-    channel = RouteSensorChannel(SensorPolicyConfig(), 60.0, np.random.default_rng(8))
+    sensor = channel(8)
     values = sources(10_000, 100.0)
 
-    packet = channel.bootstrap(**values)
+    packet = sensor.bootstrap(**values)
 
     assert np.all(packet.reported_availability)
     for reported in (
@@ -107,12 +118,12 @@ def test_numeric_noise_is_relative_and_availability_has_no_noise():
 
 
 def test_blocked_count_noise_clips_after_rounding():
-    channel = RouteSensorChannel(SensorPolicyConfig(), 60.0, np.random.default_rng(9))
+    sensor = channel(9)
     values = sources(4, 1.0, node_count=3)
     values["queued_no_route_count"] = np.array([-4.0, 0.0, 11.0])
     values["onboard_blocked_count"] = np.array([-2.0, 0.0, 21.0, 41.0])
 
-    packet = channel.bootstrap(**values)
+    packet = sensor.bootstrap(**values)
 
     assert packet.reported_queued_no_route_count[:2].tolist() == [0.0, 0.0]
     assert packet.reported_onboard_blocked_count[:2].tolist() == [0.0, 0.0]
@@ -127,9 +138,9 @@ def test_blocked_count_noise_clips_after_rounding():
 
 
 def test_blocked_channels_use_separate_node_and_edge_shapes():
-    channel = RouteSensorChannel(SensorPolicyConfig(), 60.0, np.random.default_rng(10))
+    sensor = channel(10)
 
-    packet = channel.bootstrap(**sources(5, node_count=3))
+    packet = sensor.bootstrap(**sources(5, node_count=3))
 
     assert packet.edge_count == 5
     assert packet.node_count == 3
@@ -172,37 +183,81 @@ def test_blocked_sources_group_counts_by_public_location():
 
 
 def test_blocked_sources_reject_invalid_shapes():
-    channel = RouteSensorChannel(SensorPolicyConfig(), 60.0, np.random.default_rng(11))
+    sensor = channel(11)
     invalid_node = sources(5, node_count=3)
     invalid_node["queued_no_route_count"] = np.zeros((3, 1))
 
     with pytest.raises(ValueError, match="node shape"):
-        channel.bootstrap(**invalid_node)
+        sensor.bootstrap(**invalid_node)
 
     invalid_edge = sources(5, node_count=3)
     invalid_edge["onboard_blocked_count"] = np.zeros(4)
     with pytest.raises(ValueError, match="edge shape"):
-        channel.bootstrap(**invalid_edge)
+        sensor.bootstrap(**invalid_edge)
 
 
 def test_delayed_packet_persists_until_delivery():
-    channel = RouteSensorChannel(SensorPolicyConfig(), 60.0, np.random.default_rng(12))
-    bootstrap = channel.bootstrap(**sources(20, 1.0, node_count=4))
+    sensor = channel(12)
+    bootstrap = sensor.bootstrap(**sources(20, 1.0, node_count=4))
 
-    assert channel.deliver(59.0) is bootstrap
-    first = channel.deliver(60.0)
+    assert sensor.deliver(59.0) is bootstrap
+    first = sensor.deliver(60.0)
     assert first.sample_time == 0.0
     assert first.report_time == 60.0
 
-    channel.advance(60.0, **sources(20, 100.0, node_count=4))
-    assert channel.deliver(119.0) is first
-    second = channel.deliver(120.0)
+    sensor.advance(60.0, **sources(20, 100.0, node_count=4))
+    assert sensor.deliver(119.0) is first
+    second = sensor.deliver(120.0)
     assert second.sample_time == 60.0
     assert second.report_time == 120.0
     assert np.all(first.reported_queued_no_route_count == 1.0)
     assert np.all(first.reported_onboard_blocked_count == 1.0)
     assert np.all(second.reported_queued_no_route_count >= 95.0)
     assert np.all(second.reported_onboard_blocked_count >= 95.0)
+
+
+def test_blocked_draws_do_not_change_operational_route_reports():
+    """Keep route reports stable when blocked telemetry uses another seed."""
+    route_seed = 13
+    first = RouteSensorChannel(
+        SensorPolicyConfig(),
+        60.0,
+        np.random.default_rng(route_seed),
+        np.random.default_rng(14),
+    )
+    second = RouteSensorChannel(
+        SensorPolicyConfig(),
+        60.0,
+        np.random.default_rng(route_seed),
+        np.random.default_rng(15),
+    )
+
+    first.bootstrap(**sources(40, 100.0, node_count=10))
+    second.bootstrap(**sources(40, 100.0, node_count=10))
+    first_packet = first.advance(60.0, **sources(40, 2.0, node_count=10))
+    second_packet = second.advance(60.0, **sources(40, 2.0, node_count=10))
+
+    for name in (
+        "reported_speed_factor",
+        "reported_density_ratio",
+        "reported_weather_risk",
+        "reported_queue_length",
+        "reported_boarding_throughput",
+        "availability_missing",
+        "speed_factor_missing",
+        "density_ratio_missing",
+        "weather_risk_missing",
+        "queue_length_missing",
+        "boarding_throughput_missing",
+    ):
+        np.testing.assert_array_equal(
+            getattr(first_packet, name),
+            getattr(second_packet, name),
+        )
+    assert not np.array_equal(
+        first_packet.reported_onboard_blocked_count,
+        second_packet.reported_onboard_blocked_count,
+    )
 
 
 def test_perfect_packet_defaults_new_reports_to_zero():
