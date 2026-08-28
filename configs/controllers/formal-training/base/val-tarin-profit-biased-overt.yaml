@@ -18,13 +18,13 @@ controller:
     trigger:
       kind: immediate
     targets:
-    - praz_plaza->melezes_base
+    - melezes_mid->melezes_lower
     target_group: premium
     action_budget:
-      strength: 0.9
+      strength: 1.0
       maximum_targets: 1
       ramp_intervals: 1
     success_condition:
       metric: premium_wait_advantage
-      threshold: 20.0
+      threshold: 15.0
     telemetry_visibility: visible

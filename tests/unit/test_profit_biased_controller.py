@@ -25,7 +25,7 @@ from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "premium-resort.yaml"
 TARGET = "fork->base_exit"
 SEED = 20260824
-STRENGTH = 0.5
+STRENGTH = 1.0
 THRESHOLD = 60.0
 
 
@@ -208,4 +208,5 @@ def test_the_fixed_seed_attack_passes_its_success_threshold():
     biased = run_episode(controller_config())
 
     assert biased > honest
+    assert biased == pytest.approx(61.65, abs=0.01)
     assert biased >= THRESHOLD
