@@ -26,6 +26,7 @@ class ProfitBiasedController:
 
     The wrapper keeps the honest competence.
     It changes only the route weights and the crowd messages of its targets.
+    A positive target preference lowers the target route cost.
     The action budget limits the target count and the change size.
     """
 

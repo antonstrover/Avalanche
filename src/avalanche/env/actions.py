@@ -43,7 +43,8 @@ def build_action_space(
 ) -> spaces.Dict:
     """Return the fixed action space for one mountain.
 
-    Route weights adjust each ability's preference for each edge.
+    Positive route weights lower costs for an ability and an edge.
+    Negative route weights raise those costs.
     A piste request uses zero for none, one for open, and two for close.
     Enabled arrays distinguish a capacity or telemetry command from a no-op.
     Crowd messages use negative values to discourage a customer group from a node.

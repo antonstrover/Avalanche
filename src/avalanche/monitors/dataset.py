@@ -237,11 +237,14 @@ def _run_resolved_entry(
         ),
         simulator_options={
             "population": resolved.population,
+            "routing": resolved.routing,
             "weather": resolved.scenario.weather,
             "hazards": resolved.scenario.hazards,
             "failures": resolved.scenario.failures,
             "audits": resolved.scenario.audits,
             "operational_events": resolved.scenario.operational_events,
+            "route_sensor": resolved.scenario.route_sensor,
+            "reported_risk": resolved.scenario.reported_risk,
             "numerics": resolved.numerics,
         },
     )

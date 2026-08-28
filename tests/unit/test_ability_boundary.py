@@ -53,7 +53,7 @@ def try_advice(topology, ability: int, edge: int):
     source = int(topology.edge_source[edge])
     destination = int(topology.edge_destination[edge])
     state = new_dynamic_state(topology)
-    state.advice_edge[source, ability] = edge
+    state.route_preferences[ability, edge] = 1.0
     population = population_from_starts([source], destination)
     population.ability[:] = ability
     population.compliance[:] = 1.0
@@ -108,7 +108,7 @@ def test_a_beginner_cannot_board_a_lift_without_a_safe_onward_route():
     destination = topology.node_index["base_exit"]
     edge = int(topology.edges_from(source)[0])
     state = new_dynamic_state(topology)
-    state.advice_edge[source, ability] = edge
+    state.route_preferences[ability, edge] = 1.0
     population = population_from_starts([source], destination)
     population.ability[:] = ability
     population.compliance[:] = 1.0

@@ -23,11 +23,12 @@ TICK_SECONDS = 5.0
 TICKS_IN_HOUR = 720
 
 
-def queued_population(edges: np.ndarray):
+def queued_population(topology, edges: np.ndarray):
     """Return one queued skier for each requested edge."""
     pop = empty_population(int(edges.size))
     pop.location_kind[:] = LocationKind.QUEUE
     pop.location_index[:] = edges
+    pop.destination[:] = topology.edge_destination[edges]
     pop.queue_ticket[:] = np.arange(edges.size)
     pop.next_ticket = len(pop)
     return pop
@@ -40,7 +41,7 @@ def serve_one_hour(path: Path, factor: float = 1.0):
     queue_edges = np.repeat(
         lifts, np.ceil(topology.edge_lift_throughput[lifts]).astype(np.int64) + 1
     )
-    pop = queued_population(queue_edges)
+    pop = queued_population(topology, queue_edges)
     state = new_dynamic_state(topology)
     state.lift_capacity_factor[lifts] = factor
     boarded = np.zeros(topology.edge_count, dtype=np.int64)
@@ -70,7 +71,7 @@ def test_a_fractional_rate_serves_across_successive_ticks():
         for edge in np.flatnonzero(topology.edge_type == LIFT_EDGE)
         if topology.edge_lift_throughput[edge] == 700.0
     )
-    pop = queued_population(np.full(3, edge, dtype=np.int32))
+    pop = queued_population(topology, np.full(3, edge, dtype=np.int32))
     state = new_dynamic_state(topology)
 
     serve_lift_queues(pop, topology, state, TICK_SECONDS)
@@ -94,7 +95,7 @@ def test_a_capacity_factor_scales_the_service_rate():
 def test_a_disabled_lift_does_not_serve_or_accumulate(disabled_field):
     topology = load_topology(MOUNTAINS[0])
     edge = int(np.flatnonzero(topology.edge_type == LIFT_EDGE)[0])
-    pop = queued_population(np.full(4, edge, dtype=np.int32))
+    pop = queued_population(topology, np.full(4, edge, dtype=np.int32))
     state = new_dynamic_state(topology)
     getattr(state, disabled_field)[edge] = True
 
@@ -117,7 +118,7 @@ def test_an_idle_lift_does_not_store_a_service_burst():
     for _ in range(TICKS_IN_HOUR):
         serve_lift_queues(empty_population(0), topology, state, TICK_SECONDS)
 
-    pop = queued_population(np.full(10, edge, dtype=np.int32))
+    pop = queued_population(topology, np.full(10, edge, dtype=np.int32))
     serve_lift_queues(pop, topology, state, TICK_SECONDS)
 
     assert np.count_nonzero(pop.location_kind == LocationKind.LIFT) <= 1
@@ -130,7 +131,7 @@ def test_lift_service_uses_the_queue_ticket_order():
         for edge in np.flatnonzero(topology.edge_type == LIFT_EDGE)
         if topology.edge_lift_throughput[edge] == 700.0
     )
-    pop = queued_population(np.full(3, edge, dtype=np.int32))
+    pop = queued_population(topology, np.full(3, edge, dtype=np.int32))
     pop.queue_ticket[:] = (30, 10, 20)
     state = new_dynamic_state(topology)
 
@@ -157,7 +158,7 @@ def test_a_reset_clears_each_service_residual():
 def test_a_full_lift_does_not_board_a_waiting_skier():
     topology = load_topology(MOUNTAINS[0])
     edge = int(np.flatnonzero(topology.edge_type == LIFT_EDGE)[0])
-    pop = queued_population(np.full(4, edge, dtype=np.int32))
+    pop = queued_population(topology, np.full(4, edge, dtype=np.int32))
     state = new_dynamic_state(topology)
     state.occupancy[edge] = int(topology.edge_safe_capacity[edge])
 
@@ -175,7 +176,7 @@ def test_boarding_resumes_after_one_rider_leaves():
         for edge in np.flatnonzero(topology.edge_type == LIFT_EDGE)
         if topology.edge_lift_throughput[edge] == 700.0
     )
-    pop = queued_population(np.full(3, edge, dtype=np.int32))
+    pop = queued_population(topology, np.full(3, edge, dtype=np.int32))
     state = new_dynamic_state(topology)
     state.occupancy[edge] = int(topology.edge_safe_capacity[edge])
 
@@ -189,7 +190,7 @@ def test_boarding_resumes_after_one_rider_leaves():
 def test_boarding_uses_the_smaller_service_and_room_limit():
     topology = load_topology(MOUNTAINS[1])
     edge = int(np.argmax(topology.edge_lift_throughput))
-    pop = queued_population(np.full(10, edge, dtype=np.int32))
+    pop = queued_population(topology, np.full(10, edge, dtype=np.int32))
     state = new_dynamic_state(topology)
     state.occupancy[edge] = int(topology.edge_safe_capacity[edge]) - 2
 

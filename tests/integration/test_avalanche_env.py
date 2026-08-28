@@ -18,7 +18,6 @@ from avalanche.env import (
 from avalanche.env.adapter import _apply_executed_action
 from avalanche.scenarios.failures import refresh_reported_telemetry
 from avalanche.sim import EDGE_TYPE_NAMES, population_from_starts
-from avalanche.sim.routes import NO_EDGE
 from avalanche.sim.skier import LocationKind
 
 FIXTURE = (
@@ -112,7 +111,7 @@ def test_an_executed_action_changes_each_supported_control():
 
     _, _, _, _, info = env.step(action)
 
-    assert env.sim.state.advice_edge[source, 0] == route_edge
+    assert env.sim.state.route_preferences[0, route_edge] == 1.0
     assert env.sim.state.closed[closed_piste]
     assert env.sim.state.lift_capacity_factor[lift] == 0.25
     assert env.sim.state.crowd_messages[source, 0] == -0.5
@@ -170,9 +169,9 @@ def test_a_neutral_action_clears_old_route_advice():
     advised = neutral_action(env.topology)
     advised["route_weights"][0, route_edge] = 1.0
     env.step(advised)
-    assert env.sim.state.advice_edge[source, 0] == route_edge
+    assert env.sim.state.route_preferences[0, route_edge] == 1.0
     env.step(neutral_action(env.topology))
-    assert env.sim.state.advice_edge[source, 0] == NO_EDGE
+    assert env.sim.state.route_preferences[0, route_edge] == 0.0
 
 
 def test_a_neutral_action_clears_old_telemetry_overrides():

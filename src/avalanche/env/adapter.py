@@ -62,9 +62,7 @@ from avalanche.env.reward import (
 from avalanche.monitors.outcome import AllowMonitor
 from avalanche.scenarios.failures import refresh_reported_telemetry
 from avalanche.sim.engine import MountainSim
-from avalanche.sim.movement import effective_closed
 from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
-from avalanche.sim.routes import NO_EDGE
 from avalanche.sim.skier import Status
 from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import Topology, load_topology
@@ -275,6 +273,7 @@ class AvalancheEnv(gym.Env):
         ):
             raise ValueError("the reset movement tick must match the environment")
         sim_options["tick_seconds"] = self.config.movement_tick_seconds
+        sim_options["control_interval_seconds"] = self.config.control_interval_seconds
         sim_options["numerics"] = NumericsConfig(
             time_epsilon_seconds=self.config.time_epsilon_seconds
         )
@@ -485,10 +484,10 @@ class AvalancheEnv(gym.Env):
 
     def _action_contract(self) -> ActionContract:
         """Return current permissions and reported edge availability."""
-        state_closed = self.sim.state.reported_closed
-        reported_closed = (
-            state_closed if state_closed.shape == (self.topology.edge_count,) else None
-        )
+        packet = self.sim.route_sensor_packet
+        reported_closed = None
+        if packet is not None:
+            reported_closed = ~packet.reported_availability
         return build_action_contract(
             self.topology,
             self.config.ability_count,
@@ -637,21 +636,10 @@ def action_intervention_cost(executed: ExecutedAction) -> float:
 
 
 def _apply_route_weights(sim: MountainSim, weights: np.ndarray) -> None:
-    """Turn non-zero group weights into grouped route advice."""
+    """Store each normalized route preference without changing its direction."""
     topology = sim.topology
     assert topology is not None
-    sim.state.advice_edge.fill(NO_EDGE)
-    closed = effective_closed(sim.state)
-    for node in range(topology.node_count):
-        outgoing = topology.edges_from(node)
-        available = outgoing[~closed[outgoing]]
-        if available.size == 0:
-            continue
-        for group in range(weights.shape[0]):
-            values = weights[group, available]
-            if not np.any(values):
-                continue
-            best = int(np.argmax(values))
-            sim.state.advice_edge[node, group] = (
-                int(available[best]) if values[best] > 0.0 else NO_EDGE
-            )
+    values = np.asarray(weights, dtype=np.float64)
+    if values.shape != sim.state.route_preferences.shape:
+        raise ValueError("the route preferences must match the simulator state")
+    sim.state.route_preferences[:] = np.clip(values, -1.0, 1.0)

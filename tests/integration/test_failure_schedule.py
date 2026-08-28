@@ -7,7 +7,8 @@ import numpy as np
 from avalanche.config import FailuresConfig, load_yaml
 from avalanche.config.models import ScenarioConfig
 from avalanche.scenarios.failures import apply_failures, refresh_reported_telemetry
-from avalanche.sim import MountainSim
+from avalanche.sim import LocationKind, MountainSim, population_from_starts
+from avalanche.sim.population import ABILITY_NAMES
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -159,3 +160,57 @@ def test_late_telemetry_freezes_only_the_reported_value():
 
     assert sim.state.occupancy[target] == 11
     assert sim.state.reported_occupancy[target] == 3
+
+
+def test_failed_lift_is_not_selected():
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "lift1_base->lift1_top",
+                "start_time_seconds": 0.0,
+                "duration_seconds": 60.0,
+                "controller_visible": True,
+            }
+        ]
+    }
+    sim = MountainSim(FIXTURE)
+    sim.reset(15, {"failures": failures})
+    source = sim.topology.node_index["lift1_base"]
+    destination = sim.topology.node_index["base_exit"]
+    sim.population = population_from_starts([source], destination)
+    sim.population.ability[:] = ABILITY_NAMES.index("advanced")
+
+    sim.tick()
+
+    assert sim.population.location_kind[0] == LocationKind.NODE
+    assert sim.population.location_index[0] == source
+
+
+def test_hidden_failed_lift_is_reported_open_but_rejected_locally():
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "lift1_base->lift1_top",
+                "start_time_seconds": 0.0,
+                "duration_seconds": 60.0,
+                "controller_visible": False,
+            }
+        ]
+    }
+    sim = MountainSim(FIXTURE)
+    sim.reset(1, {"failures": failures})
+    lift = sim.failure_schedule.events[0].target
+    source = sim.topology.node_index["lift1_base"]
+    destination = sim.topology.node_index["base_exit"]
+    sim.population = population_from_starts([source], destination)
+    sim.population.ability[:] = ABILITY_NAMES.index("advanced")
+
+    assert sim.route_sensor_packet.reported_availability[lift]
+    assert not sim.route_sensor_packet.availability_missing[lift]
+    sim.tick()
+
+    assert sim.population.location_kind[0] == LocationKind.NODE
+    assert sim.population.location_index[0] == source
+    assert sim.population.locally_rejected_edge[0] == lift

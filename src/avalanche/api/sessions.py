@@ -470,10 +470,13 @@ def run_session(
             episode_duration_seconds = resolved_config.episode_duration_seconds
             options = {
                 "population": resolved_config.population,
+                "routing": resolved_config.routing,
                 "weather": resolved_config.scenario.weather,
                 "hazards": resolved_config.scenario.hazards,
                 "failures": resolved_config.scenario.failures,
                 "audits": resolved_config.scenario.audits,
+                "route_sensor": resolved_config.scenario.route_sensor,
+                "reported_risk": resolved_config.scenario.reported_risk,
                 "numerics": resolved_config.numerics,
             }
         if demo_failure:

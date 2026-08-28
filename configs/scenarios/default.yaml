@@ -21,6 +21,17 @@ scenario:
   operational_events:
     schema_version: 1
     enabled: false
+  route_sensor:
+    schema_version: 1
+    delay_control_intervals: 1
+    maximum_relative_noise: 0.05
+    missing_probability: 0.01
+    provenance: operational_route_sensor
+  reported_risk:
+    density_reference_ratio: 1.0
+    minimum: 0.0
+    maximum: 1.0
+    missing_value: 1.0
 
 intervals:
   movement_tick_seconds: 5

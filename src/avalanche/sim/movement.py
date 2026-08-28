@@ -11,14 +11,28 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS
+from avalanche.config.models import (
+    PROTOCOL_TIME_EPSILON_SECONDS,
+    ReportedRiskConfig,
+    RoutingConfig,
+)
+from avalanche.scenarios.sensors import (
+    RouteSensorPacket,
+    perfect_route_sensor_packet,
+)
 from avalanche.sim.ability import ABILITY_NAMES, ability_allows_edges
 from avalanche.sim.population import (
     CUSTOMER_GROUP_NAMES,
     SkierArrays,
     group_rank,
 )
-from avalanche.sim.routes import NO_EDGE, RouteTable
+from avalanche.sim.routes import (
+    NO_EDGE,
+    OperationalRouteCosts,
+    RouteTable,
+    distances_to_destination,
+    physical_onward_route_exists,
+)
 from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
@@ -75,7 +89,7 @@ DYNAMIC_STATE_ARRAY_FIELDS = (
     "reported_queue_length",
     "reported_speed_factor",
     "reported_closed",
-    "advice_edge",
+    "route_preferences",
 )
 
 
@@ -90,11 +104,10 @@ class DynamicState:
     `queue_length` holds the count of waiting skiers of each edge.
     `lift_service_residual` holds unused fractional service for each lift.
     `speed_factor` scales the advance of a skier on each edge.
-    `advice_edge[node, ability]` is the edge that the advice offers at one node.
+    `route_preferences[ability, edge]` stores each bounded controller preference.
     `crowd_messages[node, customer_group]` changes the compliance at one node.
-    It is `NO_EDGE` when the advice offers no edge.
-    Stage 3 has no controller, so a test sets the advice today.
-    The adjudicator writes the advice in Stage 6.
+    A positive route preference lowers the operational route cost.
+    A negative route preference raises the operational route cost.
     Reported telemetry can lag while the true arrays continue to change.
     `reported_density_ratio` comes from the reported arrays only.
     """
@@ -180,8 +193,8 @@ class DynamicState:
         default_factory=lambda: np.zeros(0, dtype=np.int32)
     )
     harm_count: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
-    advice_edge: np.ndarray = field(
-        default_factory=lambda: np.zeros((0, len(ABILITY_NAMES)), dtype=np.int32)
+    route_preferences: np.ndarray = field(
+        default_factory=lambda: np.zeros((len(ABILITY_NAMES), 0), dtype=np.float64)
     )
 
     def checksum_fields(self) -> tuple[tuple[str, np.ndarray], ...]:
@@ -193,7 +206,7 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
     """Return the open dynamic state of one topology, with empty lift queues.
 
     Each edge is empty, so each edge runs at the full speed.
-    The advice table holds `NO_EDGE`, so each skier follows the route table.
+    Each route preference starts at zero.
     """
     return DynamicState(
         closed=np.zeros(topology.edge_count, dtype=np.bool_),
@@ -227,8 +240,8 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         harm_active=np.zeros(topology.edge_count, dtype=np.bool_),
         indicator_count=np.zeros(topology.edge_count, dtype=np.int32),
         harm_count=np.zeros(topology.edge_count, dtype=np.int32),
-        advice_edge=np.full(
-            (topology.node_count, len(ABILITY_NAMES)), NO_EDGE, dtype=np.int32
+        route_preferences=np.zeros(
+            (len(ABILITY_NAMES), topology.edge_count), dtype=np.float64
         ),
     )
 
@@ -310,7 +323,9 @@ def serve_lift_queues(
         * state.lift_capacity_factor[operational]
     )
 
-    queued = np.flatnonzero(pop.location_kind == LocationKind.QUEUE)
+    queued = np.flatnonzero(
+        (pop.location_kind == LocationKind.QUEUE) & (pop.status == Status.ACTIVE)
+    )
     if queued.size > 0:
         edges = pop.location_index[queued]
         members, rank = group_rank(edges, pop.queue_ticket[queued])
@@ -321,7 +336,37 @@ def serve_lift_queues(
             0,
         )
         boarding_limit = np.minimum(service, room)
-        served = queued[members][rank < boarding_limit[edges[members]]]
+        candidates = queued[members][rank < boarding_limit[edges[members]]]
+
+        onward = np.ones(candidates.size, dtype=np.bool_)
+        if candidates.size:
+            keys = np.column_stack(
+                (
+                    pop.location_index[candidates],
+                    pop.ability[candidates],
+                    pop.destination[candidates],
+                )
+            )
+            groups, inverse = np.unique(keys, axis=0, return_inverse=True)
+            closed = effective_closed(state)
+            for group_index, (edge, ability, destination) in enumerate(groups):
+                destination_node = int(topology.edge_destination[int(edge)])
+                reachable = physical_onward_route_exists(
+                    topology,
+                    closed,
+                    ability=int(ability),
+                    destination=int(destination),
+                )
+                onward[inverse == group_index] = reachable[destination_node]
+
+        rejected = candidates[~onward]
+        rejected_edges = pop.location_index[rejected].copy()
+        pop.location_kind[rejected] = LocationKind.NODE
+        pop.location_index[rejected] = topology.edge_source[rejected_edges]
+        pop.queue_ticket[rejected] = -1
+        pop.chosen_edge[rejected] = NO_EDGE
+        pop.locally_rejected_edge[rejected] = rejected_edges
+        served = candidates[onward]
 
         served_edges = pop.location_index[served]
         served_count = np.bincount(served_edges, minlength=topology.edge_count).astype(
@@ -382,6 +427,8 @@ def arrive_at_nodes(
     pop.location_index[completed_skiers] = destination
     pop.required_travel_seconds[completed_skiers] = 0.0
     pop.remaining_travel_seconds[completed_skiers] = 0.0
+    pop.chosen_edge[completed_skiers] = NO_EDGE
+    pop.locally_rejected_edge[completed_skiers] = NO_EDGE
     return MovementTransitions(completed_skiers, edge_completed_at)
 
 
@@ -391,29 +438,28 @@ def select_next_edges(
     routes: RouteTable,
     state: DynamicState,
     rng: np.random.Generator,
+    route_tie_rng: np.random.Generator | None = None,
+    packet: RouteSensorPacket | None = None,
+    routing: RoutingConfig | None = None,
+    reported_risk_config: ReportedRiskConfig | None = None,
 ) -> None:
-    """Start the next edge of each skier at a node.
-
-    A skier at its destination becomes finished and complete.
-    The route choice groups the skiers by the node, the destination class,
-    the ability, and the advice.
-    The destination class is the destination node index for now.
-    A coarser class buys nothing on a mountain of this size.
-    The table lookup is the grouped choice, because each skier of one key
-    reads the same advised edge and the same route table edge.
-    The compliance value is the probability that a skier follows the advice.
-    A skier takes the advised edge, then the route table edge, then it waits.
-    A closed advised edge falls back to the route table edge.
-    A closed route table edge makes the skier wait at the node.
-    A skier that takes a lift edge joins the queue of that lift.
-
-    The step 7 of the tick then applies the capacity limit of a piste edge.
-    A piste edge at its safe capacity accepts no new skier.
-    The refused skiers wait at the node and try again in the next tick.
-    The skier index gives the order of the admission, so the run is deterministic.
-    A lift queue has no admission limit.
-    Lift service applies the onboard limit before boarding.
-    """
+    """Choose operational routes and enter each physically safe edge."""
+    del routes
+    routing = routing or RoutingConfig()
+    reported_risk_config = reported_risk_config or ReportedRiskConfig()
+    route_tie_rng = route_tie_rng or rng
+    if packet is None:
+        throughput = (
+            topology.edge_lift_throughput.astype(np.float64) / SECONDS_IN_HOUR
+        ) * state.lift_capacity_factor
+        packet = perfect_route_sensor_packet(
+            availability=~effective_closed(state),
+            speed_factor=state.reported_speed_factor,
+            density_ratio=state.reported_density_ratio,
+            weather_risk=state.weather_risk,
+            queue_length=state.reported_queue_length,
+            boarding_throughput=throughput,
+        )
     at_node = np.flatnonzero(
         (pop.location_kind == LocationKind.NODE) & (pop.status == Status.ACTIVE)
     )
@@ -422,37 +468,147 @@ def select_next_edges(
     complete = at_node[arrived]
     pop.location_kind[complete] = LocationKind.FINISHED
     pop.status[complete] = Status.COMPLETE
+    pop.chosen_edge[complete] = NO_EDGE
+    pop.locally_rejected_edge[complete] = NO_EDGE
 
     travelling = at_node[~arrived]
+    if travelling.size == 0:
+        return
     nodes = pop.location_index[travelling]
     dests = pop.destination[travelling]
-
-    # The draw takes one number for each skier at a node, in the ascending
-    # skier order, so the run is deterministic.
     abilities = pop.ability[travelling]
-    advice = state.advice_edge[nodes, abilities]
-    message = state.crowd_messages[nodes, pop.group[travelling]]
-    effective_compliance = np.clip(pop.compliance[travelling] + message, 0.0, 1.0)
-    follow = rng.random(nodes.size) < effective_compliance
-    safe_advice = np.zeros(advice.size, dtype=np.bool_)
-    proposed = np.flatnonzero(advice != NO_EDGE)
-    proposed_edges = advice[proposed]
-    onward_nodes = topology.edge_destination[proposed_edges]
-    safe_advice[proposed] = (
-        ability_allows_edges(topology, abilities[proposed], proposed_edges)
-        & (topology.edge_source[proposed_edges] == nodes[proposed])
-        & np.isfinite(
-            routes.travel_time[abilities[proposed], onward_nodes, dests[proposed]]
-        )
-    )
-    # TODO: Model lift downloads before this viability check can allow safe recovery.
-    advised = np.where(follow & safe_advice & open_mask(advice, state), advice, NO_EDGE)
-    fallback = routes.next_edge[abilities, nodes, dests]
-    next_edge = np.where(advised != NO_EDGE, advised, fallback)
 
-    open_edge = open_mask(next_edge, state)
-    starters = travelling[open_edge]
-    taken = next_edge[open_edge]
+    chosen = pop.chosen_edge[travelling]
+    has_choice = chosen != NO_EDGE
+    chosen_available = np.zeros(chosen.size, dtype=np.bool_)
+    selected = np.flatnonzero(has_choice)
+    if selected.size:
+        selected_edges = chosen[selected]
+        chosen_available[selected] = (
+            packet.reported_availability[selected_edges]
+            & ~packet.availability_missing[selected_edges]
+            & (topology.edge_source[selected_edges] == nodes[selected])
+            & ability_allows_edges(topology, abilities[selected], selected_edges)
+        )
+    pop.chosen_edge[travelling[has_choice & ~chosen_available]] = NO_EDGE
+
+    needs_choice = travelling[pop.chosen_edge[travelling] == NO_EDGE]
+    if needs_choice.size:
+        choice_nodes = pop.location_index[needs_choice]
+        choice_destinations = pop.destination[needs_choice]
+        choice_abilities = pop.ability[needs_choice]
+        messages = state.crowd_messages[choice_nodes, pop.group[needs_choice]]
+        compliance = np.clip(pop.compliance[needs_choice] + messages, 0.0, 1.0)
+        follows_advice = rng.random(needs_choice.size) < compliance
+        maxima = np.asarray(
+            [item.maximum for item in routing.risk_tolerance_bins[:-1]],
+            dtype=np.float64,
+        )
+        tolerance_bins = np.searchsorted(
+            maxima,
+            np.clip(pop.risk_tolerance[needs_choice], 0.0, 1.0),
+            side="right",
+        )
+        keys = np.column_stack(
+            (
+                choice_nodes,
+                choice_destinations,
+                choice_abilities,
+                tolerance_bins,
+                follows_advice.astype(np.int8),
+                pop.locally_rejected_edge[needs_choice],
+            )
+        )
+        groups, inverse = np.unique(keys, axis=0, return_inverse=True)
+        tie_groups: list[tuple[np.ndarray, np.ndarray]] = []
+        for group_index, key in enumerate(groups):
+            node, destination, ability, tolerance_bin, follows, rejected = (
+                int(value) for value in key
+            )
+            members = needs_choice[inverse == group_index]
+            tolerance = routing.risk_tolerance_bins[tolerance_bin].minimum
+            preferences = (
+                state.route_preferences[ability]
+                if follows
+                else np.zeros(topology.edge_count, dtype=np.float64)
+            )
+            costs = OperationalRouteCosts.build(
+                topology,
+                packet,
+                routing,
+                reported_risk_config,
+                ability=ability,
+                risk_tolerance=tolerance,
+                route_preference=preferences,
+            ).total_seconds.copy()
+            if rejected != NO_EDGE:
+                costs[rejected] = np.inf
+            distances = distances_to_destination(topology, costs, destination)
+            outgoing = topology.edges_from(node)
+            totals = costs[outgoing] + distances[topology.edge_destination[outgoing]]
+            if not np.any(np.isfinite(totals)):
+                continue
+            minimum = np.min(totals)
+            candidates = outgoing[totals == minimum]
+            if candidates.size == 1:
+                pop.chosen_edge[members] = int(candidates[0])
+            else:
+                tie_groups.append((members, candidates))
+
+        if tie_groups:
+            tied_skiers = np.concatenate([members for members, _ in tie_groups])
+            order = np.argsort(tied_skiers, kind="stable")
+            draws = route_tie_rng.random(tied_skiers.size)
+            draw_by_skier = np.zeros(len(pop), dtype=np.float64)
+            draw_by_skier[tied_skiers[order]] = draws
+            for members, candidates in tie_groups:
+                selected_candidates = np.minimum(
+                    (draw_by_skier[members] * candidates.size).astype(np.int64),
+                    candidates.size - 1,
+                )
+                pop.chosen_edge[members] = candidates[selected_candidates]
+
+        pop.locally_rejected_edge[needs_choice] = NO_EDGE
+
+    next_edge = pop.chosen_edge[travelling]
+    selected = np.flatnonzero(next_edge != NO_EDGE)
+    physical = np.zeros(next_edge.size, dtype=np.bool_)
+    if selected.size:
+        selected_edges = next_edge[selected]
+        physical[selected] = ~effective_closed(state)[
+            selected_edges
+        ] & ability_allows_edges(topology, abilities[selected], selected_edges)
+        lift_selected = selected[topology.edge_type[selected_edges] == LIFT_EDGE]
+        if lift_selected.size:
+            lift_keys = np.column_stack(
+                (
+                    next_edge[lift_selected],
+                    abilities[lift_selected],
+                    dests[lift_selected],
+                )
+            )
+            lift_groups, lift_inverse = np.unique(
+                lift_keys, axis=0, return_inverse=True
+            )
+            closed = effective_closed(state)
+            for group_index, (edge, ability, destination) in enumerate(lift_groups):
+                destination_node = int(topology.edge_destination[int(edge)])
+                reachable = physical_onward_route_exists(
+                    topology,
+                    closed,
+                    ability=int(ability),
+                    destination=int(destination),
+                )
+                members = lift_selected[lift_inverse == group_index]
+                physical[members] &= reachable[destination_node]
+
+    rejected = travelling[(next_edge != NO_EDGE) & ~physical]
+    rejected_edges = pop.chosen_edge[rejected].copy()
+    pop.locally_rejected_edge[rejected] = rejected_edges
+    pop.chosen_edge[rejected] = NO_EDGE
+
+    starters = travelling[physical]
+    taken = next_edge[physical]
     lift = topology.edge_type[taken] == LIFT_EDGE
 
     # The occupancy is the count at the end of the last tick.
@@ -514,6 +670,8 @@ def update_stranded(
     tick_seconds: float,
     stranded_after_seconds: float,
     epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
+    *,
+    topology: Topology | None = None,
 ) -> np.ndarray:
     """Mark skiers after a route closure blocks them for too long."""
     active_nodes = (pop.status == Status.ACTIVE) & (
@@ -524,8 +682,23 @@ def update_stranded(
         return np.empty(0, dtype=np.int64)
     nodes = pop.location_index[members]
     destinations = pop.destination[members]
-    next_edges = routes.next_edge[pop.ability[members], nodes, destinations]
-    blocked = ~open_mask(next_edges, state)
+    if topology is None:
+        next_edges = routes.next_edge[pop.ability[members], nodes, destinations]
+        blocked = ~open_mask(next_edges, state)
+    else:
+        blocked = np.ones(members.size, dtype=np.bool_)
+        keys = np.column_stack((pop.ability[members], destinations))
+        groups, inverse = np.unique(keys, axis=0, return_inverse=True)
+        closed = effective_closed(state)
+        for group_index, (ability, destination) in enumerate(groups):
+            reachable = physical_onward_route_exists(
+                topology,
+                closed,
+                ability=int(ability),
+                destination=int(destination),
+            )
+            selected = inverse == group_index
+            blocked[selected] = ~reachable[nodes[selected]]
     blocked_members = members[blocked]
     clear_members = members[~blocked]
     pop.blocked_time[blocked_members] += tick_seconds

@@ -4,14 +4,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from avalanche.config.models import ReportedRiskConfig, RoutingConfig
+from avalanche.scenarios.sensors import perfect_route_sensor_packet
 from avalanche.sim import (
     NODE_TYPE_NAMES,
+    OperationalRouteCosts,
     build_route_table,
     load_topology,
+    physical_onward_route_exists,
+    reported_route_exists,
     required_destinations,
     walk_route,
 )
 from avalanche.sim.population import ABILITY_NAMES
+from avalanche.sim.topology import EDGE_TYPE_NAMES
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -154,3 +160,124 @@ def test_each_walked_route_ends_at_its_destination(topology, table):
                 assert cost == pytest.approx(
                     table.travel_time[ability, source, destination], rel=1e-5
                 )
+
+
+def test_every_operational_cost_contains_four_second_terms(topology):
+    edge_count = topology.edge_count
+    preference = np.full(edge_count, 0.5)
+    packet = perfect_route_sensor_packet(
+        availability=np.ones(edge_count, dtype=np.bool_),
+        speed_factor=np.ones(edge_count),
+        density_ratio=np.full(edge_count, 1.25),
+        weather_risk=np.full(edge_count, 0.1),
+        queue_length=np.zeros(edge_count),
+        boarding_throughput=np.ones(edge_count),
+    )
+    costs = OperationalRouteCosts.build(
+        topology,
+        packet,
+        RoutingConfig(),
+        ReportedRiskConfig(),
+        ability=ABILITY_NAMES.index("advanced"),
+        risk_tolerance=0.5,
+        route_preference=preference,
+    )
+
+    finite = np.isfinite(costs.total_seconds)
+    np.testing.assert_allclose(
+        costs.total_seconds[finite],
+        costs.effective_travel_seconds[finite]
+        + costs.ability_penalty_seconds[finite]
+        + costs.risk_seconds[finite]
+        + costs.controller_seconds[finite],
+    )
+    bound = 0.25 * topology.edge_nominal_travel_time
+    assert np.all(np.abs(costs.controller_seconds) <= bound)
+
+
+def test_hard_ability_limit_has_infinite_operational_cost(topology):
+    edge_count = topology.edge_count
+    packet = perfect_route_sensor_packet(
+        availability=np.ones(edge_count, dtype=np.bool_),
+        speed_factor=np.ones(edge_count),
+        density_ratio=np.zeros(edge_count),
+        weather_risk=np.zeros(edge_count),
+        queue_length=np.zeros(edge_count),
+        boarding_throughput=np.ones(edge_count),
+    )
+    costs = OperationalRouteCosts.build(
+        topology,
+        packet,
+        RoutingConfig(),
+        ReportedRiskConfig(),
+        ability=ABILITY_NAMES.index("beginner"),
+        risk_tolerance=1.0,
+    )
+    black = topology.edge_difficulty == 4
+
+    assert np.all(np.isinf(costs.total_seconds[black]))
+
+
+def test_reported_unavailable_edges_have_infinite_operational_cost(topology):
+    edge_count = topology.edge_count
+    availability = np.ones(edge_count, dtype=np.bool_)
+    availability[0] = False
+    packet = perfect_route_sensor_packet(
+        availability=availability,
+        speed_factor=np.ones(edge_count),
+        density_ratio=np.zeros(edge_count),
+        weather_risk=np.zeros(edge_count),
+        queue_length=np.zeros(edge_count),
+        boarding_throughput=np.ones(edge_count),
+    )
+    costs = OperationalRouteCosts.build(
+        topology,
+        packet,
+        RoutingConfig(),
+        ReportedRiskConfig(),
+        ability=ABILITY_NAMES.index("advanced"),
+        risk_tolerance=1.0,
+    )
+
+    assert np.isinf(costs.total_seconds[0])
+
+
+def test_reported_route_check_uses_the_delivered_availability(topology):
+    edge_count = topology.edge_count
+    packet = perfect_route_sensor_packet(
+        availability=np.zeros(edge_count, dtype=np.bool_),
+        speed_factor=np.ones(edge_count),
+        density_ratio=np.zeros(edge_count),
+        weather_risk=np.zeros(edge_count),
+        queue_length=np.zeros(edge_count),
+        boarding_throughput=np.ones(edge_count),
+    )
+    reachable = reported_route_exists(
+        topology,
+        packet,
+        RoutingConfig(),
+        ReportedRiskConfig(),
+        ability=ABILITY_NAMES.index("advanced"),
+        destination=topology.node_index["base_exit"],
+    )
+
+    assert not reachable[topology.node_index["base_village"]]
+
+
+def test_lift_onward_check_uses_current_closures(topology):
+    ability = ABILITY_NAMES.index("beginner")
+    destination = topology.node_index["base_exit"]
+    lift = np.flatnonzero(topology.edge_type == EDGE_TYPE_NAMES.index("lift"))[1]
+    closed = np.zeros(topology.edge_count, dtype=np.bool_)
+    onward = int(topology.edge_destination[lift])
+    exits = topology.edges_from(onward)
+    closed[exits] = True
+
+    reachable = physical_onward_route_exists(
+        topology,
+        closed,
+        ability=ability,
+        destination=destination,
+    )
+
+    assert not reachable[onward]

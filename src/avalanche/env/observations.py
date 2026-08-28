@@ -219,6 +219,24 @@ def build_observation_space(
                 topology, config.ability_count, config.group_count
             ),
             "reported_edge_available": spaces.MultiBinary(edge_count),
+            "reported_edge_weather_risk": spaces.Box(
+                low=0.0, high=FLOAT_MAX, shape=(edge_count,), dtype=np.float32
+            ),
+            "reported_edge_boarding_throughput": spaces.Box(
+                low=0.0, high=FLOAT_MAX, shape=(edge_count,), dtype=np.float32
+            ),
+            "route_availability_missing": spaces.MultiBinary(edge_count),
+            "route_speed_factor_missing": spaces.MultiBinary(edge_count),
+            "route_density_ratio_missing": spaces.MultiBinary(edge_count),
+            "route_weather_risk_missing": spaces.MultiBinary(edge_count),
+            "route_queue_length_missing": spaces.MultiBinary(edge_count),
+            "route_boarding_throughput_missing": spaces.MultiBinary(edge_count),
+            "route_sensor_sample_time": spaces.Box(
+                low=-FLOAT_MAX, high=FLOAT_MAX, shape=(1,), dtype=np.float32
+            ),
+            "route_sensor_report_time": spaces.Box(
+                low=0.0, high=FLOAT_MAX, shape=(1,), dtype=np.float32
+            ),
         }
     )
 
@@ -245,25 +263,50 @@ def build_observation(
     ).astype(np.float32)
 
     state = sim.state
+    packet = sim.route_sensor_packet
+    if packet is None:
+        raise RuntimeError("reset the route sensor before the observation")
     reported_occupancy = state.reported_occupancy.astype(np.float32, copy=True)
-    reported_queue = state.reported_queue_length.astype(np.float32, copy=True)
     capacity = topology.edge_safe_capacity.astype(np.float32, copy=True)
-    reported_density = np.divide(
-        reported_occupancy + reported_queue,
-        np.maximum(capacity, 1.0),
-        dtype=np.float32,
+    reported_queue = packet.reported_queue_length.astype(np.float32, copy=True)
+    reported_queue[packet.queue_length_missing] = capacity[packet.queue_length_missing]
+    reported_speed = np.clip(
+        packet.reported_speed_factor,
+        sim.routing_config.minimum_reported_speed_factor,
+        1.0,
+    ).astype(np.float32)
+    reported_speed[packet.speed_factor_missing] = np.float32(
+        sim.routing_config.minimum_reported_speed_factor
     )
-    reported_hazard = (
-        reported_density
-        + np.asarray(state.weather_risk, dtype=np.float32)
-        * np.float32(sim.hazard_config.weather_risk_weight)
-    ).astype(np.float32, copy=False)
+    reported_density = packet.reported_density_ratio.astype(np.float32, copy=True)
+    reported_weather_risk = packet.reported_weather_risk.astype(np.float32, copy=True)
+    risk_missing = packet.density_ratio_missing | packet.weather_risk_missing
+    reported_hazard = np.clip(
+        np.maximum(
+            reported_density
+            - np.float32(sim.reported_risk_config.density_reference_ratio),
+            0.0,
+        )
+        + reported_weather_risk,
+        sim.reported_risk_config.minimum,
+        sim.reported_risk_config.maximum,
+    ).astype(np.float32)
+    reported_hazard[risk_missing] = np.float32(sim.reported_risk_config.missing_value)
+    reported_throughput = packet.reported_boarding_throughput.astype(
+        np.float32, copy=True
+    )
+    reported_throughput[packet.boarding_throughput_missing] = np.float32(
+        sim.routing_config.minimum_boarding_throughput_per_second
+    )
+    reported_available = (
+        packet.reported_availability & ~packet.availability_missing
+    ).astype(np.int8)
     forecast, forecast_time, forecast_mask = _weather_forecast(sim, config)
     contract = build_action_contract(
         topology,
         config.ability_count,
         config.group_count,
-        reported_edge_closed=state.reported_closed,
+        reported_edge_closed=~reported_available.astype(bool),
     )
     permissions = {
         name: np.asarray(value, dtype=np.int8).copy()
@@ -276,10 +319,8 @@ def build_observation(
             "node_crowding": node_crowding,
             "reported_edge_occupancy": reported_occupancy,
             "reported_edge_queue_length": reported_queue,
-            "reported_edge_speed_factor": state.reported_speed_factor.astype(
-                np.float32, copy=True
-            ),
-            "reported_edge_closed": state.reported_closed.astype(np.int8, copy=True),
+            "reported_edge_speed_factor": reported_speed,
+            "reported_edge_closed": (~reported_available.astype(bool)).astype(np.int8),
             "reported_edge_density": reported_density,
             "reported_edge_hazard": reported_hazard.copy(),
             "edge_capacity": capacity,
@@ -294,7 +335,33 @@ def build_observation(
                 dtype=np.float32,
             ),
             "control_permissions": permissions,
-            "reported_edge_available": contract["reported_edge_available"].copy(),
+            "reported_edge_available": reported_available,
+            "reported_edge_weather_risk": reported_weather_risk,
+            "reported_edge_boarding_throughput": reported_throughput,
+            "route_availability_missing": packet.availability_missing.astype(
+                np.int8, copy=True
+            ),
+            "route_speed_factor_missing": packet.speed_factor_missing.astype(
+                np.int8, copy=True
+            ),
+            "route_density_ratio_missing": packet.density_ratio_missing.astype(
+                np.int8, copy=True
+            ),
+            "route_weather_risk_missing": packet.weather_risk_missing.astype(
+                np.int8, copy=True
+            ),
+            "route_queue_length_missing": packet.queue_length_missing.astype(
+                np.int8, copy=True
+            ),
+            "route_boarding_throughput_missing": (
+                packet.boarding_throughput_missing.astype(np.int8, copy=True)
+            ),
+            "route_sensor_sample_time": np.array(
+                [packet.sample_time], dtype=np.float32
+            ),
+            "route_sensor_report_time": np.array(
+                [packet.report_time], dtype=np.float32
+            ),
         }
     )
     _require_finite(observation)

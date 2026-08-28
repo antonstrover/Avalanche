@@ -30,6 +30,7 @@ from avalanche.monitors.perceptron import (
 )
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import MountainSim, population_from_starts
+from avalanche.sim.engine import STREAM_NAMES
 from tests.configuration import resolve_test_configuration
 
 FIXTURE = (
@@ -131,6 +132,52 @@ def test_two_resets_share_one_static_route_identity():
     assert first.topology.mountain_sha256 == second.topology.mountain_sha256
     assert first.routes.cache_identity == second.routes.cache_identity
     assert first.routes is second.routes
+
+
+def test_appended_route_streams_preserve_each_existing_stream_state():
+    existing_names = STREAM_NAMES[:-2]
+    original = np.random.default_rng(SEED).spawn(len(existing_names))
+    extended = np.random.default_rng(SEED).spawn(len(STREAM_NAMES))
+
+    for name, before, after in zip(
+        existing_names, original, extended[: len(existing_names)], strict=True
+    ):
+        assert before.bit_generator.state == after.bit_generator.state, name
+
+
+def test_route_tie_draws_do_not_change_external_schedules_or_sensor_packets():
+    failures = {
+        "sampling": {
+            "event_count": 3,
+            "earliest_start_seconds": 60.0,
+            "latest_start_seconds": 300.0,
+            "minimum_duration_seconds": 30.0,
+            "maximum_duration_seconds": 90.0,
+            "controller_visibility_probability": 0.5,
+        }
+    }
+    plain = MountainSim(FIXTURE)
+    plain.reset(SEED, {"failures": failures})
+    disturbed = MountainSim(FIXTURE)
+    disturbed.reset(SEED, {"failures": failures})
+    disturbed.streams["route_tie"].random(100)
+
+    assert (
+        plain.metadata(SEED)["weather_schedule"]
+        == disturbed.metadata(SEED)["weather_schedule"]
+    )
+    assert (
+        plain.metadata(SEED)["failure_schedule"]
+        == disturbed.metadata(SEED)["failure_schedule"]
+    )
+    assert (
+        plain.route_sensor_packet.policy_identity
+        == disturbed.route_sensor_packet.policy_identity
+    )
+    np.testing.assert_array_equal(
+        plain.route_sensor_packet.reported_speed_factor,
+        disturbed.route_sensor_packet.reported_speed_factor,
+    )
 
 
 def test_the_state_moves_during_the_run():

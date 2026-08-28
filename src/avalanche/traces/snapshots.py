@@ -286,7 +286,11 @@ def _snapshot_v2_population_arrays(
     for name, values in population.checksum_fields():
         if name == "required_travel_seconds":
             arrays.append(("progress", display_progress(population)))
-        elif name != "remaining_travel_seconds":
+        elif name not in {
+            "remaining_travel_seconds",
+            "chosen_edge",
+            "locally_rejected_edge",
+        }:
             arrays.append((name, values))
     return tuple(arrays)
 

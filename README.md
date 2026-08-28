@@ -61,7 +61,7 @@ uv run avalanche simulate \
 |---|---|---|
 | Graph | `src/avalanche/sim/graph.py` | reads the mountain file and validates the graph one time, at load |
 | Topology | `src/avalanche/sim/topology.py` | stores index arrays on immutable byte buffers |
-| Routes | `src/avalanche/sim/routes.py` | caches immutable safe paths for each ability |
+| Routes | `src/avalanche/sim/routes.py` | selects paths from delayed operational reports |
 | Population | `src/avalanche/sim/population.py` | samples skier attributes and reachable exits into arrays |
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
@@ -83,8 +83,9 @@ Each skier travels from an entrance to a sampled destination.
 The movement tick uses masked NumPy operations.
 Each skier starts on the first movement boundary at or after its arrival time.
 The route choice groups skiers by their location and their attributes.
+It uses delayed time, risk, ability, and controller costs.
 The simulator rejects a piste above the skier's ability limit.
-It rejects lift advice without a safe onward route.
+It rejects lift entry without a current physical onward route.
 Configuration validation checks every required safe route before a run.
 Each entrance must reach every safe zone and exit for every ability.
 The lift throughput limits the boarding rate.

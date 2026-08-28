@@ -70,7 +70,7 @@ class HonestControllerConfig:
 
 
 class HonestController:
-    """Apply safe and explainable rules to one observation."""
+    """Apply safe rules with positive preferences for preferred routes."""
 
     def __init__(
         self, topology: Topology, config: HonestControllerConfig | None = None

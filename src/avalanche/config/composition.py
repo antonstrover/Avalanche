@@ -25,6 +25,7 @@ from avalanche.config.models import (
     NumericsConfig,
     PopulationConfig,
     ResolvedConfig,
+    RoutingConfig,
     ScenarioConfig,
 )
 from avalanche.config.paths import canonical_repository_path
@@ -45,6 +46,7 @@ class MountainComponent(_Envelope):
 
     mountain: MountainConfig
     population: PopulationConfig
+    routing: RoutingConfig = RoutingConfig()
 
 
 class ScenarioComponent(_Envelope):
@@ -104,7 +106,7 @@ _ENVELOPES: dict[Owner, type[_Envelope]] = {
     "override": OverrideComponent,
 }
 _OWNER_KEYS: dict[Owner, frozenset[str]] = {
-    "mountain": frozenset({"mountain", "population"}),
+    "mountain": frozenset({"mountain", "population", "routing"}),
     "scenario": frozenset(
         {
             "scenario",

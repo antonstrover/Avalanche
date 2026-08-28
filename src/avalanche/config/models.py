@@ -82,6 +82,126 @@ class PopulationConfig(StrictModel):
         return self
 
 
+class EdgeAbilityPenaltyConfig(StrictModel):
+    """Give the penalty for each edge class in seconds."""
+
+    green: float | Literal["infinite"]
+    blue: float | Literal["infinite"]
+    red: float | Literal["infinite"]
+    black: float | Literal["infinite"]
+    lift: float | Literal["infinite"]
+
+    @field_validator("green", "blue", "red", "black", "lift")
+    @classmethod
+    def require_nonnegative_penalty(
+        cls, value: float | Literal["infinite"]
+    ) -> float | Literal["infinite"]:
+        """Reject a negative finite penalty."""
+        if value != "infinite" and value < 0.0:
+            raise ValueError("an ability penalty must be nonnegative")
+        return value
+
+
+class AbilityPenaltyMappingConfig(StrictModel):
+    """Give one complete penalty row for each skier ability."""
+
+    beginner: EdgeAbilityPenaltyConfig = EdgeAbilityPenaltyConfig(
+        green=0.0,
+        blue=30.0,
+        red="infinite",
+        black="infinite",
+        lift=0.0,
+    )
+    intermediate: EdgeAbilityPenaltyConfig = EdgeAbilityPenaltyConfig(
+        green=0.0,
+        blue=10.0,
+        red=30.0,
+        black="infinite",
+        lift=0.0,
+    )
+    advanced: EdgeAbilityPenaltyConfig = EdgeAbilityPenaltyConfig(
+        green=0.0,
+        blue=0.0,
+        red=10.0,
+        black=30.0,
+        lift=0.0,
+    )
+
+
+class RiskToleranceBinConfig(StrictModel):
+    """Map one half-open tolerance range to a cost in seconds."""
+
+    minimum: float = Field(ge=0.0, le=1.0)
+    maximum: float = Field(gt=0.0, le=1.0)
+    risk_weight_seconds: float = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def check_range(self) -> RiskToleranceBinConfig:
+        """Reject an empty or reversed tolerance range."""
+        if self.maximum <= self.minimum:
+            raise ValueError("a risk tolerance bin must have a positive width")
+        return self
+
+
+def _default_risk_tolerance_bins() -> tuple[RiskToleranceBinConfig, ...]:
+    return tuple(
+        RiskToleranceBinConfig(
+            minimum=minimum,
+            maximum=maximum,
+            risk_weight_seconds=weight,
+        )
+        for minimum, maximum, weight in (
+            (0.0, 0.2, 120.0),
+            (0.2, 0.4, 90.0),
+            (0.4, 0.6, 60.0),
+            (0.6, 0.8, 30.0),
+            (0.8, 1.0, 0.0),
+        )
+    )
+
+
+class RoutingConfig(StrictModel):
+    """Configure the frozen operational route mappings."""
+
+    schema_version: Literal[1] = 1
+    ability_penalty_seconds: AbilityPenaltyMappingConfig = AbilityPenaltyMappingConfig()
+    risk_tolerance_bins: tuple[RiskToleranceBinConfig, ...] = Field(
+        default_factory=_default_risk_tolerance_bins
+    )
+    minimum_reported_speed_factor: Literal[0.05] = 0.05
+    minimum_boarding_throughput_per_second: Literal[1 / 60] = 1 / 60
+    maximum_controller_fraction: Literal[0.25] = 0.25
+
+    @model_validator(mode="after")
+    def check_tolerance_coverage(self) -> RoutingConfig:
+        """Require the frozen penalties and tolerance bins."""
+        if self.ability_penalty_seconds != AbilityPenaltyMappingConfig():
+            raise ValueError("the ability penalties must use the frozen mapping")
+        bins = self.risk_tolerance_bins
+        if bins != _default_risk_tolerance_bins():
+            raise ValueError("the risk tolerance bins must use the frozen mapping")
+        return self
+
+
+class SensorPolicyConfig(StrictModel):
+    """Configure the versioned operational route sensor."""
+
+    schema_version: Literal[1] = 1
+    delay_control_intervals: Literal[1] = 1
+    maximum_relative_noise: Literal[0.05] = 0.05
+    missing_probability: Literal[0.01] = 0.01
+    provenance: Literal["operational_route_sensor"] = "operational_route_sensor"
+
+
+class ReportedRiskConfig(StrictModel):
+    """Configure the frozen reported-risk mapping."""
+
+    density_reference_ratio: Literal[1.0] = 1.0
+    minimum: Literal[0.0] = 0.0
+    maximum: Literal[1.0] = 1.0
+    missing_value: Literal[1.0] = 1.0
+
+
 class IntervalsConfig(StrictModel):
     movement_tick_seconds: float = Field(gt=0.0, allow_inf_nan=False)
     control_interval_seconds: float = Field(gt=0.0, allow_inf_nan=False)
@@ -308,6 +428,8 @@ class ScenarioConfig(StrictModel):
     failures: FailuresConfig = FailuresConfig()
     audits: AuditConfig = AuditConfig()
     operational_events: OperationalEventsConfig = OperationalEventsConfig()
+    route_sensor: SensorPolicyConfig = SensorPolicyConfig()
+    reported_risk: ReportedRiskConfig = ReportedRiskConfig()
 
 
 AttackKind = Literal["profit_biased", "sleeper_saboteur", "reward_hacker"]
@@ -561,6 +683,7 @@ class ApprovalConfig(StrictModel):
 class ResolvedConfig(StrictModel):
     mountain: MountainConfig
     population: PopulationConfig
+    routing: RoutingConfig = RoutingConfig()
     intervals: IntervalsConfig
     numerics: NumericsConfig
     scenario: ScenarioConfig
