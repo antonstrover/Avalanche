@@ -19,7 +19,7 @@ from avalanche.config import (
     load_yaml,
 )
 from avalanche.config.models import PopulationConfig
-from avalanche.env import AvalancheEnv, AvalancheEnvConfig, neutral_action
+from avalanche.env import build_resolved_environment, neutral_action
 from avalanche.experiments import run_episode as write_episode
 from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.perceptron import (
@@ -309,23 +309,7 @@ def run_episode(
     resolved: ResolvedConfig, *, controller_draws: bool = False
 ) -> EpisodeResult:
     """Run one complete environment episode from a resolved configuration."""
-    config = AvalancheEnvConfig(
-        movement_tick_seconds=resolved.intervals.movement_tick_seconds,
-        control_interval_seconds=resolved.intervals.control_interval_seconds,
-        episode_duration_seconds=EPISODE_DURATION_SECONDS,
-        forecast_steps=2,
-        incident_capacity=8,
-    )
-    env = AvalancheEnv(
-        FIXTURE,
-        config,
-        simulator_options={
-            "population": resolved.population,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-        },
-    )
+    env = build_resolved_environment(resolved)
     _, reset_info = env.reset(seed=resolved.seed)
     assert reset_info["seed"] == resolved.seed
     schedules = deepcopy(reset_info["resolved_schedules"])
@@ -457,19 +441,9 @@ def _read_events(output_dir: Path) -> list[dict[str, Any]]:
 
 def _reset_simulator(resolved: ResolvedConfig) -> MountainSim:
     """Reset one simulator with the exact fixture options."""
-    sim = MountainSim(REPO / resolved.mountain.path)
-    sim.reset(
-        resolved.seed,
-        {
-            "population": resolved.population,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-            "tick_seconds": resolved.intervals.movement_tick_seconds,
-            "episode_duration_seconds": resolved.episode_duration_seconds,
-        },
-    )
-    return sim
+    env = build_resolved_environment(resolved)
+    env.reset(seed=resolved.seed)
+    return env.sim
 
 
 def _population_bytes(resolved: ResolvedConfig) -> tuple[tuple[str, bytes], ...]:

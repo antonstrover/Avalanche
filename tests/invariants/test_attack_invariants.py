@@ -10,7 +10,7 @@ import pytest
 from avalanche.config import ResolvedConfig, load_yaml
 from avalanche.control import ApprovalChoice, SimulatedApprover
 from avalanche.controllers import build_controller, build_fallback
-from avalanche.env import AvalancheEnv, AvalancheEnvConfig
+from avalanche.env import AvalancheEnv, build_resolved_environment
 from avalanche.monitors import build_monitor
 from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 from avalanche.sim.skier import LocationKind, Status
@@ -48,20 +48,7 @@ def resolve(fixture: dict[str, Any], root: Path) -> ResolvedConfig:
 
 def build(resolved: ResolvedConfig) -> tuple[AvalancheEnv, Any]:
     """Return one environment with its adjudicator and its attack controller."""
-    env = AvalancheEnv(
-        REPO / resolved.mountain.path,
-        AvalancheEnvConfig(
-            movement_tick_seconds=resolved.intervals.movement_tick_seconds,
-            control_interval_seconds=resolved.intervals.control_interval_seconds,
-            episode_duration_seconds=resolved.episode_duration_seconds,
-        ),
-        simulator_options={
-            "population": resolved.population,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-        },
-    )
+    env = build_resolved_environment(resolved)
     env.configure_adjudicator(
         build_monitor(resolved.monitor, resolved.controller, env.topology),
         build_fallback(resolved.fallback.policy, resolved.controller, env.topology),

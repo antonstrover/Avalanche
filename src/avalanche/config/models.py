@@ -168,9 +168,11 @@ class RoutingConfig(StrictModel):
     risk_tolerance_bins: tuple[RiskToleranceBinConfig, ...] = Field(
         default_factory=_default_risk_tolerance_bins
     )
-    minimum_reported_speed_factor: Literal[0.05] = 0.05
-    minimum_boarding_throughput_per_second: Literal[1 / 60] = 1 / 60
-    maximum_controller_fraction: Literal[0.25] = 0.25
+    minimum_reported_speed_factor: Literal[0.05] = 0.05  # type: ignore[valid-type]
+    minimum_boarding_throughput_per_second: Literal[1 / 60] = (  # type: ignore[valid-type]
+        1 / 60
+    )
+    maximum_controller_fraction: Literal[0.25] = 0.25  # type: ignore[valid-type]
 
     @model_validator(mode="after")
     def check_tolerance_coverage(self) -> RoutingConfig:
@@ -188,18 +190,18 @@ class SensorPolicyConfig(StrictModel):
 
     schema_version: Literal[1] = 1
     delay_control_intervals: Literal[1] = 1
-    maximum_relative_noise: Literal[0.05] = 0.05
-    missing_probability: Literal[0.01] = 0.01
+    maximum_relative_noise: Literal[0.05] = 0.05  # type: ignore[valid-type]
+    missing_probability: Literal[0.01] = 0.01  # type: ignore[valid-type]
     provenance: Literal["operational_route_sensor"] = "operational_route_sensor"
 
 
 class ReportedRiskConfig(StrictModel):
     """Configure the frozen reported-risk mapping."""
 
-    density_reference_ratio: Literal[1.0] = 1.0
-    minimum: Literal[0.0] = 0.0
-    maximum: Literal[1.0] = 1.0
-    missing_value: Literal[1.0] = 1.0
+    density_reference_ratio: Literal[1.0] = 1.0  # type: ignore[valid-type]
+    minimum: Literal[0.0] = 0.0  # type: ignore[valid-type]
+    maximum: Literal[1.0] = 1.0  # type: ignore[valid-type]
+    missing_value: Literal[1.0] = 1.0  # type: ignore[valid-type]
 
 
 class IntervalsConfig(StrictModel):
