@@ -10,7 +10,12 @@ import pytest
 from avalanche.config.models import PopulationConfig
 from avalanche.control import ActionProposal, freeze_action
 from avalanche.env import neutral_action
-from avalanche.sim import MountainSim, load_topology
+from avalanche.sim import (
+    LocationKind,
+    MountainSim,
+    load_topology,
+    population_from_starts,
+)
 from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
 
 FIXTURES = (
@@ -71,6 +76,18 @@ def check_population_ranges(sim: MountainSim, count: int) -> None:
     assert np.all(pop.required_travel_seconds >= 0.0)
     assert np.all(pop.remaining_travel_seconds >= 0.0)
     assert np.all(pop.remaining_travel_seconds <= pop.required_travel_seconds)
+    assert np.all(np.isfinite(pop.queue_no_route_blocked_seconds))
+    assert np.all(pop.queue_no_route_blocked_seconds >= 0.0)
+    assert np.all(np.isfinite(pop.onboard_blocked_seconds))
+    assert np.all(pop.onboard_blocked_seconds >= 0.0)
+    assert np.all(pop.queue_source_node >= -1)
+    assert np.all(pop.queue_source_node < sim.topology.node_count)
+    queued = pop.location_kind == LocationKind.QUEUE
+    assert np.all(pop.queue_source_node[~queued] == -1)
+    assert np.all(
+        pop.queue_source_node[queued]
+        == sim.topology.edge_source[pop.location_index[queued]]
+    )
     assert np.all((pop.compliance >= 0.0) & (pop.compliance <= 1.0))
     assert np.all((pop.ability >= 0) & (pop.ability < len(ABILITY_NAMES)))
     assert np.all((pop.group >= 0) & (pop.group < len(CUSTOMER_GROUP_NAMES)))
@@ -106,3 +123,47 @@ def test_the_full_population_holds_the_array_invariants(seed: int, path: Path) -
     assert sim.population.arrived == arrived
     assert sim.population.next_ticket == next_ticket
     assert sim.observation() == safe_observation
+
+
+def test_simultaneous_lift_queue_returns_keep_each_skier():
+    """Return one large queue without changing its count or location validity."""
+    count = 256
+    sim = MountainSim(FIXTURES[0])
+    sim.reset(
+        31,
+        {
+            "failures": {
+                "schedule": [
+                    {
+                        "kind": "lift_stoppage",
+                        "target": "lift1_base->lift1_top",
+                        "start_time_seconds": 0.0,
+                        "duration_seconds": 30.0,
+                        "controller_visible": True,
+                    }
+                ]
+            }
+        },
+    )
+    edge = sim.failure_schedule.events[0].target
+    source = int(sim.topology.edge_source[edge])
+    destination = int(sim.topology.edge_destination[edge])
+    pop = population_from_starts([source] * count, destination)
+    pop.location_kind[:] = LocationKind.QUEUE
+    pop.location_index[:] = edge
+    pop.queue_ticket[:] = np.arange(count)
+    pop.queue_source_node[:] = source
+    pop.chosen_edge[:] = edge
+    pop.next_ticket = count
+    sim.population = pop
+
+    sim.tick()
+
+    check_population_ranges(sim, count)
+    assert len(sim.population) == count
+    assert np.all(sim.population.location_kind == LocationKind.NODE)
+    assert np.all(sim.population.location_index == source)
+    assert np.all(sim.population.queue_ticket == -1)
+    assert np.all(sim.population.queue_source_node == -1)
+    assert sim.state.queue_length[edge] == 0
+    assert sim.state.occupancy[edge] == 0

@@ -11,11 +11,14 @@ shows harm in a later control interval.
 
 import hashlib
 import json
+import os
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -30,11 +33,13 @@ from avalanche.config import (
 from avalanche.config.models import ControllerConfig
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
+    EngineeringErrorCode,
     InformationProfile,
     Monitor,
     MonitorDecision,
     MonitorProposal,
     Observation,
+    ProposalEngineeringError,
     TraceWindow,
 )
 from avalanche.controllers.attacks import is_active
@@ -52,6 +57,8 @@ from avalanche.monitors.features import (
 )
 from avalanche.monitors.outcome import AllowMonitor
 from avalanche.monitors.rules import RuleMonitor
+from avalanche.observability import MetricEmitter, MetricEvent
+from avalanche.traces import BufferedParquetWriter, ParquetWriteProgress
 
 ATTACK_LABEL = "attack_active"
 HARM_LABEL = "harm_in_horizon"
@@ -78,6 +85,38 @@ KEY_COLUMNS = (
     "attack_kind",
     "attack_tier",
 )
+WORKER_ROW_UPDATE_INTERVAL = 32
+INVALID_OUTPUT_CODES = frozenset(
+    {
+        EngineeringErrorCode.INVALID_PROPOSAL_TIME,
+        EngineeringErrorCode.INVALID_PROPOSAL,
+        EngineeringErrorCode.INVALID_FINAL_ACTION,
+    }
+)
+
+
+def _emit_metric(
+    emitter: MetricEmitter | None,
+    kind: str,
+    stage_id: str,
+    *,
+    worker_id: str | None = None,
+    **values: Any,
+) -> None:
+    """Emit one optional metric without changing the workload result."""
+    if emitter is None:
+        return
+    try:
+        emitter.emit(
+            MetricEvent.create(
+                kind,
+                stage_id,
+                worker_id=worker_id,
+                **values,
+            )
+        )
+    except Exception:
+        return
 
 
 class RecordingMonitor:
@@ -88,11 +127,22 @@ class RecordingMonitor:
         inner: Monitor,
         extractor: FeatureExtractor,
         rows: list[dict[str, Any]],
+        *,
+        emitter: MetricEmitter | None = None,
+        stage_id: str = "",
+        worker_id: str = "",
+        episode_id: str = "",
     ) -> None:
         self.inner = inner
         self.extractor = extractor
         self.rows = rows
         self.information_profile = extractor.profile.value
+        self.emitter = emitter
+        self.stage_id = stage_id
+        self.worker_id = worker_id
+        self.episode_id = episode_id
+        self._fallback_attempts = 0
+        self._oracle_fallbacks = 0
 
     def reset(self, seed: int) -> None:
         """Reset the inner monitor and the feature extractor."""
@@ -106,12 +156,54 @@ class RecordingMonitor:
         history: TraceWindow,
     ) -> MonitorDecision:
         """Record the features and the labels, then delegate the decision."""
-        values = self.extractor.vector(observation, proposal, history)
+        if self.extractor.profile is InformationProfile.ORACLE_FALLBACK:
+            self._fallback_attempts += 1
+            try:
+                values = self.extractor.vector(observation, proposal, history)
+            except Exception:
+                self.flush_semantic_metrics()
+                raise
+            self._oracle_fallbacks += 1
+        else:
+            values = self.extractor.vector(observation, proposal, history)
         row: dict[str, Any] = dict(
             zip(self.extractor.feature_names, values.tolist(), strict=True)
         )
         self.rows.append(row)
+        if self.emitter is not None and (
+            len(self.rows) % WORKER_ROW_UPDATE_INTERVAL == 0
+        ):
+            self.flush_semantic_metrics()
+            _emit_metric(
+                self.emitter,
+                "worker_progress",
+                self.stage_id,
+                worker_id=self.worker_id,
+                phase="episode",
+                current_rows=len(self.rows),
+                active=True,
+                episode_id=self.episode_id,
+            )
         return self.inner.assess(observation, proposal, history)
+
+    def flush_semantic_metrics(self) -> None:
+        """Emit pending fallback attempts and successful generations."""
+        for name, attribute in (
+            ("fallback_attempts", "_fallback_attempts"),
+            ("oracle_fallbacks", "_oracle_fallbacks"),
+        ):
+            count = int(getattr(self, attribute))
+            if not count:
+                continue
+            _emit_metric(
+                self.emitter,
+                "semantic_count",
+                self.stage_id,
+                worker_id=self.worker_id,
+                name=name,
+                count=count,
+            )
+            setattr(self, attribute, 0)
 
 
 @dataclass(frozen=True)
@@ -224,6 +316,11 @@ def _run_resolved_entry(
     selected: ResolvedDatasetEntry,
     horizon: int,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+    *,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "",
+    worker_id: str = "",
+    episode_id: str = "",
 ) -> pd.DataFrame:
     """Run one previously validated dataset entry."""
     entry = selected.entry
@@ -240,7 +337,15 @@ def _run_resolved_entry(
         ),
         profile=profile,
     )
-    monitor = RecordingMonitor(AllowMonitor(), extractor, rows)
+    monitor = RecordingMonitor(
+        AllowMonitor(),
+        extractor,
+        rows,
+        emitter=emitter,
+        stage_id=stage_id,
+        worker_id=worker_id,
+        episode_id=episode_id,
+    )
     env.configure_adjudicator(
         monitor, build_fallback("honest", resolved.controller, env.topology)
     )
@@ -252,23 +357,24 @@ def _run_resolved_entry(
     attack_active: list[int] = []
     terminated = False
     truncated = False
-    while not (terminated or truncated):
-        proposal = controller.propose(env.controller_observation())
-        evaluator = env.evaluator_observation(proposal)
-        simulation_times.append(float(proposal.simulation_time))
-        evaluator_harm.append(float(evaluator["true_harm_count"]))
-        attack_active.append(
-            int(
-                resolved.controller.attack is not None
-                and proposal.controller_id != "honest"
+    try:
+        while not (terminated or truncated):
+            proposal = controller.propose(env.controller_observation())
+            evaluator = env.evaluator_observation(proposal)
+            simulation_times.append(float(proposal.simulation_time))
+            evaluator_harm.append(float(evaluator["true_harm_count"]))
+            attack_active.append(
+                int(
+                    resolved.controller.attack is not None
+                    and proposal.controller_id != "honest"
+                )
             )
-        )
-        _, _, terminated, truncated, _ = env.step_proposal(proposal)
+            _, _, terminated, truncated, _ = env.step_proposal(proposal)
+    finally:
+        monitor.flush_semantic_metrics()
 
     frame = pd.DataFrame(rows)
-    identity = run_id(resolved)
-    if entry.pair_id:
-        identity = f"{identity}-{entry.pair_id[:8]}-{entry.pair_role}"
+    identity = _entry_identity(selected)
     frame.insert(0, "run_id", identity)
     frame.insert(1, "scenario_family", entry.scenario_family)
     frame.insert(2, "controller_kind", entry.controller_kind)
@@ -302,6 +408,143 @@ def _run_resolved_entry(
     frame["_attack_active"] = attack_active
     frame = label_attack_activity(frame, resolved.controller)
     return label_future_harm(frame, horizon)
+
+
+def _run_resolved_entry_observed(
+    selected: ResolvedDatasetEntry,
+    horizon: int,
+    information_profile: InformationProfile | str,
+    emitter: MetricEmitter,
+    stage_id: str,
+) -> pd.DataFrame:
+    """Run one worker task and emit its structured progress."""
+    profile = InformationProfile(information_profile)
+    worker_id = str(os.getpid())
+    episode_id = _entry_identity(selected)
+    _emit_metric(
+        emitter,
+        "episode_started",
+        stage_id,
+        worker_id=worker_id,
+        phase="episode",
+        episode_id=episode_id,
+        seed=selected.resolved.seed,
+        scenario=selected.entry.scenario_family,
+        profile=profile.value,
+    )
+    _emit_metric(
+        emitter,
+        "worker_progress",
+        stage_id,
+        worker_id=worker_id,
+        phase="episode",
+        current_rows=0,
+        active=True,
+        episode_id=episode_id,
+    )
+    started = perf_counter()
+    try:
+        frame = _run_resolved_entry(
+            selected,
+            horizon,
+            profile,
+            emitter=emitter,
+            stage_id=stage_id,
+            worker_id=worker_id,
+            episode_id=episode_id,
+        )
+    except Exception as error:
+        if isinstance(error, ProposalEngineeringError) and (
+            error.code in INVALID_OUTPUT_CODES
+        ):
+            _emit_metric(
+                emitter,
+                "rejected",
+                stage_id,
+                worker_id=worker_id,
+                count=1,
+                episode_id=episode_id,
+                error_code=error.code.value,
+            )
+        _emit_metric(
+            emitter,
+            "failure",
+            stage_id,
+            worker_id=worker_id,
+            count=1,
+            phase="episode",
+            episode_id=episode_id,
+            error_type=type(error).__name__,
+            message=str(error),
+        )
+        _emit_metric(
+            emitter,
+            "worker_progress",
+            stage_id,
+            worker_id=worker_id,
+            phase="failed",
+            active=False,
+            episode_id=episode_id,
+        )
+        raise
+    latency = perf_counter() - started
+    rows = len(frame)
+    _emit_metric(
+        emitter,
+        "episode_completed",
+        stage_id,
+        worker_id=worker_id,
+        episode_id=episode_id,
+        rows=rows,
+        latency_seconds=latency,
+    )
+    _emit_profile_counts(emitter, stage_id, profile, rows, worker_id)
+    _emit_metric(
+        emitter,
+        "worker_progress",
+        stage_id,
+        worker_id=worker_id,
+        phase="idle",
+        current_rows=0,
+        active=False,
+        episode_id=episode_id,
+    )
+    return frame
+
+
+def _emit_profile_counts(
+    emitter: MetricEmitter,
+    stage_id: str,
+    profile: InformationProfile,
+    rows: int,
+    worker_id: str,
+) -> None:
+    """Emit completed row counts for each non-fallback profile."""
+    names: tuple[str, ...]
+    if profile is InformationProfile.PRINCIPAL:
+        names = ("principal_traces",)
+    elif profile is InformationProfile.ORACLE_TRUE_STATE:
+        names = ("oracle_true_states",)
+    else:
+        names = ()
+    for name in names:
+        _emit_metric(
+            emitter,
+            "semantic_count",
+            stage_id,
+            worker_id=worker_id,
+            name=name,
+            count=rows,
+        )
+
+
+def _entry_identity(selected: ResolvedDatasetEntry) -> str:
+    """Return the stable dataset identity for one resolved entry."""
+    identity = run_id(selected.resolved)
+    entry = selected.entry
+    if entry.pair_id:
+        return f"{identity}-{entry.pair_id[:8]}-{entry.pair_role}"
+    return identity
 
 
 def reference_controller(resolved: ResolvedConfig) -> ControllerConfig:
@@ -652,6 +895,8 @@ def generate_dataset(
     *,
     limit: int | None = None,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+    emitter: MetricEmitter | None = None,
+    stage_id: str | None = None,
 ) -> Path:
     """Run the declared matrix and write one labelled Parquet file."""
     manifest = load_yaml(manifest_path)
@@ -662,6 +907,8 @@ def generate_dataset(
         entries,
         source_manifest=manifest,
         information_profile=information_profile,
+        emitter=emitter,
+        stage_id=stage_id,
     )
 
 
@@ -672,15 +919,41 @@ def generate_dataset_entries(
     *,
     source_manifest: dict[str, Any] | None = None,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+    emitter: MetricEmitter | None = None,
+    stage_id: str | None = None,
 ) -> Path:
     """Run a declared entry subset and write its dataset artifacts."""
-    selected = resolve_dataset_entries(entries)
+    profile = InformationProfile(information_profile)
+    stage = stage_id or _generation_stage_id(profile)
+    _emit_metric(
+        emitter,
+        "stage_started",
+        stage,
+        label=_generation_stage_label(profile),
+        phase="resolving configurations",
+        total_episodes=len(entries),
+        profile=profile.value,
+    )
+    try:
+        selected = resolve_dataset_entries(entries)
+    except Exception as error:
+        _emit_metric(
+            emitter,
+            "stage_failed",
+            stage,
+            phase="resolving configurations",
+            error_type=type(error).__name__,
+            error=str(error),
+        )
+        raise
     return generate_resolved_dataset_entries(
         manifest_path,
         output_path,
         selected,
         source_manifest=source_manifest,
-        information_profile=information_profile,
+        information_profile=profile,
+        emitter=emitter,
+        stage_id=stage,
     )
 
 
@@ -699,6 +972,8 @@ def generate_resolved_dataset_entries(
     *,
     source_manifest: dict[str, Any] | None = None,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+    emitter: MetricEmitter | None = None,
+    stage_id: str | None = None,
 ) -> Path:
     """Write a dataset from one previously resolved entry set."""
     manifest = source_manifest or load_yaml(manifest_path)
@@ -707,22 +982,90 @@ def generate_resolved_dataset_entries(
     if not selected:
         raise ValueError("the dataset entry subset must not be empty")
     profile = InformationProfile(information_profile)
-    frames = _run_entries(selected, horizon, profile)
-    if not frames:
-        raise ValueError("the dataset entry subset must not be empty")
-    frame = pd.concat(frames, ignore_index=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_parquet(output_path, index=False)
-    _write_manifest_summary(
-        frame,
-        selected,
-        output_path,
-        manifest_path,
-        manifest,
-        profile,
+    stage = stage_id or _generation_stage_id(profile)
+    workers = _worker_count(selected)
+    expected_rows = _expected_generation_rows(selected)
+    _emit_metric(
+        emitter,
+        "stage_started",
+        stage,
+        label=_generation_stage_label(profile),
+        phase="generating",
+        total_episodes=len(selected),
+        expected_rows=expected_rows,
+        workers=workers,
+        profile=profile.value,
+        retries=0,
+        rejected=0,
+        failures=0,
     )
-    _write_fixture_metadata(frame, entries, output_path, manifest_path, profile)
-    validate_generated_dataset(output_path, frame, profile)
+    phase = "generating"
+    writer = BufferedParquetWriter(
+        output_path,
+        on_progress=_parquet_progress_callback(emitter, stage),
+    )
+    try:
+        frames = _run_entries(
+            selected,
+            horizon,
+            profile,
+            emitter=emitter,
+            stage_id=stage,
+            on_frame=_parquet_frame_callback(writer, emitter, stage),
+        )
+        if not frames:
+            raise ValueError("the dataset entry subset must not be empty")
+        phase = "finalizing_parquet"
+        _emit_metric(emitter, "stage_phase", stage, phase=phase)
+        writer.close()
+        phase = "summarizing"
+        _emit_metric(emitter, "stage_phase", stage, phase=phase)
+        frame = pd.concat(frames, ignore_index=True)
+        _write_manifest_summary(
+            frame,
+            selected,
+            output_path,
+            manifest_path,
+            manifest,
+            profile,
+        )
+        _write_fixture_metadata(frame, entries, output_path, manifest_path, profile)
+        phase = "validating"
+        _emit_metric(emitter, "stage_phase", stage, phase=phase)
+        validate_generated_dataset(output_path, frame, profile)
+    except Exception as error:
+        writer.abort()
+        if phase != "generating":
+            _emit_metric(
+                emitter,
+                "failure",
+                stage,
+                count=1,
+                phase=phase,
+                error_type=type(error).__name__,
+                message=str(error),
+            )
+        _emit_metric(
+            emitter,
+            "stage_failed",
+            stage,
+            phase=phase,
+            error_type=type(error).__name__,
+            message=str(error),
+        )
+        raise
+    _emit_metric(
+        emitter,
+        "stage_completed",
+        stage,
+        phase="complete",
+        episodes=len(frames),
+        rows=len(frame),
+        expected_rows=expected_rows,
+        output_bytes=output_path.stat().st_size,
+        output_path=str(output_path),
+        **_generation_semantic_summary(profile, len(frame)),
+    )
     return output_path
 
 
@@ -730,27 +1073,175 @@ def _run_entries(
     entries: Sequence[ResolvedDatasetEntry],
     horizon: int,
     information_profile: InformationProfile,
+    *,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "",
+    on_frame: Callable[[pd.DataFrame], None] | None = None,
 ) -> list[pd.DataFrame]:
     """Run each entry, in one process or in a pool."""
-    worker_counts = {entry.resolved.runtime.worker_count for entry in entries}
-    if len(worker_counts) != 1:
-        raise ValueError("the dataset entries have different worker counts")
-    workers = worker_counts.pop()
+    profile = InformationProfile(information_profile)
+    if emitter is not None and not stage_id:
+        stage_id = _generation_stage_id(profile)
+    workers = _worker_count(entries)
+    results: Iterable[pd.DataFrame]
     if workers <= 1:
-        return [
-            _run_resolved_entry(entry, horizon, information_profile)
-            for entry in entries
-        ]
+        if emitter is None:
+            results = (
+                _run_resolved_entry(entry, horizon, profile) for entry in entries
+            )
+        else:
+            results = (
+                _run_resolved_entry_observed(
+                    entry,
+                    horizon,
+                    profile,
+                    emitter,
+                    stage_id,
+                )
+                for entry in entries
+            )
+        return _collect_frames(results, on_frame)
     # ponytail: a plain pool. The sweep executor of the next stage supersedes it.
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        return list(
-            pool.map(
+        if emitter is None:
+            results = pool.map(
                 _run_resolved_entry,
                 entries,
                 [horizon] * len(entries),
-                [information_profile] * len(entries),
+                [profile] * len(entries),
             )
+        else:
+            results = pool.map(
+                _run_resolved_entry_observed,
+                entries,
+                [horizon] * len(entries),
+                [profile] * len(entries),
+                [emitter] * len(entries),
+                [stage_id] * len(entries),
+            )
+        return _collect_frames(results, on_frame)
+
+
+def _collect_frames(
+    results: Iterable[pd.DataFrame],
+    on_frame: Callable[[pd.DataFrame], None] | None,
+) -> list[pd.DataFrame]:
+    """Keep each ordered frame and notify the parent writer."""
+    frames = []
+    for frame in results:
+        if on_frame is not None:
+            on_frame(frame)
+        frames.append(frame)
+    return frames
+
+
+def _worker_count(entries: Sequence[ResolvedDatasetEntry]) -> int:
+    """Return the common configured worker count."""
+    worker_counts = {entry.resolved.runtime.worker_count for entry in entries}
+    if len(worker_counts) != 1:
+        raise ValueError("the dataset entries have different worker counts")
+    return worker_counts.pop()
+
+
+def _expected_generation_rows(entries: Sequence[ResolvedDatasetEntry]) -> int:
+    """Return the configured row ceiling before early termination."""
+    total = 0
+    for entry in entries:
+        resolved = entry.resolved
+        duration = resolved.episode_duration_seconds
+        interval = resolved.intervals.control_interval_seconds
+        epsilon = resolved.numerics.time_epsilon_seconds
+        total += max(1, ceil(max(duration - epsilon, 0.0) / interval))
+    return total
+
+
+def _generation_stage_id(profile: InformationProfile) -> str:
+    """Return the default trace-generation stage identity."""
+    return f"{profile.value.replace('_', '-')}-traces"
+
+
+def _generation_stage_label(profile: InformationProfile) -> str:
+    """Return the readable trace-generation stage label."""
+    return {
+        InformationProfile.PRINCIPAL: "Principal traces",
+        InformationProfile.ORACLE_FALLBACK: "Oracle fallback traces",
+        InformationProfile.ORACLE_TRUE_STATE: "Oracle true-state traces",
+    }[profile]
+
+
+def _generation_semantic_summary(
+    profile: InformationProfile,
+    rows: int,
+) -> dict[str, int | float]:
+    """Return final semantic counts for the persistent stage log."""
+    if profile is InformationProfile.PRINCIPAL:
+        return {"principal_traces": rows}
+    if profile is InformationProfile.ORACLE_TRUE_STATE:
+        return {"oracle_true_states": rows}
+    return {
+        "fallback_attempts": rows,
+        "oracle_fallbacks": rows,
+        "fallback_rate": 1.0,
+    }
+
+
+def _parquet_progress_callback(
+    emitter: MetricEmitter | None,
+    stage_id: str,
+) -> Callable[[ParquetWriteProgress], None] | None:
+    """Build the parent callback for encoded Parquet progress."""
+    if emitter is None:
+        return None
+
+    def report(progress: ParquetWriteProgress) -> None:
+        _emit_metric(
+            emitter,
+            "parquet_progress",
+            stage_id,
+            written_rows=progress.written_rows,
+            written_bytes=progress.encoded_bytes,
+            buffered_rows=progress.buffered_rows,
+            row_groups=progress.row_groups,
+            final=progress.final,
         )
+
+    return report
+
+
+def _parquet_frame_callback(
+    writer: BufferedParquetWriter,
+    emitter: MetricEmitter | None,
+    stage_id: str,
+) -> Callable[[pd.DataFrame], None]:
+    """Write each completed frame and report a parent-side failure."""
+    writing_started = False
+
+    def write(frame: pd.DataFrame) -> None:
+        nonlocal writing_started
+        if not writing_started:
+            _emit_metric(
+                emitter,
+                "stage_phase",
+                stage_id,
+                phase="generating and writing",
+                detail="ordered row groups",
+            )
+            writing_started = True
+        try:
+            writer.write(frame)
+        except Exception as error:
+            _emit_metric(
+                emitter,
+                "failure",
+                stage_id,
+                count=1,
+                phase="writing",
+                error_type=type(error).__name__,
+                message=str(error),
+            )
+            raise
+
+    return write
 
 
 def _validate_pairs(entries: Sequence[DatasetEntry]) -> None:

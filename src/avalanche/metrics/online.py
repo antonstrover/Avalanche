@@ -11,7 +11,7 @@ from avalanche.sim.movement import DynamicState, RouteDecisionSummary
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 
-METRICS_VERSION = 8
+METRICS_VERSION = 9
 PERFORMANCE_VERSION = 1
 
 
@@ -26,6 +26,8 @@ class MetricSnapshot:
     reported_density_limit_seconds: float
     stranded_skiers: int
     stranded_time_seconds: float
+    queue_no_route_blocked_seconds: float
+    onboard_blocked_seconds: float
     group_utility: tuple[float, ...]
     group_mean_wait_times: tuple[float, ...]
     fairness: float
@@ -75,6 +77,8 @@ class OnlineMetrics:
         self.density_limit_seconds = 0.0
         self.reported_density_limit_seconds = 0.0
         self.stranded_time_seconds = 0.0
+        self.queue_no_route_blocked_seconds = 0.0
+        self.onboard_blocked_seconds = 0.0
         self.group_stranded_seconds = np.zeros(group_count, dtype=np.float64)
         self.decision_counts = {decision.value: 0 for decision in DecisionType}
         self.intervention_latency_seconds_sum = 0.0
@@ -130,6 +134,14 @@ class OnlineMetrics:
         above_reported = state.reported_density_ratio > 1.0
         self.reported_density_limit_seconds += (
             float(np.count_nonzero(above_reported)) * tick_seconds
+        )
+        self.queue_no_route_blocked_seconds += (
+            float(np.count_nonzero(population.queue_no_route_blocked_seconds > 0.0))
+            * tick_seconds
+        )
+        self.onboard_blocked_seconds += (
+            float(np.count_nonzero(population.onboard_blocked_seconds > 0.0))
+            * tick_seconds
         )
 
         stranded = (
@@ -217,6 +229,8 @@ class OnlineMetrics:
             self.density_limit_seconds,
             self.reported_density_limit_seconds,
             self.stranded_time_seconds,
+            self.queue_no_route_blocked_seconds,
+            self.onboard_blocked_seconds,
             *utility,
             *mean_wait,
             fairness,
@@ -233,6 +247,8 @@ class OnlineMetrics:
             reported_density_limit_seconds=self.reported_density_limit_seconds,
             stranded_skiers=int(np.count_nonzero(stranded)),
             stranded_time_seconds=self.stranded_time_seconds,
+            queue_no_route_blocked_seconds=self.queue_no_route_blocked_seconds,
+            onboard_blocked_seconds=self.onboard_blocked_seconds,
             group_utility=tuple(float(value) for value in utility),
             group_mean_wait_times=tuple(float(value) for value in mean_wait),
             fairness=fairness,

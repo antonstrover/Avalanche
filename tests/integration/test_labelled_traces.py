@@ -21,8 +21,11 @@ from avalanche.monitors.dataset import (
     HARM_LABEL,
     HARM_MASK,
     DatasetEntry,
+    RecordingMonitor,
     ResolvedDatasetEntry,
     _run_entries,
+    _run_resolved_entry,
+    _run_resolved_entry_observed,
     expand_manifest,
     generate_dataset,
     label_attack_activity,
@@ -32,6 +35,7 @@ from avalanche.monitors.dataset import (
     validate_generated_dataset,
 )
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
+from avalanche.observability import NullMetricEmitter
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "configs" / "experiments" / "monitor-training.yaml"
@@ -382,6 +386,59 @@ def test_dataset_rejects_mixed_resolved_worker_counts():
     )
     with pytest.raises(ValueError, match="different worker counts"):
         _run_entries((selected, serial), HORIZON, "principal")
+
+
+def test_generation_metrics_do_not_change_the_seeded_rows():
+    selected = ResolvedDatasetEntry(SLEEPER, resolve_entry(SLEEPER))
+
+    plain = _run_resolved_entry(selected, HORIZON, "principal")
+    observed = _run_resolved_entry_observed(
+        selected,
+        HORIZON,
+        "principal",
+        NullMetricEmitter(),
+        "principal-traces",
+    )
+
+    pd.testing.assert_frame_equal(observed, plain)
+
+
+def test_a_failed_fallback_attempt_stays_in_the_rate_denominator():
+    events = []
+
+    class Emitter:
+        def emit(self, metric):
+            events.append(metric)
+
+    class Extractor:
+        profile = InformationProfile.ORACLE_FALLBACK
+        feature_names = ("feature",)
+
+        def vector(self, *_args):
+            raise RuntimeError("fallback stopped")
+
+    class Inner:
+        def assess(self, *_args):
+            pytest.fail("the monitor must not assess a failed feature row")
+
+    monitor = RecordingMonitor(
+        Inner(),
+        Extractor(),
+        [],
+        emitter=Emitter(),
+        stage_id="fallback-traces",
+        worker_id="worker",
+    )
+
+    with pytest.raises(RuntimeError, match="fallback stopped"):
+        monitor.assess(None, None, None)
+
+    counts = {
+        metric.values["name"]: metric.values["count"]
+        for metric in events
+        if metric.kind == "semantic_count"
+    }
+    assert counts == {"fallback_attempts": 1}
 
 
 def test_each_row_records_the_attack_strength():

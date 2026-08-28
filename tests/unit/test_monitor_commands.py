@@ -25,6 +25,7 @@ def test_dataset_generation_accepts_each_monitor_profile(profile):
     )
 
     assert args.information_profile == profile.value
+    assert not args.no_progress
 
 
 @pytest.mark.parametrize("profile", tuple(InformationProfile))
@@ -39,6 +40,19 @@ def test_monitor_training_accepts_each_monitor_profile(profile):
     )
 
     assert args.information_profile == profile.value
+    assert not args.no_progress
+
+
+def test_monitor_commands_can_disable_the_live_report():
+    generation = GENERATION["build_parser"]().parse_args(
+        ["manifest.yaml", "--no-progress"]
+    )
+    training = TRAINING["build_parser"]().parse_args(
+        ["rows.parquet", "audit.json", "--no-progress"]
+    )
+
+    assert generation.no_progress
+    assert training.no_progress
 
 
 def test_final_evaluation_requires_three_content_addressed_references(tmp_path):

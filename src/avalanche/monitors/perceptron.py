@@ -15,6 +15,7 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -25,6 +26,7 @@ from torch import nn
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.observability import MetricEmitter, MetricEvent
 
 MODEL_VERSION = 2
 ATTACK_LABEL = "attack_active"
@@ -96,6 +98,9 @@ def train_perceptron(
     train: pd.DataFrame,
     validation: pd.DataFrame,
     config: TrainingConfig | None = None,
+    *,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "perceptron-training",
 ) -> TrainedModel:
     """Train the perceptron on the training split only."""
     config = config or TrainingConfig()
@@ -116,16 +121,85 @@ def train_perceptron(
     inputs = torch.from_numpy(standard)
     targets = torch.from_numpy(labels).reshape(-1, 1)
     generator = torch.Generator().manual_seed(config.seed)
+    rows_per_epoch = int(inputs.shape[0])
+    batches_per_epoch = (
+        (rows_per_epoch + config.batch_size - 1) // config.batch_size
+        if config.batch_size > 0
+        else 0
+    )
+    total_samples = rows_per_epoch * max(config.epochs, 0)
+    _emit_metric(
+        emitter,
+        "stage_started",
+        stage_id,
+        label="Perceptron training",
+        phase="training",
+        model_name="perceptron",
+        information_profile=profile.value,
+        seed=config.seed,
+        total_epochs=config.epochs,
+        total_samples=total_samples,
+        training_rows=rows_per_epoch,
+        batches_per_epoch=batches_per_epoch,
+    )
 
     network.train()
-    for _ in range(config.epochs):
+    samples_completed = 0
+    last_epoch_loss: float | None = None
+    for epoch_index in range(config.epochs):
+        epoch_started = perf_counter()
+        epoch_loss_total = 0.0
+        epoch_samples = 0
         order = torch.randperm(inputs.shape[0], generator=generator)
-        for start in range(0, inputs.shape[0], config.batch_size):
+        for batch_index, start in enumerate(
+            range(0, inputs.shape[0], config.batch_size)
+        ):
             batch = order[start : start + config.batch_size]
             optimiser.zero_grad()
             loss = loss_function(network(inputs[batch]), targets[batch])
             loss.backward()
             optimiser.step()
+            batch_samples = int(batch.numel())
+            batch_loss = float(loss.detach().item())
+            epoch_loss_total += batch_loss * batch_samples
+            epoch_samples += batch_samples
+            samples_completed += batch_samples
+            _emit_metric(
+                emitter,
+                "epoch_progress",
+                stage_id,
+                phase="batch",
+                model_name="perceptron",
+                epoch=epoch_index + 1,
+                total_epochs=config.epochs,
+                batch=batch_index + 1,
+                total_batches=batches_per_epoch,
+                batch_samples=batch_samples,
+                epoch_samples=epoch_samples,
+                total_epoch_samples=rows_per_epoch,
+                samples=samples_completed,
+                total_samples=total_samples,
+                training_loss=batch_loss,
+                epoch_seconds=perf_counter() - epoch_started,
+            )
+        last_epoch_loss = epoch_loss_total / epoch_samples if epoch_samples > 0 else 0.0
+        _emit_metric(
+            emitter,
+            "epoch_progress",
+            stage_id,
+            phase="epoch",
+            model_name="perceptron",
+            epoch=epoch_index + 1,
+            total_epochs=config.epochs,
+            batch=batches_per_epoch,
+            total_batches=batches_per_epoch,
+            epoch_samples=epoch_samples,
+            total_epoch_samples=rows_per_epoch,
+            samples=samples_completed,
+            total_samples=total_samples,
+            training_loss=last_epoch_loss,
+            epoch_seconds=perf_counter() - epoch_started,
+        )
 
     model = TrainedModel(
         network=network,
@@ -154,7 +228,48 @@ def train_perceptron(
         "validation_scores": evaluate(model, validation, config.label),
         "constant_baseline": constant_baseline(train, validation, config.label),
     }
+    validation_scores = model.metadata["validation_scores"]
+    baseline_scores = model.metadata["constant_baseline"]
+    completed_values: dict[str, object] = {
+        "label": "Perceptron training",
+        "phase": "validation",
+        "model_name": "perceptron",
+        "information_profile": profile.value,
+        "total_epochs": config.epochs,
+        "samples": samples_completed,
+        "total_samples": total_samples,
+        "validation_rows": int(len(validation)),
+        "validation_brier_score": validation_scores["brier_score"],
+        "validation_average_precision": validation_scores["average_precision"],
+        "validation_accuracy": validation_scores["accuracy"],
+        "baseline_brier_score": baseline_scores["brier_score"],
+        "baseline_average_precision": baseline_scores["average_precision"],
+        "baseline_constant_score": baseline_scores["constant_score"],
+    }
+    if last_epoch_loss is not None:
+        completed_values["training_loss"] = last_epoch_loss
+    _emit_metric(
+        emitter,
+        "stage_completed",
+        stage_id,
+        **completed_values,
+    )
     return model
+
+
+def _emit_metric(
+    emitter: MetricEmitter | None,
+    kind: str,
+    stage_id: str,
+    **values: object,
+) -> None:
+    """Emit one structured training metric when reporting is active."""
+    if emitter is None:
+        return
+    try:
+        emitter.emit(MetricEvent.create(kind, stage_id, worker_id=None, **values))
+    except Exception:
+        return
 
 
 def constant_baseline(

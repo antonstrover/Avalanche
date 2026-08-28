@@ -63,6 +63,15 @@ class FailureSchedule:
         return tuple(event for event in self.events if event.active_at(simulation_time))
 
 
+@dataclass(frozen=True)
+class FailureTransitions:
+    """Hold the active, started, and ended failures at one boundary."""
+
+    active: tuple[FailureEvent, ...]
+    started: tuple[FailureEvent, ...]
+    ended: tuple[FailureEvent, ...]
+
+
 def _target_index(target: str | int, topology: Topology) -> int:
     """Resolve one edge target from an index or an edge identity."""
     if isinstance(target, int):
@@ -158,8 +167,9 @@ def apply_failures(
     schedule: FailureSchedule,
     simulation_time: float,
     state: DynamicState,
-) -> tuple[FailureEvent, ...]:
-    """Apply all active failures and return them."""
+    previous_active: tuple[FailureEvent, ...] = (),
+) -> FailureTransitions:
+    """Apply active failures and return the exact boundary transitions."""
     state.failure_closed.fill(False)
     state.lift_stopped.fill(False)
     state.telemetry_late.fill(False)
@@ -178,7 +188,11 @@ def apply_failures(
         1.0,
     )
     state.speed_factor[state.lift_stopped] = 0.0
-    return active
+    previous = set(previous_active)
+    current = set(active)
+    started = tuple(event for event in active if event not in previous)
+    ended = tuple(event for event in previous_active if event not in current)
+    return FailureTransitions(active=active, started=started, ended=ended)
 
 
 def refresh_reported_telemetry(state: DynamicState, topology: Topology) -> None:

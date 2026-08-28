@@ -57,6 +57,8 @@ _METRIC_KEYS = {
     "density_limit_seconds",
     "reported_density_limit_seconds",
     "stranded_time_seconds",
+    "queue_no_route_blocked_seconds",
+    "onboard_blocked_seconds",
     "group_stranded_seconds",
     "decision_counts",
     "intervention_latency_seconds_sum",
@@ -293,6 +295,9 @@ def _snapshot_v2_population_arrays(
             arrays.append(("progress", display_progress(population)))
         elif name not in {
             "remaining_travel_seconds",
+            "queue_no_route_blocked_seconds",
+            "onboard_blocked_seconds",
+            "queue_source_node",
             "chosen_edge",
             "locally_rejected_edge",
         }:
@@ -422,6 +427,8 @@ def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
         "density_limit_seconds": metrics.density_limit_seconds,
         "reported_density_limit_seconds": metrics.reported_density_limit_seconds,
         "stranded_time_seconds": metrics.stranded_time_seconds,
+        "queue_no_route_blocked_seconds": metrics.queue_no_route_blocked_seconds,
+        "onboard_blocked_seconds": metrics.onboard_blocked_seconds,
         "group_stranded_seconds": metrics.group_stranded_seconds.tolist(),
         "decision_counts": dict(metrics.decision_counts),
         "intervention_latency_seconds_sum": (metrics.intervention_latency_seconds_sum),
@@ -465,6 +472,12 @@ def _metrics(value: Any) -> OnlineMetrics:
     )
     metrics.stranded_time_seconds = _nonnegative_float(
         state["stranded_time_seconds"], "stranded time metric"
+    )
+    metrics.queue_no_route_blocked_seconds = _nonnegative_float(
+        state["queue_no_route_blocked_seconds"], "queue blocked metric"
+    )
+    metrics.onboard_blocked_seconds = _nonnegative_float(
+        state["onboard_blocked_seconds"], "onboard blocked metric"
     )
     stranded = state["group_stranded_seconds"]
     if not isinstance(stranded, list) or len(stranded) != group_count:

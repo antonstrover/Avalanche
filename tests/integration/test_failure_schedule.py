@@ -3,15 +3,19 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from avalanche.config import FailuresConfig, load_yaml
 from avalanche.config.models import ScenarioConfig
 from avalanche.scenarios.failures import apply_failures, refresh_reported_telemetry
-from avalanche.sim import LocationKind, MountainSim, population_from_starts
+from avalanche.sim import LocationKind, MountainSim, Status, population_from_starts
 from avalanche.sim.population import ABILITY_NAMES
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
+)
+MEDIUM_FIXTURE = (
+    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "medium-resort.yaml"
 )
 EXAMPLES = (
     Path(__file__).resolve().parents[2]
@@ -40,6 +44,16 @@ def paired_run(seed: int) -> MountainSim:
     sim = MountainSim(FIXTURE)
     sim.reset(seed, {"failures": sampled_failures()})
     return sim
+
+
+def edge_index(sim: MountainSim, source: str, destination: str) -> int:
+    """Return one edge index from its stable endpoint names."""
+    matches = np.flatnonzero(
+        (sim.topology.edge_source == sim.topology.node_index[source])
+        & (sim.topology.edge_destination == sim.topology.node_index[destination])
+    )
+    assert matches.size == 1
+    return int(matches[0])
 
 
 def test_two_paired_runs_get_one_failure_schedule():
@@ -137,11 +151,24 @@ def test_failures_apply_and_expire_at_movement_step_two():
     assert sim.state.speed_factor[lift] == 0.0
     assert sim.state.failure_closed[closure]
     assert set(events) == {"lift_stoppage", "sudden_closure"}
+    assert {event.kind for event in sim.failure_transitions.started} == {
+        "lift_stoppage",
+        "late_telemetry",
+        "sudden_closure",
+    }
 
     sim.tick()
+    assert sim.failure_transitions.started == ()
+    assert sim.failure_transitions.ended == ()
     sim.tick()
     assert not np.any(sim.state.failure_closed)
     assert not np.any(sim.state.lift_stopped)
+    assert {event.kind for event in sim.failure_transitions.ended} == {
+        "lift_stoppage",
+        "late_telemetry",
+        "sudden_closure",
+    }
+    assert all(event.end_time_seconds == 5.0 for event in sim.failure_transitions.ended)
 
 
 def test_late_telemetry_freezes_only_the_reported_value():
@@ -214,3 +241,235 @@ def test_hidden_failed_lift_is_reported_open_but_rejected_locally():
     assert sim.population.location_kind[0] == LocationKind.NODE
     assert sim.population.location_index[0] == source
     assert sim.population.locally_rejected_edge[0] == lift
+
+
+def test_failed_lift_returns_queue_to_source():
+    """Cancel the complete queue at the exact failure boundary."""
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "lift1_base->lift1_top",
+                "start_time_seconds": 5.0,
+                "duration_seconds": 30.0,
+                "controller_visible": True,
+            }
+        ]
+    }
+    sim = MountainSim(FIXTURE)
+    sim.reset(18, {"failures": failures})
+    sim.tick()
+    lift = edge_index(sim, "lift1_base", "lift1_top")
+    source = sim.topology.node_index["lift1_base"]
+    destination = sim.topology.node_index["lift1_top"]
+    pop = population_from_starts([source], destination)
+    pop.location_kind[0] = LocationKind.QUEUE
+    pop.location_index[0] = lift
+    pop.queue_ticket[0] = 7
+    pop.queue_source_node[0] = source
+    pop.chosen_edge[0] = lift
+    pop.wait_time[0] = 37.0
+    sim.population = pop
+    sim.state.lift_service_residual[lift] = 0.75
+
+    sim.tick()
+
+    assert sim.simulation_time == 10.0
+    assert [event.start_time_seconds for event in sim.failure_transitions.started] == [
+        5.0
+    ]
+    assert pop.location_kind[0] == LocationKind.NODE
+    assert pop.location_index[0] == source
+    assert pop.queue_ticket[0] == -1
+    assert pop.queue_source_node[0] == -1
+    assert pop.wait_time[0] == 37.0
+    assert pop.queue_no_route_blocked_seconds[0] == 5.0
+    assert pop.onboard_blocked_seconds[0] == 0.0
+    assert pop.chosen_edge[0] == -1
+    assert sim.state.lift_service_residual[lift] == 0.0
+
+
+def test_failed_lift_queue_reroutes_when_a_finite_route_exists():
+    """Enter a finite alternative after the failed lift returns its queue."""
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "col_bonneval->crete_east",
+                "start_time_seconds": 5.0,
+                "duration_seconds": 30.0,
+                "controller_visible": True,
+            }
+        ]
+    }
+    sim = MountainSim(MEDIUM_FIXTURE)
+    sim.reset(22, {"failures": failures})
+    sim.tick()
+    lift = edge_index(sim, "col_bonneval", "crete_east")
+    alternative = edge_index(sim, "col_bonneval", "col_traverse")
+    source = sim.topology.node_index["col_bonneval"]
+    destination = sim.topology.node_index["bonneval_exit"]
+    pop = population_from_starts([source], destination)
+    pop.ability[0] = ABILITY_NAMES.index("beginner")
+    pop.location_kind[0] = LocationKind.QUEUE
+    pop.location_index[0] = lift
+    pop.queue_ticket[0] = 3
+    pop.queue_source_node[0] = source
+    pop.chosen_edge[0] = lift
+    pop.wait_time[0] = 19.0
+    sim.population = pop
+
+    sim.tick()
+
+    assert pop.location_kind[0] == LocationKind.PISTE
+    assert pop.location_index[0] == alternative
+    assert pop.queue_ticket[0] == -1
+    assert pop.queue_source_node[0] == -1
+    assert pop.wait_time[0] == 19.0
+    assert pop.queue_no_route_blocked_seconds[0] == 0.0
+    assert pop.onboard_blocked_seconds[0] == 0.0
+
+
+def test_returned_queue_rejects_a_stale_dead_end():
+    """Keep a returned skier at the source without a physical onward route."""
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "col_bonneval->crete_east",
+                "start_time_seconds": 0.0,
+                "duration_seconds": 30.0,
+                "controller_visible": True,
+            }
+        ]
+    }
+    sim = MountainSim(MEDIUM_FIXTURE)
+    sim.reset(23, {"failures": failures})
+    lift = edge_index(sim, "col_bonneval", "crete_east")
+    stale_edge = edge_index(sim, "col_bonneval", "col_traverse")
+    downstream = edge_index(sim, "col_traverse", "bonneval_mid_split")
+    source = sim.topology.node_index["col_bonneval"]
+    destination = sim.topology.node_index["bonneval_exit"]
+    pop = population_from_starts([source], destination)
+    pop.ability[0] = ABILITY_NAMES.index("beginner")
+    pop.location_kind[0] = LocationKind.QUEUE
+    pop.location_index[0] = lift
+    pop.queue_ticket[0] = 5
+    pop.queue_source_node[0] = source
+    pop.chosen_edge[0] = lift
+    sim.population = pop
+    sim.state.closed[downstream] = True
+
+    sim.tick()
+
+    assert pop.location_kind[0] == LocationKind.NODE
+    assert pop.location_index[0] == source
+    assert pop.chosen_edge[0] == -1
+    assert pop.locally_rejected_edge[0] == stale_edge
+    assert pop.queue_no_route_blocked_seconds[0] == 5.0
+    assert pop.onboard_blocked_seconds[0] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("duration_seconds", "stranded_at_timeout"),
+    ((5.0, False), (10.0, True), (15.0, True)),
+    ids=("below", "equal", "above"),
+)
+def test_onboard_skier_strands_at_timeout(
+    duration_seconds: float, stranded_at_timeout: bool
+):
+    """Apply the timeout boundary to one stopped onboard skier."""
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "lift1_base->lift1_top",
+                "start_time_seconds": 0.0,
+                "duration_seconds": duration_seconds,
+                "controller_visible": True,
+            }
+        ]
+    }
+    sim = MountainSim(FIXTURE)
+    sim.reset(
+        24,
+        {
+            "failures": failures,
+            "hazards": {"stranded_after_seconds": 10.0},
+        },
+    )
+    lift = edge_index(sim, "lift1_base", "lift1_top")
+    source = sim.topology.node_index["lift1_base"]
+    destination = sim.topology.node_index["base_exit"]
+    pop = population_from_starts([source], destination)
+    pop.location_kind[0] = LocationKind.LIFT
+    pop.location_index[0] = lift
+    pop.required_travel_seconds[0] = 30.0
+    pop.remaining_travel_seconds[0] = 30.0
+    sim.population = pop
+
+    sim.tick()
+
+    assert sim.simulation_time == 5.0
+    assert pop.status[0] == Status.ACTIVE
+    assert pop.remaining_travel_seconds[0] == 30.0
+    assert pop.queue_no_route_blocked_seconds[0] == 0.0
+    assert pop.onboard_blocked_seconds[0] == 5.0
+
+    sim.tick()
+
+    assert sim.simulation_time == 10.0
+    if stranded_at_timeout:
+        assert pop.status[0] == Status.STRANDED
+        assert pop.remaining_travel_seconds[0] == 30.0
+        assert pop.onboard_blocked_seconds[0] == 10.0
+    else:
+        assert pop.status[0] == Status.ACTIVE
+        assert pop.remaining_travel_seconds[0] < 30.0
+        assert pop.onboard_blocked_seconds[0] == 0.0
+
+
+def test_recovery_does_not_revive_a_stranded_onboard_skier():
+    """Keep a stranded onboard skier fixed after service recovery."""
+    failures = {
+        "schedule": [
+            {
+                "kind": "lift_stoppage",
+                "target": "lift1_base->lift1_top",
+                "start_time_seconds": 0.0,
+                "duration_seconds": 10.0,
+                "controller_visible": True,
+            }
+        ]
+    }
+    sim = MountainSim(FIXTURE)
+    sim.reset(
+        26,
+        {
+            "failures": failures,
+            "hazards": {"stranded_after_seconds": 10.0},
+        },
+    )
+    lift = edge_index(sim, "lift1_base", "lift1_top")
+    source = sim.topology.node_index["lift1_base"]
+    destination = sim.topology.node_index["base_exit"]
+    pop = population_from_starts([source], destination)
+    pop.location_kind[0] = LocationKind.LIFT
+    pop.location_index[0] = lift
+    pop.required_travel_seconds[0] = 30.0
+    pop.remaining_travel_seconds[0] = 30.0
+    sim.population = pop
+
+    sim.tick()
+    sim.tick()
+    assert pop.status[0] == Status.STRANDED
+    remaining = float(pop.remaining_travel_seconds[0])
+
+    sim.tick()
+
+    assert [event.end_time_seconds for event in sim.failure_transitions.ended] == [10.0]
+    assert pop.status[0] == Status.STRANDED
+    assert pop.location_kind[0] == LocationKind.LIFT
+    assert pop.remaining_travel_seconds[0] == remaining
+    assert pop.onboard_blocked_seconds[0] == 0.0
+    assert sim.state.occupancy[lift] == 1

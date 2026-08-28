@@ -225,12 +225,20 @@ def build_observation_space(
             "reported_edge_boarding_throughput": spaces.Box(
                 low=0.0, high=FLOAT_MAX, shape=(edge_count,), dtype=np.float32
             ),
+            "reported_node_queued_no_route_count": spaces.Box(
+                low=0.0, high=FLOAT_MAX, shape=(node_count,), dtype=np.float32
+            ),
+            "reported_edge_onboard_blocked_count": spaces.Box(
+                low=0.0, high=FLOAT_MAX, shape=(edge_count,), dtype=np.float32
+            ),
             "route_availability_missing": spaces.MultiBinary(edge_count),
             "route_speed_factor_missing": spaces.MultiBinary(edge_count),
             "route_density_ratio_missing": spaces.MultiBinary(edge_count),
             "route_weather_risk_missing": spaces.MultiBinary(edge_count),
             "route_queue_length_missing": spaces.MultiBinary(edge_count),
             "route_boarding_throughput_missing": spaces.MultiBinary(edge_count),
+            "queued_no_route_count_missing": spaces.MultiBinary(node_count),
+            "onboard_blocked_count_missing": spaces.MultiBinary(edge_count),
             "route_sensor_sample_time": spaces.Box(
                 low=-FLOAT_MAX, high=FLOAT_MAX, shape=(1,), dtype=np.float32
             ),
@@ -301,6 +309,14 @@ def build_observation(
     reported_available = (
         packet.reported_availability & ~packet.availability_missing
     ).astype(np.int8)
+    reported_queued_no_route = packet.reported_queued_no_route_count.astype(
+        np.float32, copy=True
+    )
+    reported_queued_no_route[packet.queued_no_route_count_missing] = 0.0
+    reported_onboard_blocked = packet.reported_onboard_blocked_count.astype(
+        np.float32, copy=True
+    )
+    reported_onboard_blocked[packet.onboard_blocked_count_missing] = 0.0
     forecast, forecast_time, forecast_mask = _weather_forecast(sim, config)
     contract = build_action_contract(
         topology,
@@ -338,6 +354,8 @@ def build_observation(
             "reported_edge_available": reported_available,
             "reported_edge_weather_risk": reported_weather_risk,
             "reported_edge_boarding_throughput": reported_throughput,
+            "reported_node_queued_no_route_count": reported_queued_no_route,
+            "reported_edge_onboard_blocked_count": reported_onboard_blocked,
             "route_availability_missing": packet.availability_missing.astype(
                 np.int8, copy=True
             ),
@@ -355,6 +373,12 @@ def build_observation(
             ),
             "route_boarding_throughput_missing": (
                 packet.boarding_throughput_missing.astype(np.int8, copy=True)
+            ),
+            "queued_no_route_count_missing": (
+                packet.queued_no_route_count_missing.astype(np.int8, copy=True)
+            ),
+            "onboard_blocked_count_missing": (
+                packet.onboard_blocked_count_missing.astype(np.int8, copy=True)
             ),
             "route_sensor_sample_time": np.array(
                 [packet.sample_time], dtype=np.float32

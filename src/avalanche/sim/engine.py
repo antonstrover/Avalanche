@@ -32,6 +32,7 @@ from avalanche.scenarios.failures import (
     FailureEvent,
     FailureKind,
     FailureSchedule,
+    FailureTransitions,
     apply_failures,
     refresh_reported_telemetry,
     resolve_failure_schedule,
@@ -57,11 +58,14 @@ from avalanche.sim.movement import (
     advance_on_edges,
     arrive_at_nodes,
     effective_closed,
+    lift_unavailable_mask,
     new_dynamic_state,
+    return_unavailable_lift_queues,
     select_next_edges,
     serve_lift_queues,
     start_arrivals,
     update_congestion,
+    update_lift_blocked_times,
     update_stranded,
 )
 from avalanche.sim.population import (
@@ -136,6 +140,7 @@ class MountainSim:
         self.failures_config = FailuresConfig()
         self.failure_schedule: FailureSchedule | None = None
         self.active_failures: tuple[FailureEvent, ...] = ()
+        self.failure_transitions = FailureTransitions((), (), ())
         self.audit_config = AuditConfig()
         self.audit_channel: AuditChannel | None = None
         self.delivered_audits: tuple[AuditMeasurement, ...] = ()
@@ -240,6 +245,8 @@ class MountainSim:
         self.simulation_time = 0.0
         self.step = 0
         self.hazard_events = []
+        self.active_failures = ()
+        self.failure_transitions = FailureTransitions((), (), ())
         episode_seconds = float(
             options.get("episode_duration_seconds", DEFAULT_EPISODE_SECONDS)
         )
@@ -284,8 +291,30 @@ class MountainSim:
         # 2. Update the weather and the scheduled failures.
         self._update_weather()
         self._update_failures()
+        unavailable_lifts = lift_unavailable_mask(self.topology, self.state)
+        returned_queue_skiers = return_unavailable_lift_queues(
+            pop,
+            self.topology,
+            self.state,
+            unavailable_lifts,
+        )
         # 3. Give lift service to the skiers in a queue.
-        serve_lift_queues(pop, self.topology, self.state, self.tick_seconds)
+        onward_rejected_skiers = serve_lift_queues(
+            pop, self.topology, self.state, self.tick_seconds
+        )
+        returned_queue_skiers = np.union1d(
+            returned_queue_skiers,
+            onward_rejected_skiers,
+        ).astype(np.int64, copy=False)
+        update_lift_blocked_times(
+            pop,
+            self.topology,
+            self.state,
+            returned_queue_skiers,
+            self.tick_seconds,
+            self.hazard_config.stranded_after_seconds,
+            self.time_epsilon_seconds,
+        )
         queued_at_tick_start = active_at_tick_start & (
             pop.location_kind == LocationKind.QUEUE
         )
@@ -384,6 +413,20 @@ class MountainSim:
         throughput = (
             self.topology.edge_lift_throughput.astype(np.float64) / 3600.0
         ) * self.state.lift_capacity_factor
+        queued = (self.population.queue_no_route_blocked_seconds > 0.0) & (
+            self.population.location_kind == LocationKind.NODE
+        )
+        queued_no_route_count = np.bincount(
+            self.population.location_index[queued],
+            minlength=self.topology.node_count,
+        ).astype(np.float64)
+        onboard = (self.population.onboard_blocked_seconds > 0.0) & (
+            self.population.location_kind == LocationKind.LIFT
+        )
+        onboard_blocked_count = np.bincount(
+            self.population.location_index[onboard],
+            minlength=self.topology.edge_count,
+        ).astype(np.float64)
         return {
             "availability": ~closed,
             "speed_factor": self.state.reported_speed_factor,
@@ -391,6 +434,8 @@ class MountainSim:
             "weather_risk": self.state.weather_risk,
             "queue_length": self.state.reported_queue_length,
             "boarding_throughput": throughput,
+            "queued_no_route_count": queued_no_route_count,
+            "onboard_blocked_count": onboard_blocked_count,
         }
 
     def _update_weather(self) -> None:
@@ -403,9 +448,13 @@ class MountainSim:
     def _update_failures(self) -> None:
         """Apply the active scheduled failures to the simulator state."""
         assert self.failure_schedule is not None
-        self.active_failures = apply_failures(
-            self.failure_schedule, self.simulation_time, self.state
+        self.failure_transitions = apply_failures(
+            self.failure_schedule,
+            self.simulation_time,
+            self.state,
+            self.active_failures,
         )
+        self.active_failures = self.failure_transitions.active
 
     def _update_operational_events(self) -> None:
         """Expose each active honest operating event."""
@@ -499,6 +548,12 @@ class MountainSim:
                     "reported_boarding_throughput": (
                         packet.reported_boarding_throughput.tolist()
                     ),
+                    "reported_queued_no_route_count": (
+                        packet.reported_queued_no_route_count.tolist()
+                    ),
+                    "reported_onboard_blocked_count": (
+                        packet.reported_onboard_blocked_count.tolist()
+                    ),
                     "availability_missing": packet.availability_missing.tolist(),
                     "speed_factor_missing": packet.speed_factor_missing.tolist(),
                     "density_ratio_missing": packet.density_ratio_missing.tolist(),
@@ -506,6 +561,12 @@ class MountainSim:
                     "queue_length_missing": packet.queue_length_missing.tolist(),
                     "boarding_throughput_missing": (
                         packet.boarding_throughput_missing.tolist()
+                    ),
+                    "queued_no_route_count_missing": (
+                        packet.queued_no_route_count_missing.tolist()
+                    ),
+                    "onboard_blocked_count_missing": (
+                        packet.onboard_blocked_count_missing.tolist()
                     ),
                 }
             ),
@@ -616,12 +677,16 @@ def _digest_route_packet(digest: Any, prefix: str, packet: RouteSensorPacket) ->
         "reported_weather_risk",
         "reported_queue_length",
         "reported_boarding_throughput",
+        "reported_queued_no_route_count",
+        "reported_onboard_blocked_count",
         "availability_missing",
         "speed_factor_missing",
         "density_ratio_missing",
         "weather_risk_missing",
         "queue_length_missing",
         "boarding_throughput_missing",
+        "queued_no_route_count_missing",
+        "onboard_blocked_count_missing",
     ):
         _digest_array(digest, f"{prefix}.{name}", getattr(packet, name))
 

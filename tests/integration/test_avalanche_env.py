@@ -164,6 +164,8 @@ def test_an_executed_action_changes_each_supported_control():
         "reported_density_limit_seconds",
         "stranded_skiers",
         "stranded_time_seconds",
+        "queue_no_route_blocked_seconds",
+        "onboard_blocked_seconds",
         "group_utility",
         "group_mean_wait_times",
         "fairness",

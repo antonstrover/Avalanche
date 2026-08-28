@@ -265,7 +265,14 @@ def open_mask(edges: np.ndarray, state: DynamicState) -> np.ndarray:
 
 def effective_closed(state: DynamicState) -> np.ndarray:
     """Return every closure reason as one effective edge mask."""
-    return state.closed | state.weather_closed | state.failure_closed
+    return (
+        state.closed | state.weather_closed | state.failure_closed | state.lift_stopped
+    )
+
+
+def lift_unavailable_mask(topology: Topology, state: DynamicState) -> np.ndarray:
+    """Return each lift that cannot board or move skiers."""
+    return (topology.edge_type == LIFT_EDGE) & effective_closed(state)
 
 
 def update_congestion(
@@ -307,12 +314,51 @@ def start_arrivals(pop: SkierArrays, boundary_time: float) -> None:
     pop.arrived = end
 
 
+def return_unavailable_lift_queues(
+    pop: SkierArrays,
+    topology: Topology,
+    state: DynamicState,
+    unavailable: np.ndarray | None = None,
+) -> np.ndarray:
+    """Return queued skiers from unavailable lifts to their source nodes."""
+    if unavailable is None:
+        unavailable = lift_unavailable_mask(topology, state)
+    else:
+        unavailable = np.asarray(unavailable, dtype=np.bool_)
+        if unavailable.shape != (topology.edge_count,):
+            raise ValueError("the unavailable lift mask must match the topology")
+    state.lift_service_residual[unavailable] = 0.0
+
+    queued = np.flatnonzero(pop.location_kind == LocationKind.QUEUE)
+    members = queued[unavailable[pop.location_index[queued]]]
+    if members.size == 0:
+        return members
+
+    edges = pop.location_index[members].copy()
+    recorded_sources = pop.queue_source_node[members]
+    sources = np.where(
+        recorded_sources >= 0,
+        recorded_sources,
+        topology.edge_source[edges],
+    )
+    pop.location_kind[members] = LocationKind.NODE
+    pop.location_index[members] = sources
+    pop.required_travel_seconds[members] = 0.0
+    pop.remaining_travel_seconds[members] = 0.0
+    pop.blocked_time[members] = 0.0
+    pop.queue_ticket[members] = -1
+    pop.queue_source_node[members] = -1
+    pop.chosen_edge[members] = NO_EDGE
+    pop.locally_rejected_edge[members] = edges
+    return members
+
+
 def serve_lift_queues(
     pop: SkierArrays,
     topology: Topology,
     state: DynamicState,
     tick_seconds: float,
-) -> None:
+) -> np.ndarray:
     """Move the served skiers from a lift queue onto the lift.
 
     The lift throughput is a count of skiers in each hour.
@@ -321,9 +367,12 @@ def serve_lift_queues(
     Each tick discards unused whole service credit.
     The safe capacity limits the onboard skier count.
     The queue ticket gives the order of the service, which is first in and first out.
+    The result identifies each skier returned by the onward safety check.
     """
     lift = topology.edge_type == LIFT_EDGE
-    operational = lift & ~effective_closed(state) & ~state.lift_stopped
+    unavailable = lift_unavailable_mask(topology, state)
+    state.lift_service_residual[unavailable] = 0.0
+    operational = lift & ~unavailable
     state.lift_service_residual[operational] += (
         (
             topology.edge_lift_throughput[operational].astype(np.float64)
@@ -333,6 +382,7 @@ def serve_lift_queues(
         * state.lift_capacity_factor[operational]
     )
 
+    rejected = np.empty(0, dtype=np.int64)
     queued = np.flatnonzero(
         (pop.location_kind == LocationKind.QUEUE) & (pop.status == Status.ACTIVE)
     )
@@ -371,9 +421,18 @@ def serve_lift_queues(
 
         rejected = candidates[~onward]
         rejected_edges = pop.location_index[rejected].copy()
+        rejected_sources = np.where(
+            pop.queue_source_node[rejected] >= 0,
+            pop.queue_source_node[rejected],
+            topology.edge_source[rejected_edges],
+        )
         pop.location_kind[rejected] = LocationKind.NODE
-        pop.location_index[rejected] = topology.edge_source[rejected_edges]
+        pop.location_index[rejected] = rejected_sources
+        pop.required_travel_seconds[rejected] = 0.0
+        pop.remaining_travel_seconds[rejected] = 0.0
+        pop.blocked_time[rejected] = 0.0
         pop.queue_ticket[rejected] = -1
+        pop.queue_source_node[rejected] = -1
         pop.chosen_edge[rejected] = NO_EDGE
         pop.locally_rejected_edge[rejected] = rejected_edges
         served = candidates[onward]
@@ -391,8 +450,11 @@ def serve_lift_queues(
         pop.required_travel_seconds[served] = travel_seconds
         pop.remaining_travel_seconds[served] = travel_seconds
         pop.queue_ticket[served] = -1
+        pop.queue_source_node[served] = -1
 
     state.lift_service_residual -= np.floor(state.lift_service_residual)
+    state.lift_service_residual[unavailable] = 0.0
+    return rejected
 
 
 def advance_on_edges(
@@ -406,8 +468,14 @@ def advance_on_edges(
     The speed factor scales the effective movement seconds for this tick.
     The remaining travel seconds stop at zero.
     """
-    moving = np.flatnonzero(np.isin(pop.location_kind, ON_EDGE))
+    moving = np.flatnonzero(
+        (pop.status == Status.ACTIVE) & np.isin(pop.location_kind, ON_EDGE)
+    )
     edges = pop.location_index[moving]
+    unavailable = lift_unavailable_mask(topology, state)
+    can_move = ~unavailable[edges]
+    moving = moving[can_move]
+    edges = edges[can_move]
     movement_seconds = tick_seconds * state.speed_factor[edges]
     pop.remaining_travel_seconds[moving] = np.maximum(
         pop.remaining_travel_seconds[moving] - movement_seconds,
@@ -423,8 +491,10 @@ def arrive_at_nodes(
     epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
 ) -> MovementTransitions:
     """Commit each edge completion and return its boundary timestamp."""
-    finished = np.isin(pop.location_kind, ON_EDGE) & (
-        pop.remaining_travel_seconds <= epsilon_seconds
+    finished = (
+        (pop.status == Status.ACTIVE)
+        & np.isin(pop.location_kind, ON_EDGE)
+        & (pop.remaining_travel_seconds <= epsilon_seconds)
     )
     completed_skiers = np.flatnonzero(finished)
     destination = topology.edge_destination[pop.location_index[completed_skiers]]
@@ -478,6 +548,8 @@ def select_next_edges(
     complete = at_node[arrived]
     pop.location_kind[complete] = LocationKind.FINISHED
     pop.status[complete] = Status.COMPLETE
+    pop.queue_no_route_blocked_seconds[complete] = 0.0
+    pop.queue_source_node[complete] = -1
     pop.chosen_edge[complete] = NO_EDGE
     pop.locally_rejected_edge[complete] = NO_EDGE
 
@@ -487,6 +559,7 @@ def select_next_edges(
     nodes = pop.location_index[travelling]
     dests = pop.destination[travelling]
     abilities = pop.ability[travelling]
+    locally_rejected = pop.locally_rejected_edge[travelling] != NO_EDGE
 
     chosen = pop.chosen_edge[travelling]
     has_choice = chosen != NO_EDGE
@@ -595,20 +668,25 @@ def select_next_edges(
         physical[selected] = ~effective_closed(state)[
             selected_edges
         ] & ability_allows_edges(topology, abilities[selected], selected_edges)
-        lift_selected = selected[topology.edge_type[selected_edges] == LIFT_EDGE]
-        if lift_selected.size:
-            lift_keys = np.column_stack(
+        requires_onward = (
+            (topology.edge_type[selected_edges] == LIFT_EDGE)
+            | locally_rejected[selected]
+            | (pop.queue_no_route_blocked_seconds[travelling[selected]] > 0.0)
+        )
+        onward_selected = selected[requires_onward]
+        if onward_selected.size:
+            onward_keys = np.column_stack(
                 (
-                    next_edge[lift_selected],
-                    abilities[lift_selected],
-                    dests[lift_selected],
+                    next_edge[onward_selected],
+                    abilities[onward_selected],
+                    dests[onward_selected],
                 )
             )
-            lift_groups, lift_inverse = np.unique(
-                lift_keys, axis=0, return_inverse=True
+            onward_groups, onward_inverse = np.unique(
+                onward_keys, axis=0, return_inverse=True
             )
             closed = effective_closed(state)
-            for group_index, (edge, ability, destination) in enumerate(lift_groups):
+            for group_index, (edge, ability, destination) in enumerate(onward_groups):
                 destination_node = int(topology.edge_destination[int(edge)])
                 reachable = physical_onward_route_exists(
                     topology,
@@ -616,7 +694,7 @@ def select_next_edges(
                     ability=int(ability),
                     destination=int(destination),
                 )
-                members = lift_selected[lift_inverse == group_index]
+                members = onward_selected[onward_inverse == group_index]
                 physical[members] &= reachable[destination_node]
 
     rejected = travelling[(next_edge != NO_EDGE) & ~physical]
@@ -641,6 +719,9 @@ def select_next_edges(
     lift = lift[enters]
 
     pop.location_index[starters] = taken
+    pop.blocked_time[starters] = 0.0
+    pop.queue_no_route_blocked_seconds[starters] = 0.0
+    pop.queue_source_node[starters] = -1
     travel_seconds = topology.edge_nominal_travel_time[taken].astype(np.float64)
     pop.required_travel_seconds[starters] = np.where(lift, 0.0, travel_seconds)
     pop.remaining_travel_seconds[starters] = np.where(lift, 0.0, travel_seconds)
@@ -650,6 +731,7 @@ def select_next_edges(
     # deterministic.
     joiners = starters[lift]
     pop.queue_ticket[joiners] = pop.next_ticket + np.arange(joiners.size)
+    pop.queue_source_node[joiners] = topology.edge_source[taken[lift]]
     pop.next_ticket += int(joiners.size)
     return route_decisions
 
@@ -709,6 +791,91 @@ def accumulate_times(
     pop.wait_time[queued] += tick_seconds
 
 
+def update_lift_blocked_times(
+    pop: SkierArrays,
+    topology: Topology,
+    state: DynamicState,
+    returned_queue_skiers: np.ndarray,
+    tick_seconds: float,
+    stranded_after_seconds: float,
+    epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
+) -> np.ndarray:
+    """Update both lift blocked counters and commit stranding together."""
+    returned = np.asarray(returned_queue_skiers, dtype=np.int64).reshape(-1)
+    if np.any((returned < 0) | (returned >= len(pop))):
+        raise ValueError("a returned queue skier index is outside the population")
+    returned_mask = np.zeros(len(pop), dtype=np.bool_)
+    returned_mask[returned] = True
+
+    queue_positive = pop.queue_no_route_blocked_seconds > 0.0
+    not_at_node = pop.location_kind != LocationKind.NODE
+    pop.queue_no_route_blocked_seconds[queue_positive & not_at_node] = 0.0
+    queue_members = np.flatnonzero(
+        (pop.location_kind == LocationKind.NODE) & (returned_mask | queue_positive)
+    )
+    queue_blocked = np.zeros(queue_members.size, dtype=np.bool_)
+    if queue_members.size:
+        nodes = pop.location_index[queue_members]
+        keys = np.column_stack(
+            (pop.ability[queue_members], pop.destination[queue_members])
+        )
+        groups, inverse = np.unique(keys, axis=0, return_inverse=True)
+        closed = effective_closed(state)
+        for group_index, (ability, destination) in enumerate(groups):
+            reachable = physical_onward_route_exists(
+                topology,
+                closed,
+                ability=int(ability),
+                destination=int(destination),
+            )
+            selected = inverse == group_index
+            queue_blocked[selected] = ~reachable[nodes[selected]]
+        pop.blocked_time[queue_members] = 0.0
+        pop.queue_no_route_blocked_seconds[queue_members[~queue_blocked]] = 0.0
+
+    queue_blocked_members = queue_members[queue_blocked]
+    pop.queue_no_route_blocked_seconds[queue_blocked_members] += tick_seconds
+    active_queue_blocked = queue_blocked_members[
+        pop.status[queue_blocked_members] == Status.ACTIVE
+    ]
+
+    onboard = pop.location_kind == LocationKind.LIFT
+    pop.onboard_blocked_seconds[~onboard] = 0.0
+    onboard_members = np.flatnonzero(onboard)
+    onboard_unavailable = np.zeros(onboard_members.size, dtype=np.bool_)
+    if onboard_members.size:
+        unavailable = lift_unavailable_mask(topology, state)
+        onboard_unavailable = unavailable[pop.location_index[onboard_members]]
+        pop.onboard_blocked_seconds[onboard_members[~onboard_unavailable]] = 0.0
+
+    onboard_blocked_members = onboard_members[onboard_unavailable]
+    pop.onboard_blocked_seconds[onboard_blocked_members] += tick_seconds
+    active_onboard_blocked = onboard_blocked_members[
+        pop.status[onboard_blocked_members] == Status.ACTIVE
+    ]
+
+    newly_queue_stranded = active_queue_blocked[
+        time_boundary_reached(
+            pop.queue_no_route_blocked_seconds[active_queue_blocked],
+            stranded_after_seconds,
+            epsilon_seconds,
+        )
+    ]
+    newly_onboard_stranded = active_onboard_blocked[
+        time_boundary_reached(
+            pop.onboard_blocked_seconds[active_onboard_blocked],
+            stranded_after_seconds,
+            epsilon_seconds,
+        )
+    ]
+    newly_stranded = np.union1d(
+        newly_queue_stranded,
+        newly_onboard_stranded,
+    ).astype(np.int64, copy=False)
+    pop.status[newly_stranded] = Status.STRANDED
+    return newly_stranded
+
+
 def update_stranded(
     pop: SkierArrays,
     routes: RouteTable,
@@ -720,8 +887,10 @@ def update_stranded(
     topology: Topology | None = None,
 ) -> np.ndarray:
     """Mark skiers after a route closure blocks them for too long."""
-    active_nodes = (pop.status == Status.ACTIVE) & (
-        pop.location_kind == LocationKind.NODE
+    active_nodes = (
+        (pop.status == Status.ACTIVE)
+        & (pop.location_kind == LocationKind.NODE)
+        & (pop.queue_no_route_blocked_seconds <= 0.0)
     )
     members = np.flatnonzero(active_nodes)
     if members.size == 0:

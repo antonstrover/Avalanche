@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from avalanche.sim import LocationKind, MountainSim, load_topology
+from avalanche.sim import LocationKind, MountainSim, Status, load_topology
 from avalanche.sim.movement import (
     LIFT_EDGE,
     new_dynamic_state,
@@ -30,6 +30,7 @@ def queued_population(topology, edges: np.ndarray):
     pop.location_index[:] = edges
     pop.destination[:] = topology.edge_destination[edges]
     pop.queue_ticket[:] = np.arange(edges.size)
+    pop.queue_source_node[:] = topology.edge_source[edges]
     pop.next_ticket = len(pop)
     return pop
 
@@ -97,6 +98,7 @@ def test_a_disabled_lift_does_not_serve_or_accumulate(disabled_field):
     edge = int(np.flatnonzero(topology.edge_type == LIFT_EDGE)[0])
     pop = queued_population(topology, np.full(4, edge, dtype=np.int32))
     state = new_dynamic_state(topology)
+    state.lift_service_residual[edge] = 0.75
     getattr(state, disabled_field)[edge] = True
 
     for _ in range(10):
@@ -104,6 +106,23 @@ def test_a_disabled_lift_does_not_serve_or_accumulate(disabled_field):
 
     assert np.all(pop.location_kind == LocationKind.QUEUE)
     assert state.lift_service_residual[edge] == 0.0
+
+
+def test_a_stranded_skier_never_boards():
+    """Keep a stranded skier outside an available lift."""
+    topology = load_topology(MOUNTAINS[0])
+    edge = int(np.flatnonzero(topology.edge_type == LIFT_EDGE)[0])
+    pop = queued_population(topology, np.array([edge], dtype=np.int32))
+    pop.status[0] = Status.STRANDED
+    state = new_dynamic_state(topology)
+    state.lift_service_residual[edge] = 1.0
+
+    rejected = serve_lift_queues(pop, topology, state, TICK_SECONDS)
+
+    assert rejected.size == 0
+    assert pop.location_kind[0] == LocationKind.QUEUE
+    assert pop.queue_ticket[0] == 0
+    assert pop.queue_source_node[0] == topology.edge_source[edge]
 
 
 def test_an_idle_lift_does_not_store_a_service_burst():

@@ -92,6 +92,18 @@ def test_the_observation_has_fixed_shapes_and_dtypes():
     assert observation["node_demand"].shape == (sim.topology.node_count,)
     assert observation["reported_edge_occupancy"].shape == (sim.topology.edge_count,)
     assert observation["reported_edge_hazard"].shape == (sim.topology.edge_count,)
+    assert observation["reported_node_queued_no_route_count"].shape == (
+        sim.topology.node_count,
+    )
+    assert observation["reported_edge_onboard_blocked_count"].shape == (
+        sim.topology.edge_count,
+    )
+    assert observation["queued_no_route_count_missing"].shape == (
+        sim.topology.node_count,
+    )
+    assert observation["onboard_blocked_count_missing"].shape == (
+        sim.topology.edge_count,
+    )
     assert observation["weather_forecast"].shape == (2, 4)
     assert observation["recent_incidents"]["kind"].shape == (3,)
     assert observation["recent_interventions"]["decision"].shape == (2,)
@@ -103,6 +115,10 @@ def test_the_observation_has_fixed_shapes_and_dtypes():
     assert observation["weather"].dtype == np.float32
     assert observation["control_permissions"]["pistes"].dtype == np.int8
     assert observation["reported_edge_available"].dtype == np.int8
+    assert observation["reported_node_queued_no_route_count"].dtype == np.float32
+    assert observation["reported_edge_onboard_blocked_count"].dtype == np.float32
+    assert observation["queued_no_route_count_missing"].dtype == np.int8
+    assert observation["onboard_blocked_count_missing"].dtype == np.int8
 
 
 def test_the_builder_uses_reports_and_hides_an_invisible_failure():
@@ -143,6 +159,48 @@ def test_the_reported_hazard_uses_only_visible_inputs():
 
     assert observation["reported_edge_hazard"][edge] == pytest.approx(expected)
     assert observation["reported_edge_hazard"][edge] != sim.state.hazard_score[edge]
+
+
+def test_the_builder_uses_only_reported_blocked_counts():
+    sim = configured_sim()
+    config = ObservationConfig(300.0)
+    packet = sim.route_sensor_packet
+    assert packet is not None
+    queued = np.arange(sim.topology.node_count, dtype=np.float64) + 10.0
+    onboard = np.arange(sim.topology.edge_count, dtype=np.float64) + 20.0
+    queued_missing = np.zeros(sim.topology.node_count, dtype=np.bool_)
+    onboard_missing = np.zeros(sim.topology.edge_count, dtype=np.bool_)
+    queued_missing[0] = True
+    onboard_missing[1] = True
+    sim.route_sensor_packet = replace(
+        packet,
+        reported_queued_no_route_count=queued,
+        reported_onboard_blocked_count=onboard,
+        queued_no_route_count_missing=queued_missing,
+        onboard_blocked_count_missing=onboard_missing,
+    )
+    sim.population.queue_no_route_blocked_seconds.fill(1_000.0)
+    sim.population.onboard_blocked_seconds.fill(2_000.0)
+
+    observation = build_observation(sim, config)
+
+    assert observation["reported_node_queued_no_route_count"].tolist() == [
+        0.0,
+        *queued[1:].tolist(),
+    ]
+    assert observation["reported_edge_onboard_blocked_count"].tolist() == [
+        onboard[0],
+        0.0,
+        *onboard[2:].tolist(),
+    ]
+    assert observation["queued_no_route_count_missing"].tolist() == (
+        queued_missing.astype(np.int8).tolist()
+    )
+    assert observation["onboard_blocked_count_missing"].tolist() == (
+        onboard_missing.astype(np.int8).tolist()
+    )
+    assert "queue_no_route_blocked_seconds" not in observation
+    assert "onboard_blocked_seconds" not in observation
 
 
 def test_the_intervention_history_has_explicit_targets_and_padding():

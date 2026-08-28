@@ -8,8 +8,30 @@ Keep every existing model lock and reconstruction unchanged.
 
 Use dataset version 4.
 Use feature version 2.
-Use metrics version 8 for each new run.
+Use metrics version 9 for each new run.
 The routing metrics do not change the learned feature columns.
+
+## Run reporting
+
+The generation and training commands show one live terminal report.
+The parent process owns the report during parallel generation.
+The report closes automatically when the command finishes.
+
+Add `--no-progress` to disable only the live report.
+Metric collection and persistent logging remain active.
+Redirected commands also disable the live report automatically.
+
+Each dataset log uses the dataset name with an `.observability.jsonl` suffix.
+Each training log sits beside its model directory.
+The log uses the model directory name with an `.observability.jsonl` suffix.
+
+The Parquet estimate starts as provisional.
+It becomes stable after two encoded row groups.
+The completed report shows the exact final file size.
+
+The training report shows the perceptron gate evidence.
+It marks the GRU fallback as not required after a passing gate.
+It shows the extra training stages only after a failed gate.
 
 ## Split boundaries
 
@@ -168,4 +190,4 @@ uv run python scripts/run_final_evaluation.py
 The command rejects a seed used in the development matrix.
 It verifies each content-addressed reference before the run.
 It verifies each reference again after the run.
-It writes only metrics version 8 results.
+It writes only metrics version 9 results.

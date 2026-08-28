@@ -1,5 +1,10 @@
 """Write versioned run traces and replay snapshots."""
 
+from avalanche.traces.parquet import (
+    DEFAULT_ROW_GROUP_ROWS,
+    BufferedParquetWriter,
+    ParquetWriteProgress,
+)
 from avalanche.traces.snapshots import (
     SNAPSHOT_SCHEMA_VERSION,
     SnapshotSchemaError,
@@ -14,10 +19,13 @@ from avalanche.traces.writer import (
 )
 
 __all__ = [
+    "DEFAULT_ROW_GROUP_ROWS",
+    "BufferedParquetWriter",
     "EVENT_SCHEMA_VERSION",
     "SNAPSHOT_SCHEMA_VERSION",
     "EventRecord",
     "EventState",
+    "ParquetWriteProgress",
     "SnapshotSchemaError",
     "TraceWriter",
     "encode_snapshot",
