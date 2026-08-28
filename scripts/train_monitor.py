@@ -149,7 +149,7 @@ def _fail_running_stages(
     base_stage: str,
     error: Exception,
 ) -> None:
-    """Mark each active stage as failed."""
+    """Mark the run and each active stage as failed."""
     snapshot = session.aggregator.snapshot()
     base = snapshot.stage(base_stage)
     active_children = [

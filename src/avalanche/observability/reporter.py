@@ -83,6 +83,9 @@ class RichReporter:
         current = _current_stage(state)
         if current is not None:
             sections.extend(_stage_sections(current))
+        calibration_stage = _latest_calibration_stage(state)
+        if calibration_stage is not None and calibration_stage is not current:
+            sections.append(_calibration_panel(calibration_stage))
         validation_stage = _latest_validation_stage(state)
         if validation_stage is not None:
             sections.append(_validation_panel(validation_stage))
@@ -402,6 +405,14 @@ def _latest_validation_stage(state: PipelineSnapshot) -> StageSnapshot | None:
     """Return the latest stage with completed validation metrics."""
     for stage in reversed(state.stages):
         if "validation_brier_score" in stage.metrics:
+            return stage
+    return None
+
+
+def _latest_calibration_stage(state: PipelineSnapshot) -> StageSnapshot | None:
+    """Return the latest active or completed calibration stage."""
+    for stage in reversed(state.stages):
+        if stage.calibration.status != StageStatus.PENDING:
             return stage
     return None
 

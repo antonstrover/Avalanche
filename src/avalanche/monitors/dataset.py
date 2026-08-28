@@ -1172,7 +1172,7 @@ def _generation_stage_label(profile: InformationProfile) -> str:
 def _generation_semantic_summary(
     profile: InformationProfile,
     rows: int,
-) -> dict[str, int | float]:
+) -> dict[str, Any]:
     """Return final semantic counts for the persistent stage log."""
     if profile is InformationProfile.PRINCIPAL:
         return {"principal_traces": rows}

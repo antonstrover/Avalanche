@@ -38,19 +38,6 @@ def event(
     return MetricEvent(kind, stage_id, worker_id, dict(values), timestamp)
 
 
-def emit_metrics_from_child(emitter) -> None:
-    """Emit one completed episode from a spawned process."""
-    emitter.emit(MetricEvent.create("episode_started", "child-traces", "child"))
-    emitter.emit(
-        MetricEvent.create(
-            "episode_completed",
-            "child-traces",
-            "child",
-            rows=12,
-        )
-    )
-
-
 def test_metric_events_are_picklable_and_direct_emitters_follow_the_protocol():
     received = []
     emitter = DirectMetricEmitter(received.append)
@@ -607,9 +594,20 @@ def test_a_spawned_process_can_emit_metrics_through_the_session_queue():
         )
     except EOFError, OSError:
         pytest.skip("the test sandbox blocks Manager sockets")
+    session.emitter.emit(
+        MetricEvent.create("stage_started", "child-traces", total_episodes=1)
+    )
+    emitter = session.process_emitter
     process = mp.get_context("spawn").Process(
-        target=emit_metrics_from_child,
-        args=(session.process_emitter,),
+        target=emitter.emit,
+        args=(
+            MetricEvent.create(
+                "episode_completed",
+                "child-traces",
+                "child",
+                rows=12,
+            ),
+        ),
     )
     process.start()
     process.join(timeout=15.0)
