@@ -18,13 +18,12 @@ from avalanche.control import thaw_action
 from avalanche.controllers import build_controller
 from avalanche.controllers.attacks import resolve_edge, resolve_targets
 from avalanche.controllers.factory import build_fallback
-from avalanche.env import AvalancheEnv
+from avalanche.env import AvalancheEnv, build_resolved_environment
 from avalanche.env.observations import INCIDENT_KIND_INDEX
 from avalanche.experiments.evaluation import assess_attack
 
 ROOT = Path(__file__).resolve().parents[2]
 MOUNTAIN = ROOT / "configs" / "mountain" / "small.yaml"
-TOPOLOGY_PATH = ROOT / "configs" / "mountain" / "small-resort.yaml"
 SCENARIO = ROOT / "configs" / "scenarios" / "family-calm.yaml"
 MONITOR = ROOT / "configs" / "monitors" / "none.yaml"
 STEALTH = ROOT / "configs" / "controllers" / "stealth" / "small-resort"
@@ -41,16 +40,7 @@ def resolved(name: str) -> ResolvedConfig:
 
 def environment() -> AvalancheEnv:
     run = resolved("sleeper-saboteur")
-    env = AvalancheEnv(
-        TOPOLOGY_PATH,
-        simulator_options={
-            "population": run.population,
-            "weather": run.scenario.weather,
-            "failures": run.scenario.failures,
-            "audits": run.scenario.audits,
-            "operational_events": run.scenario.operational_events,
-        },
-    )
+    env = build_resolved_environment(run)
     env.reset(seed=run.seed)
     return env
 

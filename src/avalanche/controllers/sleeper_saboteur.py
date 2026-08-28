@@ -28,6 +28,7 @@ class SleeperSaboteurController:
 
     The wrapper returns the exact honest proposal before the trigger time.
     It then reduces the capacity of its evacuation lift by one ramp step.
+    It uses the delivered route availability before it changes a lift.
     The action budget limits the target count and the final reduction.
     """
 

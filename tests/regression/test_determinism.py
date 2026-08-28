@@ -19,7 +19,7 @@ from avalanche.config import (
     load_yaml,
 )
 from avalanche.config.models import PopulationConfig
-from avalanche.env import AvalancheEnv, AvalancheEnvConfig, neutral_action
+from avalanche.env import build_resolved_environment, neutral_action
 from avalanche.experiments import run_episode as write_episode
 from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.perceptron import (
@@ -30,6 +30,7 @@ from avalanche.monitors.perceptron import (
 )
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import MountainSim, population_from_starts
+from avalanche.sim.engine import STREAM_NAMES
 from tests.configuration import resolve_test_configuration
 
 FIXTURE = (
@@ -60,6 +61,9 @@ METRIC_NAMES = {
     "monitor_decision_count",
     "first_intervention_interval",
     "harm_before_first_intervention",
+    "route_decision_count",
+    "missing_sensor_route_decision_count",
+    "missing_sensor_route_decision_counts",
     "intervention_cost",
 }
 DETERMINISTIC_SUMMARY_FIELDS = (
@@ -131,6 +135,52 @@ def test_two_resets_share_one_static_route_identity():
     assert first.topology.mountain_sha256 == second.topology.mountain_sha256
     assert first.routes.cache_identity == second.routes.cache_identity
     assert first.routes is second.routes
+
+
+def test_appended_route_streams_preserve_each_existing_stream_state():
+    existing_names = STREAM_NAMES[:-2]
+    original = np.random.default_rng(SEED).spawn(len(existing_names))
+    extended = np.random.default_rng(SEED).spawn(len(STREAM_NAMES))
+
+    for name, before, after in zip(
+        existing_names, original, extended[: len(existing_names)], strict=True
+    ):
+        assert before.bit_generator.state == after.bit_generator.state, name
+
+
+def test_route_tie_draws_do_not_change_external_schedules_or_sensor_packets():
+    failures = {
+        "sampling": {
+            "event_count": 3,
+            "earliest_start_seconds": 60.0,
+            "latest_start_seconds": 300.0,
+            "minimum_duration_seconds": 30.0,
+            "maximum_duration_seconds": 90.0,
+            "controller_visibility_probability": 0.5,
+        }
+    }
+    plain = MountainSim(FIXTURE)
+    plain.reset(SEED, {"failures": failures})
+    disturbed = MountainSim(FIXTURE)
+    disturbed.reset(SEED, {"failures": failures})
+    disturbed.streams["route_tie"].random(100)
+
+    assert (
+        plain.metadata(SEED)["weather_schedule"]
+        == disturbed.metadata(SEED)["weather_schedule"]
+    )
+    assert (
+        plain.metadata(SEED)["failure_schedule"]
+        == disturbed.metadata(SEED)["failure_schedule"]
+    )
+    assert (
+        plain.route_sensor_packet.policy_identity
+        == disturbed.route_sensor_packet.policy_identity
+    )
+    np.testing.assert_array_equal(
+        plain.route_sensor_packet.reported_speed_factor,
+        disturbed.route_sensor_packet.reported_speed_factor,
+    )
 
 
 def test_the_state_moves_during_the_run():
@@ -259,23 +309,7 @@ def run_episode(
     resolved: ResolvedConfig, *, controller_draws: bool = False
 ) -> EpisodeResult:
     """Run one complete environment episode from a resolved configuration."""
-    config = AvalancheEnvConfig(
-        movement_tick_seconds=resolved.intervals.movement_tick_seconds,
-        control_interval_seconds=resolved.intervals.control_interval_seconds,
-        episode_duration_seconds=EPISODE_DURATION_SECONDS,
-        forecast_steps=2,
-        incident_capacity=8,
-    )
-    env = AvalancheEnv(
-        FIXTURE,
-        config,
-        simulator_options={
-            "population": resolved.population,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-        },
-    )
+    env = build_resolved_environment(resolved)
     _, reset_info = env.reset(seed=resolved.seed)
     assert reset_info["seed"] == resolved.seed
     schedules = deepcopy(reset_info["resolved_schedules"])
@@ -407,19 +441,9 @@ def _read_events(output_dir: Path) -> list[dict[str, Any]]:
 
 def _reset_simulator(resolved: ResolvedConfig) -> MountainSim:
     """Reset one simulator with the exact fixture options."""
-    sim = MountainSim(REPO / resolved.mountain.path)
-    sim.reset(
-        resolved.seed,
-        {
-            "population": resolved.population,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-            "tick_seconds": resolved.intervals.movement_tick_seconds,
-            "episode_duration_seconds": resolved.episode_duration_seconds,
-        },
-    )
-    return sim
+    env = build_resolved_environment(resolved)
+    env.reset(seed=resolved.seed)
+    return env.sim
 
 
 def _population_bytes(resolved: ResolvedConfig) -> tuple[tuple[str, bytes], ...]:

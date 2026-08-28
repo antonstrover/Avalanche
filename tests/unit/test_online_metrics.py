@@ -5,7 +5,8 @@ import pytest
 
 from avalanche.control import DecisionType, MonitorDecision
 from avalanche.metrics import METRICS_VERSION, PERFORMANCE_VERSION, OnlineMetrics
-from avalanche.sim.movement import DynamicState
+from avalanche.scenarios.sensors import ROUTE_SENSOR_CHANNELS
+from avalanche.sim.movement import DynamicState, RouteDecisionSummary
 from avalanche.sim.population import empty_population
 from avalanche.sim.skier import Status
 
@@ -49,6 +50,11 @@ def test_each_metric_formula_uses_the_fixed_episode():
         "ESCALATE": 0,
     }
     assert snapshot.intervention_latency_count == 0
+    assert snapshot.route_decision_count == 0
+    assert snapshot.missing_sensor_route_decision_count == 0
+    assert snapshot.missing_sensor_route_decision_counts == {
+        name: 0 for name in ROUTE_SENSOR_CHANNELS
+    }
 
 
 def test_updates_accumulate_density_and_stranded_time():
@@ -100,7 +106,7 @@ def test_a_reported_override_separates_the_two_density_metrics():
 def test_the_snapshot_serialises_each_versioned_field():
     metrics, population = fixed_episode()
     values = metrics.snapshot(population).as_dict()
-    assert values["metrics_version"] == METRICS_VERSION == 7
+    assert values["metrics_version"] == METRICS_VERSION == 8
     assert values["reported_density_limit_seconds"] == 5.0
     assert set(values) == {
         "metrics_version",
@@ -120,6 +126,9 @@ def test_the_snapshot_serialises_each_versioned_field():
         "monitor_decision_count",
         "first_intervention_interval",
         "harm_before_first_intervention",
+        "route_decision_count",
+        "missing_sensor_route_decision_count",
+        "missing_sensor_route_decision_counts",
     }
 
 
@@ -170,6 +179,32 @@ def test_a_new_accumulator_resets_each_running_total():
     assert snapshot.density_limit_seconds == 0.0
     assert snapshot.reported_density_limit_seconds == 0.0
     assert snapshot.stranded_time_seconds == 0.0
+    assert snapshot.route_decision_count == 0
+    assert snapshot.missing_sensor_route_decision_count == 0
+
+
+def test_route_decisions_report_each_missing_sensor_channel():
+    metrics, population = fixed_episode()
+    metrics.update_route_decisions(
+        RouteDecisionSummary(
+            decision_count=4,
+            missing_sensor_decision_count=2,
+            missing_sensor_channel_counts=(1, 2, 0, 1, 0, 0),
+        )
+    )
+
+    snapshot = metrics.snapshot(population)
+
+    assert snapshot.route_decision_count == 4
+    assert snapshot.missing_sensor_route_decision_count == 2
+    assert snapshot.missing_sensor_route_decision_counts == {
+        "availability": 1,
+        "speed_factor": 2,
+        "density_ratio": 0,
+        "weather_risk": 1,
+        "queue_length": 0,
+        "boarding_throughput": 0,
+    }
 
 
 def test_monitor_decisions_accumulate_counts_and_intervention_latency():

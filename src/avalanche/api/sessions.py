@@ -42,6 +42,7 @@ from avalanche.env import (
     AvalancheEnvConfig,
     build_action_contract,
     build_action_space,
+    build_resolved_environment,
     validate_action,
 )
 from avalanche.monitors import build_monitor
@@ -435,7 +436,7 @@ def run_session(
 ) -> None:
     """Run one simulator inside a child process."""
     try:
-        options: dict[str, object] = {
+        default_options: dict[str, object] = {
             "population": PopulationConfig(skier_count=skier_count),
             "weather": {
                 "initial": {
@@ -455,29 +456,9 @@ def run_session(
                 ],
             },
         }
-        mountain_path = MOUNTAIN_PATH
-        movement_tick_seconds = 5.0
-        control_interval_seconds = CONTROL_INTERVAL_SECONDS
-        episode_duration_seconds = EPISODE_DURATION_SECONDS
-        if resolved_config is not None:
-            mountain_path = Path(resolved_config.mountain.path)
-            if not mountain_path.is_absolute():
-                mountain_path = REPO_ROOT / mountain_path
-            movement_tick_seconds = resolved_config.intervals.movement_tick_seconds
-            control_interval_seconds = (
-                resolved_config.intervals.control_interval_seconds
-            )
-            episode_duration_seconds = resolved_config.episode_duration_seconds
-            options = {
-                "population": resolved_config.population,
-                "weather": resolved_config.scenario.weather,
-                "hazards": resolved_config.scenario.hazards,
-                "failures": resolved_config.scenario.failures,
-                "audits": resolved_config.scenario.audits,
-                "numerics": resolved_config.numerics,
-            }
+        simulator_overrides: dict[str, object] = {}
         if demo_failure:
-            options["failures"] = {
+            simulator_overrides["failures"] = {
                 "schedule": [
                     {
                         "kind": "lift_stoppage",
@@ -488,20 +469,24 @@ def run_session(
                     }
                 ]
             }
-        env = AvalancheEnv(
-            mountain_path,
-            AvalancheEnvConfig(
-                movement_tick_seconds=movement_tick_seconds,
-                control_interval_seconds=control_interval_seconds,
-                time_epsilon_seconds=(
-                    resolved_config.numerics.time_epsilon_seconds
-                    if resolved_config is not None
-                    else PROTOCOL_TIME_EPSILON_SECONDS
+        if resolved_config is not None:
+            env = build_resolved_environment(
+                resolved_config,
+                simulator_overrides=simulator_overrides,
+            )
+        else:
+            default_options.update(simulator_overrides)
+            env = AvalancheEnv(
+                MOUNTAIN_PATH,
+                AvalancheEnvConfig(
+                    movement_tick_seconds=5.0,
+                    control_interval_seconds=CONTROL_INTERVAL_SECONDS,
+                    time_epsilon_seconds=PROTOCOL_TIME_EPSILON_SECONDS,
+                    episode_duration_seconds=EPISODE_DURATION_SECONDS,
                 ),
-                episode_duration_seconds=episode_duration_seconds,
-            ),
-            simulator_options=options,
-        )
+                simulator_options=default_options,
+            )
+        control_interval_seconds = env.config.control_interval_seconds
         sim = env.sim
         controller_config = (
             resolved_config.controller

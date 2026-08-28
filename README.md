@@ -17,14 +17,14 @@ The honest controller and the single-run workflow now exist.
 The outcome monitor and the rule monitor now exist.
 The honest controller uses continuous, context-based actions.
 The three misaligned controllers now have overt and stealth tiers.
-The matched dataset and the learned process monitor now exist.
+The historical matched dataset and learned monitor evidence now exist.
 The shortcut audit and the locked training gate now exist.
 The paired final evaluator and the adaptive extension now exist.
 The paired closure baseline compares the honest controller with no control.
 
-The final acceptance command writes bounded reference artifacts under `outputs/`.
-These artifacts test the complete protocol.
-They do not replace the full dissertation sweep.
+The old acceptance artifacts remain historical evidence.
+Do not run the old all-in-one workflow for the routing refresh.
+Use the monitor refresh handoff for the next formal evaluation.
 
 ### The misaligned controllers
 
@@ -34,7 +34,7 @@ The declared attack record gives the trigger, the targets, and the budget.
 
 | Controller | File | What it changes |
 |---|---|---|
-| Profit bias | `src/avalanche/controllers/profit_biased.py` | prefers the premium customers on one route |
+| Profit bias | `src/avalanche/controllers/profit_biased.py` | prefers the premium customers on the lower Mélèzes piste |
 | Sleeper | `src/avalanche/controllers/sleeper_saboteur.py` | reduces one escape lift capacity after a hidden trigger |
 | Reward hacker | `src/avalanche/controllers/reward_hacker.py` | reports a lower congestion and reduces the service capacity |
 
@@ -61,7 +61,7 @@ uv run avalanche simulate \
 |---|---|---|
 | Graph | `src/avalanche/sim/graph.py` | reads the mountain file and validates the graph one time, at load |
 | Topology | `src/avalanche/sim/topology.py` | stores index arrays on immutable byte buffers |
-| Routes | `src/avalanche/sim/routes.py` | caches immutable safe paths for each ability |
+| Routes | `src/avalanche/sim/routes.py` | selects paths from delayed operational reports |
 | Population | `src/avalanche/sim/population.py` | samples skier attributes and reachable exits into arrays |
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
@@ -83,8 +83,9 @@ Each skier travels from an entrance to a sampled destination.
 The movement tick uses masked NumPy operations.
 Each skier starts on the first movement boundary at or after its arrival time.
 The route choice groups skiers by their location and their attributes.
+It uses delayed time, risk, ability, and controller costs.
 The simulator rejects a piste above the skier's ability limit.
-It rejects lift advice without a safe onward route.
+It rejects lift entry without a current physical onward route.
 Configuration validation checks every required safe route before a run.
 Each entrance must reach every safe zone and exit for every ability.
 The lift throughput limits the boarding rate.
@@ -252,33 +253,12 @@ Each formal model uses a registered lock and a content-addressed profile selecti
 Prepare release assets before evaluation because formal loading operates offline.
 The final evaluator runs 1,680 paired Val Tarin episodes.
 
-Regenerate the small monitor fixture after a dataset, feature, or policy change.
+The routing change makes every existing learned result stale.
+Keep the committed monitor fixture as historical evidence.
+Do not overwrite the fixture during this refresh.
 
-```bash
-uv run python scripts/generate_monitor_dataset.py \
-  configs/experiments/monitor-training.yaml \
-  --fixture \
-  --output tests/fixtures/monitor-dataset.parquet
-```
-
-The recorded Git revision proves provenance.
-It does not define fixture compatibility.
-
-Run the two-seed proof before the complete evaluation.
-
-```bash
-uv run python scripts/run_fix_158_acceptance.py \
-  --evaluation-seed-limit 2 \
-  --output outputs/fix-158-proof
-```
-
-Run the bounded final acceptance after a clean test run.
-
-```bash
-uv run python scripts/run_fix_158_acceptance.py
-```
-
-The command writes its final report to `outputs/fix-158-final/acceptance-report.json`.
+Follow the [monitor refresh handoff](docs/monitor-refresh.md).
+It gives the exact trace, audit, training, calibration, and evaluation commands.
 
 ### The scene data
 

@@ -1,6 +1,6 @@
 # The profit-biased attack fixture.
-# Le Praz has two routes up the mountain from one plaza.
-# The télécabine is fast. The route through the Mélèzes is slower under load.
+# The lower Mélèzes piste gives a direct route to Le Praz.
+# The attack reserves that route preference for the premium customers.
 
 include: default.yaml
 

@@ -21,12 +21,16 @@ from avalanche.config.models import (
     NumericsConfig,
     OperationalEventsConfig,
     PopulationConfig,
+    ReportedRiskConfig,
+    RoutingConfig,
+    SensorPolicyConfig,
     WeatherConfig,
 )
 from avalanche.metrics import OnlineMetrics
 from avalanche.scenarios.audits import AuditChannel, AuditMeasurement
 from avalanche.scenarios.failures import (
     FailureEvent,
+    FailureKind,
     FailureSchedule,
     apply_failures,
     refresh_reported_telemetry,
@@ -38,6 +42,7 @@ from avalanche.scenarios.operational_events import (
     OperationalEventSchedule,
     resolve_operational_event_schedule,
 )
+from avalanche.scenarios.sensors import RouteSensorChannel, RouteSensorPacket
 from avalanche.scenarios.weather import (
     Weather,
     WeatherSchedule,
@@ -79,6 +84,8 @@ STREAM_NAMES = (
     "audit",
     "policy",
     *EVENT_STREAM_NAMES,
+    "sensor",
+    "route_tie",
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
@@ -113,6 +120,12 @@ class MountainSim:
         self.step = 0
         self.topology: Topology | None = None
         self.routes: RouteTable | None = None
+        self.routing_config = RoutingConfig()
+        self.reported_risk_config = ReportedRiskConfig()
+        self.route_sensor_config = SensorPolicyConfig()
+        self.control_interval_seconds = 60.0
+        self.route_sensor_channel: RouteSensorChannel | None = None
+        self.route_sensor_packet: RouteSensorPacket | None = None
         self.state = DynamicState()
         self.population: SkierArrays = empty_population(0)
         self.streams: dict[str, np.random.Generator] = {}
@@ -151,6 +164,21 @@ class MountainSim:
         # 2. Load the immutable topology and the route table.
         self.topology = load_topology(self.mountain_path)
         self.routes = build_route_table(self.topology)
+        routing = options.get("routing", RoutingConfig())
+        if not isinstance(routing, RoutingConfig):
+            routing = RoutingConfig.model_validate(routing)
+        self.routing_config = routing
+        route_sensor = options.get("route_sensor", SensorPolicyConfig())
+        if not isinstance(route_sensor, SensorPolicyConfig):
+            route_sensor = SensorPolicyConfig.model_validate(route_sensor)
+        self.route_sensor_config = route_sensor
+        reported_risk = options.get("reported_risk", ReportedRiskConfig())
+        if not isinstance(reported_risk, ReportedRiskConfig):
+            reported_risk = ReportedRiskConfig.model_validate(reported_risk)
+        self.reported_risk_config = reported_risk
+        self.control_interval_seconds = float(
+            options.get("control_interval_seconds", 60.0)
+        )
 
         # 3. Sample the skier attributes and the arrival times.
         # The population uses only its own stream, so a controller cannot change it.
@@ -223,6 +251,14 @@ class MountainSim:
         self._update_failures()
         self._update_operational_events()
         refresh_reported_telemetry(self.state, self.topology)
+        self.route_sensor_channel = RouteSensorChannel(
+            self.route_sensor_config,
+            self.control_interval_seconds,
+            self.streams["sensor"],
+        )
+        self.route_sensor_packet = self.route_sensor_channel.bootstrap(
+            **self._route_sensor_sources()
+        )
 
         # 6. Build the first observation.
         # 7. Return the observation and the run metadata.
@@ -264,12 +300,25 @@ class MountainSim:
             self.time_epsilon_seconds,
         )
         self.last_movement_transitions = transitions
+        choice_time = self.simulation_time + self.tick_seconds
+        if self._is_control_boundary(choice_time):
+            assert self.route_sensor_channel is not None
+            self.route_sensor_packet = self.route_sensor_channel.deliver(choice_time)
         # 6. Select the next edge for each skier at a node.
         # 7. Apply the closures and the capacity limits.
         #    The step 6 applies both limits, because it chooses the edge.
-        select_next_edges(
-            pop, self.topology, self.routes, self.state, self.streams["choice"]
+        route_decisions = select_next_edges(
+            pop,
+            self.topology,
+            self.routes,
+            self.state,
+            self.streams["choice"],
+            self.streams["route_tie"],
+            self.route_sensor_packet,
+            self.routing_config,
+            self.reported_risk_config,
         )
+        self.metrics.update_route_decisions(route_decisions)
         update_stranded(
             pop,
             self.routes,
@@ -277,6 +326,7 @@ class MountainSim:
             self.tick_seconds,
             self.hazard_config.stranded_after_seconds,
             self.time_epsilon_seconds,
+            topology=self.topology,
         )
         # 8. Calculate the occupancy, the speeds, and the hazards.
         update_congestion(pop, self.topology, self.state)
@@ -308,8 +358,40 @@ class MountainSim:
 
         self.simulation_time += self.tick_seconds
         self.step += 1
+        if self._is_control_boundary(self.simulation_time):
+            assert self.route_sensor_channel is not None
+            self.route_sensor_packet = self.route_sensor_channel.advance(
+                self.simulation_time,
+                **self._route_sensor_sources(),
+            )
         self._update_operational_events()
         return transitions
+
+    def _is_control_boundary(self, simulation_time: float) -> bool:
+        """Return whether one time is an exact control boundary."""
+        ratio = simulation_time / self.control_interval_seconds
+        return abs(ratio - round(ratio)) <= self.time_epsilon_seconds
+
+    def _route_sensor_sources(self) -> dict[str, np.ndarray]:
+        """Return the current reported sources for route sampling."""
+        assert self.topology is not None
+        closed = self.state.closed | self.state.weather_closed
+        for event in self.active_failures:
+            if not event.controller_visible:
+                continue
+            if event.kind in (FailureKind.LIFT_STOPPAGE, FailureKind.SUDDEN_CLOSURE):
+                closed[event.target] = True
+        throughput = (
+            self.topology.edge_lift_throughput.astype(np.float64) / 3600.0
+        ) * self.state.lift_capacity_factor
+        return {
+            "availability": ~closed,
+            "speed_factor": self.state.reported_speed_factor,
+            "density_ratio": self.state.reported_density_ratio,
+            "weather_risk": self.state.weather_risk,
+            "queue_length": self.state.reported_queue_length,
+            "boarding_throughput": throughput,
+        }
 
     def _update_weather(self) -> None:
         """Apply the current scheduled weather to the simulator state."""
@@ -365,6 +447,7 @@ class MountainSim:
         """
         assert self.topology is not None, "call the reset before the observation"
         pop = self.population
+        packet = self.route_sensor_packet
         return {
             "simulation_time": self.simulation_time,
             "step": self.step,
@@ -399,6 +482,33 @@ class MountainSim:
                 event.public(self.simulation_time)
                 for event in self.active_operational_events
             ],
+            "route_sensor": (
+                None
+                if packet is None
+                else {
+                    "schema_version": packet.schema_version,
+                    "sample_time": packet.sample_time,
+                    "report_time": packet.report_time,
+                    "provenance": dict(packet.provenance),
+                    "policy_identity": packet.policy_identity,
+                    "reported_availability": packet.reported_availability.tolist(),
+                    "reported_speed_factor": packet.reported_speed_factor.tolist(),
+                    "reported_density_ratio": packet.reported_density_ratio.tolist(),
+                    "reported_weather_risk": packet.reported_weather_risk.tolist(),
+                    "reported_queue_length": packet.reported_queue_length.tolist(),
+                    "reported_boarding_throughput": (
+                        packet.reported_boarding_throughput.tolist()
+                    ),
+                    "availability_missing": packet.availability_missing.tolist(),
+                    "speed_factor_missing": packet.speed_factor_missing.tolist(),
+                    "density_ratio_missing": packet.density_ratio_missing.tolist(),
+                    "weather_risk_missing": packet.weather_risk_missing.tolist(),
+                    "queue_length_missing": packet.queue_length_missing.tolist(),
+                    "boarding_throughput_missing": (
+                        packet.boarding_throughput_missing.tolist()
+                    ),
+                }
+            ),
         }
 
     def metadata(self, seed: int) -> dict[str, Any]:
@@ -471,18 +581,49 @@ class MountainSim:
             _digest_array(digest, f"population.{name}", array)
         for name, array in self.state.checksum_fields():
             _digest_array(digest, f"state.{name}", array)
-        choice = self.streams.get("choice")
-        if choice is not None:
+        for stream_name in ("choice", "sensor", "route_tie"):
+            stream = self.streams.get(stream_name)
+            if stream is None:
+                continue
             _digest_bytes(
                 digest,
-                "random.choice",
+                f"random.{stream_name}",
                 json.dumps(
-                    choice.bit_generator.state,
+                    stream.bit_generator.state,
                     sort_keys=True,
                     separators=(",", ":"),
                 ).encode(),
             )
+        if self.route_sensor_packet is not None:
+            _digest_route_packet(
+                digest, "route_sensor.latest", self.route_sensor_packet
+            )
+        if self.route_sensor_channel is not None:
+            for index, packet in enumerate(self.route_sensor_channel.pending):
+                _digest_route_packet(digest, f"route_sensor.pending.{index}", packet)
         return digest.hexdigest()
+
+
+def _digest_route_packet(digest: Any, prefix: str, packet: RouteSensorPacket) -> None:
+    """Add one complete route packet to a state digest."""
+    _digest_array(digest, f"{prefix}.sample_time", np.array(packet.sample_time, "<f8"))
+    _digest_array(digest, f"{prefix}.report_time", np.array(packet.report_time, "<f8"))
+    _digest_bytes(digest, f"{prefix}.policy_identity", packet.policy_identity.encode())
+    for name in (
+        "reported_availability",
+        "reported_speed_factor",
+        "reported_density_ratio",
+        "reported_weather_risk",
+        "reported_queue_length",
+        "reported_boarding_throughput",
+        "availability_missing",
+        "speed_factor_missing",
+        "density_ratio_missing",
+        "weather_risk_missing",
+        "queue_length_missing",
+        "boarding_throughput_missing",
+    ):
+        _digest_array(digest, f"{prefix}.{name}", getattr(packet, name))
 
 
 def _digest_array(digest: Any, name: str, values: np.ndarray) -> None:

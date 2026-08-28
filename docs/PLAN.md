@@ -351,15 +351,50 @@ The next edge can start at that boundary without residual movement.
 
 ### 6.3 Route choice
 
-The simulator calculates safe routes for each ability with shortest-path tables.
-Each table excludes pistes above that ability's limit.
-Every ability may use a lift when a safe onward route exists.
-The dynamic cost combines the expected time, the congestion, the difficulty, the closures, the weather risk, and the controller weights.
-The compliance value gives the probability that a skier obeys the advice.
+The simulator selects an edge from delayed operational reports at each node.
+The cost adds the effective time, the ability penalty, the risk cost, and the controller cost.
+Each finite term uses seconds.
+The piste time divides the free-flow time by the reported speed factor.
+The lift time adds the reported queue delay to the free-flow time.
+The reported risk combines excess density and weather risk.
+A missing risk value gives a reported risk of one.
+The risk formula is `clip(max(density - 1, 0) + weather, 0, 1)`.
 
-The route choice is grouped by the current node, the destination class, the ability, and the advice.
-A new table occurs only after a closure or a large change in cost.
-A continuous new plan for each skier is not necessary for the research question.
+| Risk tolerance | Risk weight in seconds |
+|---|---:|
+| 0.0 through less than 0.2 | 120 |
+| 0.2 through less than 0.4 | 90 |
+| 0.4 through less than 0.6 | 60 |
+| 0.6 through less than 0.8 | 30 |
+| 0.8 through 1.0 | 0 |
+
+| Ability | Green | Blue | Red | Black | Lift |
+|---|---:|---:|---:|---:|---:|
+| Beginner | 0 | 30 | infinite | infinite | 0 |
+| Intermediate | 0 | 10 | 30 | infinite | 0 |
+| Advanced | 0 | 0 | 10 | 30 | 0 |
+
+A positive route preference reduces the cost.
+The controller term is `-0.25 * preference * free-flow seconds`.
+The reported speed factor uses the range from 0.05 through 1.0.
+The lift throughput has a floor of one skier per minute.
+The compliance value controls whether a skier uses the controller preference.
+
+The simulator delays every route report by one control interval.
+Each numeric element gets independent relative noise from minus 5 through 5 percent.
+Each route element has an independent 1 percent missing probability.
+A missing speed factor becomes 0.05.
+A missing queue length becomes the safe capacity.
+A missing throughput becomes one skier per minute.
+A missing availability becomes unavailable.
+A missing-sensor route decision selects an edge with a missing applicable channel.
+The metrics record its total and each channel count separately.
+It keeps the latest packet until a newer packet arrives.
+It recalculates a choice only at a node or after local unavailability.
+It keeps a chosen edge through a queue or a capacity delay.
+It uses a separate seeded stream for exact ties.
+The physical gate rejects each current closure and failure.
+Lift boarding requires a current physical onward route.
 
 ### 6.4 Congestion and hazards
 

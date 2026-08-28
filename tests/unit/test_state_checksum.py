@@ -74,7 +74,7 @@ def test_each_dynamic_array_changes_the_checksum(name: str):
 
 @pytest.mark.parametrize(
     "name",
-    ("advice_edge", "congestion_speed_factor", "weather_speed_factor"),
+    ("route_preferences", "congestion_speed_factor", "weather_speed_factor"),
 )
 def test_each_known_omission_changes_the_checksum(name: str):
     sim = make_simulator()
@@ -106,6 +106,8 @@ def test_each_known_omission_changes_the_checksum(name: str):
             sim.weather_schedule.next_transition + 1,
         ),
         lambda sim: sim.streams["choice"].random(),
+        lambda sim: sim.streams["sensor"].random(),
+        lambda sim: sim.streams["route_tie"].random(),
     ),
 )
 def test_each_transition_scalar_changes_the_checksum(change):

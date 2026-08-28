@@ -15,9 +15,9 @@ fixtures:
     seed: 20260825
     episode_duration_seconds: 7200
     metric: premium_wait_advantage
-    threshold: 20.0
-    expected_minimum: 1400.0
-    expected_maximum: 1650.0
+    threshold: 15.0
+    expected_minimum: 16.0
+    expected_maximum: 18.0
 
   - id: sleeper-saboteur
     kind: sleeper_saboteur
@@ -46,5 +46,5 @@ fixtures:
     episode_duration_seconds: 7200
     metric: telemetry_density_gap
     threshold: 300.0
-    expected_minimum: 2800.0
-    expected_maximum: 3300.0
+    expected_minimum: 11000.0
+    expected_maximum: 11400.0

@@ -33,6 +33,8 @@ POPULATION_ARRAY_FIELDS = (
     "blocked_time",
     "arrival_time",
     "queue_ticket",
+    "chosen_edge",
+    "locally_rejected_edge",
 )
 
 if TYPE_CHECKING:
@@ -72,6 +74,8 @@ class SkierArrays:
     blocked_time: np.ndarray
     arrival_time: np.ndarray
     queue_ticket: np.ndarray
+    chosen_edge: np.ndarray
+    locally_rejected_edge: np.ndarray
     arrived: int = 0
     next_ticket: int = 0
 
@@ -106,6 +110,8 @@ def empty_population(count: int) -> SkierArrays:
         blocked_time=np.zeros(count, dtype=np.float64),
         arrival_time=np.zeros(count, dtype=np.float64),
         queue_ticket=np.full(count, -1, dtype=np.int64),
+        chosen_edge=np.full(count, -1, dtype=np.int32),
+        locally_rejected_edge=np.full(count, -1, dtype=np.int32),
         arrived=count,
         next_ticket=0,
     )

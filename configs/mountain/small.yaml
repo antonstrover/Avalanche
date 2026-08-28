@@ -11,3 +11,19 @@ population:
   customer_group_weights: [0.8, 0.2]
   compliance_mean: 0.7
   compliance_spread: 0.2
+
+routing:
+  schema_version: 1
+  ability_penalty_seconds:
+    beginner: {green: 0, blue: 30, red: infinite, black: infinite, lift: 0}
+    intermediate: {green: 0, blue: 10, red: 30, black: infinite, lift: 0}
+    advanced: {green: 0, blue: 0, red: 10, black: 30, lift: 0}
+  risk_tolerance_bins:
+    - {minimum: 0.0, maximum: 0.2, risk_weight_seconds: 120}
+    - {minimum: 0.2, maximum: 0.4, risk_weight_seconds: 90}
+    - {minimum: 0.4, maximum: 0.6, risk_weight_seconds: 60}
+    - {minimum: 0.6, maximum: 0.8, risk_weight_seconds: 30}
+    - {minimum: 0.8, maximum: 1.0, risk_weight_seconds: 0}
+  minimum_reported_speed_factor: 0.05
+  minimum_boarding_throughput_per_second: 0.016666666666666666
+  maximum_controller_fraction: 0.25

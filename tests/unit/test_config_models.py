@@ -10,6 +10,7 @@ from avalanche.config.models import (
     MonitorConfig,
     MountainConfig,
     PopulationConfig,
+    RoutingConfig,
 )
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
@@ -228,6 +229,32 @@ def test_valid_config_parses():
     assert resolved.scenario.audits.schema_version == 1
     assert resolved.scenario.audits.edge_fraction == 0.1
     assert resolved.monitor.information_profile == "principal"
+
+
+def test_each_mountain_resolves_the_frozen_route_mappings():
+    expected = RoutingConfig()
+    mountain_paths = (
+        CONFIGS / "mountain" / "default.yaml",
+        CONFIGS / "mountain" / "small.yaml",
+    )
+    for mountain_path in mountain_paths:
+        resolved = ResolvedConfig.model_validate(
+            load_and_merge(
+                mountain_path,
+                CONFIGS / "scenarios" / "default.yaml",
+                CONFIGS / "controllers" / "none.yaml",
+                CONFIGS / "monitors" / "none.yaml",
+            )
+        )
+        assert resolved.routing == expected
+
+
+def test_a_changed_route_mapping_is_rejected():
+    data = load_and_merge(*SAMPLE_FILES)
+    data["routing"]["risk_tolerance_bins"][0]["risk_weight_seconds"] = 119.0
+
+    with pytest.raises(ValidationError, match="frozen mapping"):
+        ResolvedConfig.model_validate(data)
 
 
 @pytest.mark.parametrize(("mountain_path", "node_count", "edge_count"), MOUNTAIN_FILES)

@@ -1,5 +1,6 @@
 """The observation builder must match its fixed Gymnasium space."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import gymnasium as gym
@@ -125,13 +126,20 @@ def test_the_reported_hazard_uses_only_visible_inputs():
     config = ObservationConfig(300.0)
     edge = 2
     sim.state.occupancy[edge] = 99
-    sim.state.reported_occupancy[edge] = 10
-    sim.state.reported_queue_length[edge] = 5
-    sim.state.weather_risk[edge] = 0.4
+    packet = sim.route_sensor_packet
+    assert packet is not None
+    density = packet.reported_density_ratio.copy()
+    weather = packet.reported_weather_risk.copy()
+    density[edge] = 1.1
+    weather[edge] = 0.4
+    sim.route_sensor_packet = replace(
+        packet,
+        reported_density_ratio=density,
+        reported_weather_risk=weather,
+    )
 
     observation = build_observation(sim, config)
-    reported_density = 15.0 / sim.topology.edge_safe_capacity[edge]
-    expected = reported_density + (0.4 * sim.hazard_config.weather_risk_weight)
+    expected = 0.5
 
     assert observation["reported_edge_hazard"][edge] == pytest.approx(expected)
     assert observation["reported_edge_hazard"][edge] != sim.state.hazard_score[edge]
@@ -184,7 +192,11 @@ def test_returned_contract_arrays_do_not_change_the_source_state():
 def test_the_builder_rejects_a_non_finite_report():
     sim = configured_sim()
     config = ObservationConfig(300.0)
-    sim.state.reported_speed_factor[0] = np.nan
+    packet = sim.route_sensor_packet
+    assert packet is not None
+    speed = packet.reported_speed_factor.copy()
+    speed[0] = np.nan
+    sim.route_sensor_packet = replace(packet, reported_speed_factor=speed)
 
     with pytest.raises(ValueError, match="finite"):
         build_observation(sim, config)

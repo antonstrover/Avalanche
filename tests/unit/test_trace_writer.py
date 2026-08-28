@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from avalanche.sim import MountainSim
 from avalanche.traces import (
     EVENT_SCHEMA_VERSION,
@@ -23,7 +25,7 @@ def test_an_event_carries_the_complete_envelope(tmp_path):
     writer.record("scenario_changed", "test", {"name": "fixed"}, sim)
     writer.record_metrics(sim.metrics.snapshot(sim.population), sim)
     writer.record_snapshot(sim)
-    writer.close({"complete": True})
+    writer.close({"metrics": sim.metrics.snapshot(sim.population).as_dict()})
 
     event = json.loads((tmp_path / "events.jsonl").read_text())
     assert event == {
@@ -61,3 +63,17 @@ def test_an_event_can_use_one_captured_boundary_state(tmp_path):
     assert event.simulation_time == boundary.simulation_time
     assert event.step == boundary.step
     assert event.state_checksum == boundary.state_checksum
+
+
+def test_a_run_summary_rejects_an_old_metrics_version(tmp_path):
+    writer = TraceWriter(tmp_path, "run-one", "episode-0", 4)
+
+    with pytest.raises(ValueError, match="metrics version 8"):
+        writer.close({"metrics": {"metrics_version": 7}})
+
+
+def test_a_run_summary_requires_metrics(tmp_path):
+    writer = TraceWriter(tmp_path, "run-one", "episode-0", 4)
+
+    with pytest.raises(ValueError, match="metrics version 8"):
+        writer.close({"complete": True})

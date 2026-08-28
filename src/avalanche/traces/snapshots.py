@@ -8,8 +8,9 @@ from typing import Any
 import numpy as np
 
 from avalanche.control import DecisionType
-from avalanche.metrics import OnlineMetrics
+from avalanche.metrics import METRICS_VERSION, OnlineMetrics
 from avalanche.scenarios.audits import AuditChannel, AuditMeasurement
+from avalanche.scenarios.sensors import ROUTE_SENSOR_CHANNELS
 from avalanche.scenarios.weather import Weather, WeatherSchedule
 from avalanche.sim.engine import STREAM_NAMES, MountainSim
 from avalanche.sim.hazards import HazardEvent
@@ -50,6 +51,7 @@ _POPULATION_KEYS = {"arrived", "next_ticket"}
 _WEATHER_KEYS = {"current", "next_transition"}
 _AUDIT_KEYS = {"measurements", "delivered"}
 _METRIC_KEYS = {
+    "metrics_version",
     "group_count",
     "episode_duration_seconds",
     "density_limit_seconds",
@@ -63,6 +65,9 @@ _METRIC_KEYS = {
     "monitor_decision_count",
     "first_intervention_interval",
     "harm_before_first_intervention",
+    "route_decision_count",
+    "missing_sensor_route_decision_count",
+    "missing_sensor_route_decision_counts",
 }
 
 
@@ -286,7 +291,11 @@ def _snapshot_v2_population_arrays(
     for name, values in population.checksum_fields():
         if name == "required_travel_seconds":
             arrays.append(("progress", display_progress(population)))
-        elif name != "remaining_travel_seconds":
+        elif name not in {
+            "remaining_travel_seconds",
+            "chosen_edge",
+            "locally_rejected_edge",
+        }:
             arrays.append((name, values))
     return tuple(arrays)
 
@@ -407,6 +416,7 @@ def _audit_state(sim: MountainSim) -> dict[str, Any]:
 def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
     """Return every mutable online metric accumulator."""
     return {
+        "metrics_version": METRICS_VERSION,
         "group_count": metrics.group_count,
         "episode_duration_seconds": metrics.episode_duration_seconds,
         "density_limit_seconds": metrics.density_limit_seconds,
@@ -420,6 +430,13 @@ def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
         "monitor_decision_count": metrics.monitor_decision_count,
         "first_intervention_interval": metrics.first_intervention_interval,
         "harm_before_first_intervention": metrics.harm_before_first_intervention,
+        "route_decision_count": metrics.route_decision_count,
+        "missing_sensor_route_decision_count": (
+            metrics.missing_sensor_route_decision_count
+        ),
+        "missing_sensor_route_decision_counts": dict(
+            metrics.missing_sensor_route_decision_counts
+        ),
     }
 
 
@@ -427,6 +444,11 @@ def _metrics(value: Any) -> OnlineMetrics:
     """Validate and rebuild every online metric accumulator."""
     state = _mapping(value, "metric state")
     _require_keys(state, _METRIC_KEYS, "metric state")
+    version = _nonnegative_integer(state["metrics_version"], "metrics version")
+    if version != METRICS_VERSION:
+        raise SnapshotSchemaError(
+            f"the metrics schema version {version} is unsupported"
+        )
     group_count = _integer(state["group_count"], "metric group count")
     duration = _finite_float(
         state["episode_duration_seconds"], "metric episode duration"
@@ -483,6 +505,30 @@ def _metrics(value: Any) -> OnlineMetrics:
         if harm is None
         else _nonnegative_float(harm, "harm before first intervention")
     )
+    metrics.route_decision_count = _nonnegative_integer(
+        state["route_decision_count"], "route decision count"
+    )
+    metrics.missing_sensor_route_decision_count = _nonnegative_integer(
+        state["missing_sensor_route_decision_count"],
+        "missing-sensor route decision count",
+    )
+    route_counts = _mapping(
+        state["missing_sensor_route_decision_counts"],
+        "missing-sensor route decision counts",
+    )
+    if set(route_counts) != set(ROUTE_SENSOR_CHANNELS):
+        raise SnapshotSchemaError("the missing route counts have invalid fields")
+    metrics.missing_sensor_route_decision_counts = {
+        name: _nonnegative_integer(route_counts[name], "missing route channel count")
+        for name in ROUTE_SENSOR_CHANNELS
+    }
+    if metrics.missing_sensor_route_decision_count > metrics.route_decision_count:
+        raise SnapshotSchemaError("missing route decisions exceed all route decisions")
+    if any(
+        count > metrics.route_decision_count
+        for count in metrics.missing_sensor_route_decision_counts.values()
+    ):
+        raise SnapshotSchemaError("a missing route channel exceeds all route decisions")
     return metrics
 
 

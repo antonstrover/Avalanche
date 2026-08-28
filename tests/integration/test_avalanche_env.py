@@ -1,5 +1,6 @@
 """Check the Gymnasium adapter and its execution boundary."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -17,8 +18,7 @@ from avalanche.env import (
 )
 from avalanche.env.adapter import _apply_executed_action
 from avalanche.scenarios.failures import refresh_reported_telemetry
-from avalanche.sim import EDGE_TYPE_NAMES, population_from_starts
-from avalanche.sim.routes import NO_EDGE
+from avalanche.sim import ABILITY_NAMES, EDGE_TYPE_NAMES, population_from_starts
 from avalanche.sim.skier import LocationKind
 
 FIXTURE = (
@@ -74,6 +74,30 @@ def test_one_step_runs_one_exact_control_interval():
     assert info["metrics"]["intervention_cost"] == 0.0
 
 
+def test_the_environment_reports_missing_sensor_route_decisions():
+    env = make_env(control_interval_seconds=60.0, episode_duration_seconds=120.0)
+    env.reset(seed=4)
+    source = env.topology.node_index["base_village"]
+    destination = env.topology.node_index["base_exit"]
+    env.sim.population = population_from_starts([source], destination)
+    env.sim.population.ability[:] = ABILITY_NAMES.index("advanced")
+    packet = env.sim.route_sensor_packet
+    assert packet is not None
+    piste_code = EDGE_TYPE_NAMES.index("piste")
+    outgoing = env.topology.edges_from(source)
+    pistes = outgoing[env.topology.edge_type[outgoing] == piste_code]
+    missing = packet.speed_factor_missing.copy()
+    missing[pistes] = True
+    env.sim.route_sensor_packet = replace(packet, speed_factor_missing=missing)
+
+    env.sim.tick()
+    metrics = env.sim.metrics.snapshot(env.sim.population)
+
+    assert metrics.route_decision_count == 1
+    assert metrics.missing_sensor_route_decision_count == 1
+    assert metrics.missing_sensor_route_decision_counts["speed_factor"] == 1
+
+
 def test_a_fractional_interval_ratio_is_rejected():
     with pytest.raises(ValueError, match="whole movement ticks"):
         AvalancheEnvConfig(
@@ -112,7 +136,7 @@ def test_an_executed_action_changes_each_supported_control():
 
     _, _, _, _, info = env.step(action)
 
-    assert env.sim.state.advice_edge[source, 0] == route_edge
+    assert env.sim.state.route_preferences[0, route_edge] == 1.0
     assert env.sim.state.closed[closed_piste]
     assert env.sim.state.lift_capacity_factor[lift] == 0.25
     assert env.sim.state.crowd_messages[source, 0] == -0.5
@@ -150,6 +174,9 @@ def test_an_executed_action_changes_each_supported_control():
         "monitor_decision_count",
         "first_intervention_interval",
         "harm_before_first_intervention",
+        "route_decision_count",
+        "missing_sensor_route_decision_count",
+        "missing_sensor_route_decision_counts",
         "intervention_cost",
     }
 
@@ -170,9 +197,9 @@ def test_a_neutral_action_clears_old_route_advice():
     advised = neutral_action(env.topology)
     advised["route_weights"][0, route_edge] = 1.0
     env.step(advised)
-    assert env.sim.state.advice_edge[source, 0] == route_edge
+    assert env.sim.state.route_preferences[0, route_edge] == 1.0
     env.step(neutral_action(env.topology))
-    assert env.sim.state.advice_edge[source, 0] == NO_EDGE
+    assert env.sim.state.route_preferences[0, route_edge] == 0.0
 
 
 def test_a_neutral_action_clears_old_telemetry_overrides():

@@ -9,6 +9,7 @@ from avalanche.sim.hazards import HazardEvent, HazardEventType, update_hazards
 from avalanche.sim.movement import (
     DynamicState,
     MovementTransitions,
+    RouteDecisionSummary,
     accumulate_times,
     advance_on_edges,
     arrive_at_nodes,
@@ -28,9 +29,12 @@ from avalanche.sim.population import (
     sample_population,
 )
 from avalanche.sim.routes import (
+    OperationalRouteCosts,
     RouteCacheIdentity,
     RouteTable,
     build_route_table,
+    physical_onward_route_exists,
+    reported_route_exists,
     required_destinations,
     walk_route,
 )
@@ -57,9 +61,12 @@ __all__ = [
     "EDGE_TYPE_NAMES",
     "DIFFICULTY_NAMES",
     "RouteTable",
+    "OperationalRouteCosts",
     "RouteCacheIdentity",
     "build_route_table",
     "required_destinations",
+    "reported_route_exists",
+    "physical_onward_route_exists",
     "walk_route",
     "SkierArrays",
     "empty_population",
@@ -72,6 +79,7 @@ __all__ = [
     "Status",
     "DynamicState",
     "MovementTransitions",
+    "RouteDecisionSummary",
     "new_dynamic_state",
     "start_arrivals",
     "serve_lift_queues",
