@@ -24,6 +24,7 @@ from avalanche.env.adapter import (
     action_intervention_cost,
     create_action_proposal,
 )
+from avalanche.env.factory import build_resolved_environment
 from avalanche.env.observations import (
     INCIDENT_KIND_NAMES,
     INTERVENTION_DECISION_NAMES,
@@ -73,6 +74,7 @@ __all__ = [
     "build_control_permission_space",
     "build_observation",
     "build_observation_space",
+    "build_resolved_environment",
     "calculate_reward",
     "create_action_proposal",
     "neutral_action",

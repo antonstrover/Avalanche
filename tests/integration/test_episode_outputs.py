@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 from avalanche.config import ResolvedConfig
 from avalanche.experiments import run_episode
 from avalanche.experiments.final_evaluation import attack_detection_metrics
+from avalanche.metrics import METRICS_VERSION
 from avalanche.traces import EVENT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION
 from tests.configuration import resolve_test_configuration
 
@@ -99,6 +100,7 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     assert summary["information_profile"] == "principal"
     assert summary["policy_version"] == 3
     assert summary["metrics"]["harm_count"] >= 0
+    assert summary["metrics"]["metrics_version"] == METRICS_VERSION
     assert summary["metrics"]["dangerous_density_seconds"] >= 0.0
     assert summary["performance"]["performance_version"] == 1
     assert summary["performance"]["monitor_latency_seconds_sum"] >= 0.0

@@ -27,7 +27,11 @@ from avalanche.config.models import ModelLockReference
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
 from avalanche.monitors.calibration import CALIBRATION_VERSION, TemperatureFit
-from avalanche.monitors.dataset import ATTACK_LABEL, DATASET_VERSION
+from avalanche.monitors.dataset import (
+    ATTACK_LABEL,
+    DATASET_CHECKSUM_NAMES,
+    DATASET_VERSION,
+)
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import (
     MODEL_VERSION,
@@ -530,6 +534,14 @@ def train_locked_monitor(
     shortcut = require_approved_shortcut_report(shortcut_report_path)
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)
+    expected_checksums = _require_dataset_checksums(dataset_checksums)
+    if (
+        profile is InformationProfile.PRINCIPAL
+        and shortcut.get("dataset_checksums") != expected_checksums
+    ):
+        raise ValueError("the shortcut report does not match the monitor dataset")
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise ArtifactError("an immutable model output already exists")
     feature_names = feature_names_for(profile)
     perceptron = train_perceptron(train, validation, config)
     calibration = calibrate_and_gate(
@@ -544,7 +556,7 @@ def train_locked_monitor(
             calibration,
             output_dir / "failed-perceptron",
             shortcut_report_path,
-            dataset_checksums or {},
+            expected_checksums,
             profile,
             train_rows=len(train),
             validation_rows=len(validation),
@@ -572,7 +584,7 @@ def train_locked_monitor(
             calibration,
             output_dir / "failed-gru",
             shortcut_report_path,
-            dataset_checksums or {},
+            expected_checksums,
             profile,
             train_rows=len(train),
             validation_rows=len(validation),
@@ -637,7 +649,7 @@ def train_locked_monitor(
         "information_profile": profile.value,
         "shortcut_report": str(shortcut_report_path),
         "shortcut_report_approved": shortcut["approved"],
-        "dataset_checksums": dict(sorted((dataset_checksums or {}).items())),
+        "dataset_checksums": expected_checksums,
         "train_rows": int(len(train)),
         "validation_rows": int(len(validation)),
         "validation_windows": (
@@ -655,7 +667,7 @@ def train_locked_monitor(
             metadata_path,
             shortcut_report_path,
         ),
-        dataset_checksums or {},
+        expected_checksums,
         profile,
     )
     return {
@@ -663,6 +675,18 @@ def train_locked_monitor(
         "calibration": calibration.as_dict(),
         "lock": lock,
     }
+
+
+def _require_dataset_checksums(
+    dataset_checksums: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """Require every generated dataset artifact checksum."""
+    values = dict(sorted((dataset_checksums or {}).items()))
+    if tuple(values) != DATASET_CHECKSUM_NAMES:
+        raise ValueError("training needs the dataset, manifest, and summary checksums")
+    if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in values.values()):
+        raise ValueError("each generated dataset checksum must be a full SHA-256 value")
+    return values
 
 
 def _write_failed_candidate(

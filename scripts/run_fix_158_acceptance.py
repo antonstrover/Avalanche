@@ -111,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     dataset_checksums = {
         "dataset_sha256": file_checksum(dataset_path),
         "manifest_sha256": file_checksum(dataset_path.with_suffix(".manifest.json")),
+        "summary_sha256": file_checksum(dataset_path.with_suffix(".summary.json")),
     }
 
     print("Run the shortcut audits.", flush=True)
@@ -166,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
             "dataset_sha256": file_checksum(oracle_dataset_path),
             "manifest_sha256": file_checksum(
                 oracle_dataset_path.with_suffix(".manifest.json")
+            ),
+            "summary_sha256": file_checksum(
+                oracle_dataset_path.with_suffix(".summary.json")
             ),
         }
         oracle_dir = args.output / f"{label}-model"

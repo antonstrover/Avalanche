@@ -9,7 +9,6 @@ from typing import Any
 import numpy as np
 
 from avalanche.config import ResolvedConfig, run_id
-from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
     ApprovalChoice,
     ProposalEngineeringError,
@@ -20,7 +19,7 @@ from avalanche.control import (
 from avalanche.controllers import build_controller
 from avalanche.controllers.attacks import is_active
 from avalanche.controllers.factory import build_fallback, selected_policy_variant
-from avalanche.env import AvalancheEnv, AvalancheEnvConfig
+from avalanche.env import AvalancheEnv, build_resolved_environment
 from avalanche.experiments.evaluation import assess_attack
 from avalanche.monitors import build_monitor
 from avalanche.sim.movement import effective_closed
@@ -31,30 +30,7 @@ from avalanche.traces import EventState, TraceWriter
 
 def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     """Run one configured episode and write each result file."""
-    mountain_path = Path(resolved.mountain.path)
-    if not mountain_path.is_absolute():
-        mountain_path = REPO_ROOT / mountain_path
-    env = AvalancheEnv(
-        mountain_path,
-        AvalancheEnvConfig(
-            movement_tick_seconds=resolved.intervals.movement_tick_seconds,
-            control_interval_seconds=resolved.intervals.control_interval_seconds,
-            time_epsilon_seconds=resolved.numerics.time_epsilon_seconds,
-            episode_duration_seconds=resolved.episode_duration_seconds,
-        ),
-        simulator_options={
-            "population": resolved.population,
-            "routing": resolved.routing,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-            "audits": resolved.scenario.audits,
-            "operational_events": resolved.scenario.operational_events,
-            "route_sensor": resolved.scenario.route_sensor,
-            "reported_risk": resolved.scenario.reported_risk,
-            "numerics": resolved.numerics,
-        },
-    )
+    env = build_resolved_environment(resolved)
     controller = build_controller(resolved.controller, env.topology)
     fallback = build_fallback(
         resolved.fallback.policy, resolved.controller, env.topology

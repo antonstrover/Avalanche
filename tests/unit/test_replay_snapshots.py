@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from avalanche.config.models import PopulationConfig
+from avalanche.metrics import METRICS_VERSION
 from avalanche.sim import MountainSim, display_progress
 from avalanche.traces import (
     SNAPSHOT_SCHEMA_VERSION,
@@ -130,6 +131,7 @@ def test_the_snapshot_records_each_non_array_state_group():
         "metrics",
         "random_streams",
     }
+    assert state["metrics"]["metrics_version"] == METRICS_VERSION
 
 
 def test_version_two_rejects_formal_state_restoration():

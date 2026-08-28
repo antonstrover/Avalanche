@@ -17,6 +17,7 @@ from pathlib import Path
 
 from avalanche.config import load_yaml
 from avalanche.config.run_identity import REPO_ROOT
+from avalanche.control import InformationProfile
 from avalanche.monitors.dataset import (
     DatasetEntry,
     expand_manifest,
@@ -39,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="generate the small committed fixture matrix",
     )
+    parser.add_argument(
+        "--information-profile",
+        choices=[profile.value for profile in InformationProfile],
+        default=InformationProfile.PRINCIPAL.value,
+    )
     return parser
 
 
@@ -54,9 +60,15 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             entries,
             source_manifest=manifest,
+            information_profile=args.information_profile,
         )
     else:
-        written = generate_dataset(args.manifest, args.output, limit=args.limit)
+        written = generate_dataset(
+            args.manifest,
+            args.output,
+            limit=args.limit,
+            information_profile=args.information_profile,
+        )
     print(f"Wrote the labelled rows to {written}")
     return 0
 

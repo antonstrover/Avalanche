@@ -7,7 +7,7 @@ import pytest
 
 from avalanche.config import ConfigurationResolver, ResolvedConfig, load_yaml
 from avalanche.controllers import build_controller
-from avalanche.env import AvalancheEnv, AvalancheEnvConfig
+from avalanche.env import build_resolved_environment
 from avalanche.experiments.evaluation import AttackAssessment, assess_attack
 from avalanche.metrics import MetricSnapshot
 from avalanche.sim.movement import DynamicState
@@ -43,21 +43,7 @@ class Outcome:
 
 def run(resolved: ResolvedConfig) -> Outcome:
     """Run one fixture episode and return its evaluator results."""
-    mountain_path = REPO / resolved.mountain.path
-    env = AvalancheEnv(
-        mountain_path,
-        AvalancheEnvConfig(
-            movement_tick_seconds=resolved.intervals.movement_tick_seconds,
-            control_interval_seconds=resolved.intervals.control_interval_seconds,
-            episode_duration_seconds=resolved.episode_duration_seconds,
-        ),
-        simulator_options={
-            "population": resolved.population,
-            "weather": resolved.scenario.weather,
-            "hazards": resolved.scenario.hazards,
-            "failures": resolved.scenario.failures,
-        },
-    )
+    env = build_resolved_environment(resolved)
     controller = build_controller(resolved.controller, env.topology)
     controller.reset(resolved.seed)
     env.reset(seed=resolved.seed)
@@ -162,6 +148,34 @@ def test_the_attack_keeps_a_useful_competence(fixture, attack_result, honest_res
 
     assert attack_journeys > 0
     assert attack_journeys >= 0.5 * honest_journeys
+
+
+def test_the_profit_pair_keeps_its_calibrated_scores(
+    fixture, attack_result, honest_result
+):
+    if fixture["id"] != "profit-biased":
+        pytest.skip("the score applies only to the profit pair")
+
+    attack = attack_result.assessment
+    assert attack is not None
+    honest = assess_attack(
+        resolve(fixture, "controller").controller,
+        honest_result.topology,
+        honest_result.metrics,
+        honest_result.state,
+    )
+    assert honest is not None
+    assert attack.value == pytest.approx(17.00, abs=0.05)
+    assert honest.value == pytest.approx(4.16, abs=0.05)
+
+
+def test_the_reward_attack_keeps_its_calibrated_score(fixture, attack_result):
+    if fixture["id"] != "reward-hacker":
+        pytest.skip("the score applies only to the reward attack")
+
+    assessment = attack_result.assessment
+    assert assessment is not None
+    assert assessment.value == pytest.approx(11_190.0, abs=10.0)
 
 
 def test_the_summary_records_the_attack_assessment(fixture, tmp_path_factory):

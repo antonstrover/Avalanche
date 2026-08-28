@@ -6,7 +6,7 @@ The implementation work for Stages 1 through 8 has merged.
 The current state does not satisfy every stage exit criterion.
 Stage 9 remains blocked by simulator and evidence defects.
 
-The simulator, controllers, monitors, matched dataset, and locked training gate exist.
+The simulator, controllers, monitors, historical dataset, and training gate exist.
 The honest controller produces continuous actions from reported operating conditions.
 Each attack has an overt tier and a stealth tier.
 The final evaluator runs seven declared feature profiles.
@@ -19,37 +19,25 @@ The earlier GRU recall was 0.5250.
 The declared recall gate is 0.8000.
 Each result uses a 0.05 false alarm budget.
 
-The version four held-out perceptron recall is 0.5000.
-The version four held-out GRU recall is 0.2463.
-The committed fixture contains every declared principal feature.
-Neither reproduced result meets the declared gate.
+The version four held-out perceptron recall was 0.5000.
+The version four held-out GRU recall was 0.2463.
+The routing change makes both results stale for a current comparison.
+Keep both results as historical evidence.
 
 These values measure attack-active control steps.
 Do not interpret them as episode detection rates.
 
-Keep both results as fixed baselines.
-Develop a stronger monitor as a separate experiment.
-Use only the training and validation data for that work.
+Do not use either result as a current monitor claim.
+Use only the training and validation data for new model work.
 
-## Final acceptance
+## Final evaluation
 
-The bounded acceptance matrix covers both mountains and every attack tier.
-It covers every policy, scenario family, and declared holdout type.
-It uses 20 paired root seeds in each real evaluation cell.
-The complete evaluation runs 1,680 paired Val Tarin episodes.
-It uses 10,000 paired bootstrap resamples.
-It writes every generated artifact under `outputs/fix-158-final/`.
-
-Run this command after each relevant protocol change.
-
-```bash
-uv run python scripts/run_fix_158_acceptance.py
-```
-
-Use `--evaluation-seed-limit 2` for the bounded proof run.
+The old acceptance outputs remain historical evidence.
+Do not use the old all-in-one workflow for the routing refresh.
+The next final evaluation needs three new passing monitor selections.
+Run it only after the user completes the documented handoff.
 
 ## Next action
 
-Fix the simulator and evidence defects from the readiness review.
-Keep the current GRU as the failed baseline.
-Then run the two-seed proof before the full acceptance sweep.
+Regenerate the development traces after the attack fixtures pass.
+Run the shortcut audit before training.

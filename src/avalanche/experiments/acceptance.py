@@ -28,6 +28,7 @@ from avalanche.experiments.final_evaluation import (
     POLICY_VARIANTS,
     load_evaluation_config,
 )
+from avalanche.metrics import METRICS_VERSION
 from avalanche.monitors.dataset import DATASET_VERSION, DatasetEntry, expand_manifest
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.perceptron import (
@@ -53,6 +54,7 @@ VERSION_INVENTORY = {
     "envelope_version": ENVELOPE_VERSION,
     "evaluation_version": EVALUATION_VERSION,
     "feature_version": FEATURE_VERSION,
+    "metrics_version": METRICS_VERSION,
     "model_version": MODEL_VERSION,
     "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
     "operational_event_schema_version": OPERATIONAL_EVENT_SCHEMA_VERSION,
