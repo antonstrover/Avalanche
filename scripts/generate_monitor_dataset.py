@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-progress",
         action="store_true",
-        help="disable the live terminal report",
+        help="disable the Textual observer",
     )
     return parser
 
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.fixture:
                 entries = fixture_entries(expand_manifest(manifest))
-                written = generate_dataset_entries(
+                generate_dataset_entries(
                     args.manifest,
                     args.output,
                     entries,
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
                     stage_id=stage_id,
                 )
             else:
-                written = generate_dataset(
+                generate_dataset(
                     args.manifest,
                     args.output,
                     limit=args.limit,
@@ -122,7 +122,6 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
             raise
-    print(f"Wrote the labelled rows to {written}")
     return 0
 
 

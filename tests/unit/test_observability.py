@@ -22,9 +22,10 @@ from avalanche.observability import (
     ObservabilitySession,
     ParquetSizeEstimator,
     ProcessTreeSampler,
-    RichReporter,
     StageStatus,
+    TextualReporter,
 )
+from avalanche.observability.reporter import _resource_view, _semantic_view
 
 
 def event(
@@ -339,7 +340,7 @@ def test_the_gru_gate_does_not_replace_the_perceptron_gate_decision():
     assert state.stage("principal-gru-calibration").gate is not None
 
 
-def test_render_keeps_gate_validation_and_exact_size_evidence_visible():
+def test_views_keep_gate_validation_and_exact_size_evidence_visible():
     metrics = MetricsAggregator()
     metrics.apply(
         MetricEvent.create(
@@ -373,18 +374,15 @@ def test_render_keeps_gate_validation_and_exact_size_evidence_visible():
         )
     )
     stream = StringIO()
-    reporter = RichReporter(
-        metrics,
-        enabled=False,
-        console=Console(file=stream, force_terminal=False, width=120),
-    )
-
-    reporter.console.print(reporter.render())
+    console = Console(file=stream, force_terminal=False, width=120)
+    state = metrics.snapshot()
+    console.print(_semantic_view(state))
+    console.print(_resource_view(state))
     rendered = stream.getvalue()
 
-    assert "Perceptron gate" in rendered
+    assert "Validation gate" in rendered
     assert "GRU fallback" in rendered
-    assert "Validation metrics" in rendered
+    assert "Validation statistics" in rendered
     assert "Final size" in rendered
 
 
@@ -517,17 +515,17 @@ def test_aggregator_is_thread_safe_for_completion_events():
     assert stage.rows_generated == 2_000
 
 
-def test_disabled_and_noninteractive_reporters_write_nothing():
+def test_disabled_and_noninteractive_reporters_skip_the_observer():
     metrics = MetricsAggregator()
     metrics.apply(MetricEvent.create("stage_started", "traces", total_episodes=2))
     disabled_stream = StringIO()
-    disabled = RichReporter(
+    disabled = TextualReporter(
         metrics,
         enabled=False,
         console=Console(file=disabled_stream, force_terminal=True),
     )
     noninteractive_stream = StringIO()
-    noninteractive = RichReporter(
+    noninteractive = TextualReporter(
         metrics,
         console=Console(file=noninteractive_stream, force_terminal=False),
     )
@@ -539,8 +537,12 @@ def test_disabled_and_noninteractive_reporters_write_nothing():
 
     assert not disabled.enabled
     assert not noninteractive.enabled
-    assert disabled_stream.getvalue() == ""
-    assert noninteractive_stream.getvalue() == ""
+    assert not disabled.active
+    assert not noninteractive.active
+    assert disabled_stream.getvalue().count("COMPLETED") == 1
+    assert noninteractive_stream.getvalue().count("COMPLETED") == 1
+    assert "\x1b[" not in disabled_stream.getvalue()
+    assert "\x1b[" not in noninteractive_stream.getvalue()
 
 
 def test_session_logs_significant_events_without_terminal_output(tmp_path, capsys):
@@ -556,7 +558,9 @@ def test_session_logs_significant_events_without_terminal_output(tmp_path, capsy
 
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
 
-    assert capsys.readouterr() == ("", "")
+    captured = capsys.readouterr()
+    assert "COMPLETED" in captured.out
+    assert captured.err == ""
     assert any(
         record["record"]["extra"].get("event_kind") == "retry" for record in records
     )
@@ -627,8 +631,8 @@ def test_resource_sampler_reports_the_current_process_tree():
     sample = ProcessTreeSampler(minimum_interval=0.0).sample(force=True)
 
     assert sample.process_count >= 1
-    assert sample.tree_rss_bytes >= 0
-    assert sample.system_memory_percent >= 0.0
+    assert sample.tree_rss_bytes is None or sample.tree_rss_bytes >= 0
+    assert sample.system_memory_percent is None or sample.system_memory_percent >= 0.0
 
 
 def test_observability_does_not_consume_the_random_stream():

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from math import ceil, isfinite
@@ -16,6 +16,47 @@ from typing import Any
 from avalanche.observability.events import MetricEvent
 from avalanche.observability.resources import ResourceSample
 from avalanche.observability.size import ParquetSizeEstimator, ParquetSizeSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenMapping(Mapping[str, Any]):
+    """Hold a picklable immutable mapping."""
+
+    _items: tuple[tuple[str, Any], ...] = ()
+
+    def __getitem__(self, key: str) -> Any:
+        for item_key, value in self._items:
+            if item_key == key:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (key for key, _value in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Mapping):
+            return dict(self.items()) == dict(other.items())
+        return False
+
+
+def freeze_mapping(values: Mapping[str, Any]) -> FrozenMapping:
+    """Return a recursively immutable and picklable mapping."""
+    return FrozenMapping(
+        tuple((str(key), _freeze_value(value)) for key, value in values.items())
+    )
+
+
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return freeze_mapping(value)
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
 
 
 class MetricKind(StrEnum):
@@ -166,7 +207,7 @@ class CalibrationSnapshot:
     rows_processed: int
     total_rows: int | None
     threshold: float | None
-    metrics: dict[str, float]
+    metrics: FrozenMapping
     elapsed_seconds: float
     eta_seconds: float | None
 
@@ -182,7 +223,7 @@ class GateSnapshot:
     required: float | None
     comparison: str
     passed: bool
-    values: dict[str, Any]
+    values: FrozenMapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,7 +262,7 @@ class StageSnapshot:
     retries: int
     rejected: int
     failures: int
-    counters: dict[str, int]
+    counters: FrozenMapping
     latency: LatencySnapshot
     training: TrainingSnapshot
     current_model: str | None
@@ -232,7 +273,7 @@ class StageSnapshot:
     gru_state: GRUState
     parquet: ParquetSizeSnapshot | None
     resources: ResourceSample | None
-    metrics: dict[str, Any]
+    metrics: FrozenMapping
     error: str | None
 
     @property
@@ -250,7 +291,7 @@ class PipelineSnapshot:
     completed_stages: int
     total_stages: int
     overall_eta_seconds: float | None
-    run_context: dict[str, Any]
+    run_context: FrozenMapping
     principal_traces_generated: int
     oracle_true_states_generated: int
     oracle_fallbacks_generated: int
@@ -341,7 +382,7 @@ class MetricsAggregator:
         self,
         *,
         latency_capacity: int = 2_048,
-        recent_event_capacity: int = 20,
+        recent_event_capacity: int = 200,
     ) -> None:
         if latency_capacity < 1:
             raise ValueError("the latency sample capacity must be positive")
@@ -498,7 +539,7 @@ class MetricsAggregator:
                 ),
                 total_stages=len(stages),
                 overall_eta_seconds=overall_eta,
-                run_context=dict(self._run_context),
+                run_context=freeze_mapping(self._run_context),
                 principal_traces_generated=counters.get("principal_traces", 0),
                 oracle_true_states_generated=counters.get("oracle_true_states", 0),
                 oracle_fallbacks_generated=fallbacks,
@@ -821,7 +862,7 @@ class MetricsAggregator:
             required=_optional_float(values.get("required"), None),
             comparison=str(values.get("comparison", "at_least")),
             passed=bool(values["passed"]),
-            values=dict(values),
+            values=freeze_mapping(values),
         )
         stage.gate = gate
         model_name = str(values.get("model_name", "perceptron"))
@@ -897,22 +938,51 @@ class MetricsAggregator:
         if isinstance(sample, ResourceSample):
             stage.resources = sample
             return
+        tree_cpu_percent = _optional_float(
+            values.get("tree_cpu_percent"),
+            None,
+        )
+        logical_cpu_count = _optional_nonnegative_int(
+            values.get("logical_cpu_count"),
+            None,
+        )
+        tree_cpu_cores = _optional_float(
+            values.get("tree_cpu_cores"),
+            (tree_cpu_percent / 100.0 if tree_cpu_percent is not None else None),
+        )
+        capacity = _optional_float(
+            values.get("tree_cpu_capacity_percent"),
+            (
+                tree_cpu_percent / logical_cpu_count
+                if tree_cpu_percent is not None and logical_cpu_count
+                else None
+            ),
+        )
         stage.resources = ResourceSample(
             timestamp=_optional_float(values.get("timestamp"), event.timestamp)
             or event.timestamp,
-            system_cpu_percent=_optional_float(values.get("system_cpu_percent"), 0.0)
-            or 0.0,
+            system_cpu_percent=_optional_float(
+                values.get("system_cpu_percent"),
+                None,
+            ),
             system_memory_percent=_optional_float(
-                values.get("system_memory_percent"), 0.0
-            )
-            or 0.0,
-            tree_cpu_percent=_optional_float(values.get("tree_cpu_percent"), 0.0)
-            or 0.0,
-            tree_memory_percent=_optional_float(values.get("tree_memory_percent"), 0.0)
-            or 0.0,
-            tree_rss_bytes=_optional_count(values.get("tree_rss_bytes"), 0),
+                values.get("system_memory_percent"),
+                None,
+            ),
+            tree_cpu_percent=tree_cpu_percent,
+            tree_memory_percent=_optional_float(
+                values.get("tree_memory_percent"),
+                None,
+            ),
+            tree_rss_bytes=_optional_nonnegative_int(
+                values.get("tree_rss_bytes"),
+                None,
+            ),
             process_count=_optional_count(values.get("process_count"), 0),
             processes=(),
+            logical_cpu_count=logical_cpu_count,
+            tree_cpu_cores=tree_cpu_cores,
+            tree_cpu_capacity_percent=capacity,
             gpu_percent=_optional_float(values.get("gpu_percent"), None),
             gpu_memory_bytes=_optional_nonnegative_int(
                 values.get("gpu_memory_bytes"), None
@@ -1020,7 +1090,7 @@ class MetricsAggregator:
             retries=stage.counters.get("retries", 0),
             rejected=stage.counters.get("rejected", 0),
             failures=stage.counters.get("failures", 0),
-            counters=dict(stage.counters),
+            counters=freeze_mapping(stage.counters),
             latency=stage.latency.snapshot(),
             training=training,
             current_model=stage.current_model,
@@ -1031,7 +1101,7 @@ class MetricsAggregator:
             gru_state=stage.gru_state,
             parquet=stage.parquet.snapshot() if stage.parquet else None,
             resources=stage.resources,
-            metrics=dict(stage.metrics),
+            metrics=freeze_mapping(stage.metrics),
             error=stage.error,
         )
 
@@ -1094,7 +1164,7 @@ class MetricsAggregator:
             rows_processed=stage.calibration_rows,
             total_rows=stage.calibration_total_rows,
             threshold=stage.calibration_threshold,
-            metrics=dict(stage.calibration_metrics),
+            metrics=freeze_mapping(stage.calibration_metrics),
             elapsed_seconds=elapsed,
             eta_seconds=eta,
         )

@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-progress",
         action="store_true",
-        help="disable the live terminal report",
+        help="disable the Textual observer",
     )
     return parser
 
@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
                     validation_rows=len(validation),
                 )
             )
-            result = train_locked_monitor(
+            train_locked_monitor(
                 train,
                 validation,
                 args.shortcut_report,
@@ -112,8 +112,6 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as error:
             _fail_running_stages(session, stage_id, error)
             raise
-    print(f"Wrote the locked monitor to {args.output}")
-    print(f"Selected the {result['metadata']['model_kind']} model.")
     return 0
 
 
