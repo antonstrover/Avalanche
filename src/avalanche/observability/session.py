@@ -20,7 +20,7 @@ from avalanche.observability.events import (
     drain_metric_events,
 )
 from avalanche.observability.metrics import MetricsAggregator, StageStatus
-from avalanche.observability.reporter import RichReporter
+from avalanche.observability.reporter import SummaryOutcome, TextualReporter
 from avalanche.observability.resources import ProcessTreeSampler
 
 
@@ -31,7 +31,7 @@ class ObservabilitySession:
         self,
         *,
         aggregator: MetricsAggregator | None = None,
-        reporter: RichReporter | None = None,
+        reporter: TextualReporter | None = None,
         enabled: bool | None = None,
         log_path: Path | None = None,
         multiprocessing: bool = False,
@@ -44,7 +44,10 @@ class ObservabilitySession:
         if refresh_interval < 0.0:
             raise ValueError("the report refresh interval must be nonnegative")
         self.aggregator = aggregator or MetricsAggregator()
-        self.reporter = reporter or RichReporter(self.aggregator, enabled=enabled)
+        self.reporter = reporter or TextualReporter(
+            self.aggregator,
+            enabled=enabled,
+        )
         self.emitter: MetricEmitter = DirectMetricEmitter(self._handle_event)
         self.resource_interval = resource_interval
         self.refresh_interval = refresh_interval
@@ -110,6 +113,11 @@ class ObservabilitySession:
             self._started = True
             try:
                 self.reporter.start()
+                self._exclude_observer()
+            except KeyboardInterrupt:
+                self.reporter.enabled = False
+                self.close(outcome=SummaryOutcome.INTERRUPTED)
+                raise
             except Exception as error:
                 self._remember_error(error)
                 self.reporter.enabled = False
@@ -126,7 +134,7 @@ class ObservabilitySession:
             return 0
         return drain_metric_events(queue, self._handle_event, limit=limit)
 
-    def close(self) -> None:
+    def close(self, *, outcome: SummaryOutcome | None = None) -> None:
         """Drain events before the Manager shuts down."""
         with self._lock:
             if self._closed:
@@ -145,7 +153,15 @@ class ObservabilitySession:
         except Exception as error:
             self._remember_error(error)
         try:
+            if outcome is not None:
+                self.reporter.set_outcome(outcome)
+        except Exception as error:
+            self._remember_error(error)
+        try:
             self.reporter.refresh()
+        except Exception as error:
+            self._remember_error(error)
+        try:
             self.reporter.stop()
         except Exception as error:
             self._remember_error(error)
@@ -225,6 +241,7 @@ class ObservabilitySession:
     def _background_loop(self) -> None:
         try:
             while not self._stop.is_set():
+                self._check_reporter()
                 self._consume_one()
                 self._sample_resources()
             self.drain_pending()
@@ -245,6 +262,13 @@ class ObservabilitySession:
         if not isinstance(item, MetricEvent):
             raise TypeError("a metric queue item must be a MetricEvent")
         self._handle_event(item)
+
+    def _check_reporter(self) -> None:
+        try:
+            self.reporter.active
+        except Exception as error:
+            self._remember_error(error)
+            self.reporter.enabled = False
 
     def _sample_resources(self, *, force: bool = False) -> None:
         sampler = self._sampler
@@ -272,6 +296,13 @@ class ObservabilitySession:
         if self._closed:
             raise RuntimeError("the observability session is closed")
 
+    def _exclude_observer(self) -> None:
+        sampler = self._sampler
+        pid = self.reporter.observer_pid
+        if sampler is None or pid is None:
+            return
+        sampler.exclude_process(pid, self.reporter.observer_create_time)
+
     def _remember_error(self, error: BaseException) -> None:
         """Keep the first internal monitoring error."""
         with self._lock:
@@ -282,8 +313,20 @@ class ObservabilitySession:
         self.start()
         return self
 
-    def __exit__(self, *_args: object) -> None:
-        self.close()
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        _exception: BaseException | None,
+        _traceback: object,
+    ) -> None:
+        outcome = None
+        if exception_type is not None:
+            outcome = (
+                SummaryOutcome.INTERRUPTED
+                if issubclass(exception_type, KeyboardInterrupt)
+                else SummaryOutcome.FAILED
+            )
+        self.close(outcome=outcome)
 
 
 def _isolated_logger() -> Logger:

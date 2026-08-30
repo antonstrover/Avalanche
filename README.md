@@ -259,8 +259,14 @@ Do not overwrite the fixture during this refresh.
 
 Follow the [monitor refresh handoff](docs/monitor-refresh.md).
 It gives the exact trace, audit, training, calibration, and evaluation commands.
-The trace and training commands show a live progress report.
-Add `--no-progress` to disable only the terminal display.
+The trace and training commands show a full-screen Textual dashboard.
+The dashboard runs in a separate observer process.
+Dataset generation stays on the main thread.
+The observer receives immutable snapshots through a capacity-one queue.
+A new snapshot replaces any older pending snapshot.
+Non-interactive output disables the observer automatically.
+Add `--no-progress` to disable the observer explicitly.
+Each command prints one compact summary after terminal restoration.
 Each command still writes a structured observability log.
 
 ### The scene data

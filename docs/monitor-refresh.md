@@ -13,13 +13,21 @@ The routing metrics do not change the learned feature columns.
 
 ## Run reporting
 
-The generation and training commands show one live terminal report.
-The parent process owns the report during parallel generation.
-The report closes automatically when the command finishes.
+The generation and training commands show one full-screen Textual dashboard.
+The dashboard runs in a separate observer process.
+The generation coordinator stays on the main thread.
+The existing simulation worker pool remains unchanged.
+The observer receives immutable snapshots through a capacity-one queue.
+A new snapshot replaces any older pending snapshot.
+An observer failure does not stop generation.
+The dashboard restores the terminal after completion, failure, or interruption.
+Each command then prints one compact final summary.
+`Ctrl-C` continues to interrupt generation.
 
-Add `--no-progress` to disable only the live report.
+Add `--no-progress` to disable the observer and the dashboard.
 Metric collection and persistent logging remain active.
-Redirected commands also disable the live report automatically.
+Non-interactive output also disables the observer automatically.
+The final summary remains available without the dashboard.
 
 Each dataset log uses the dataset name with an `.observability.jsonl` suffix.
 Each training log sits beside its model directory.
@@ -27,7 +35,7 @@ The log uses the model directory name with an `.observability.jsonl` suffix.
 
 The Parquet estimate starts as provisional.
 It becomes stable after two encoded row groups.
-The completed report shows the exact final file size.
+The final statistics show the exact final file size.
 
 The training report shows the perceptron gate evidence.
 It marks the GRU fallback as not required after a passing gate.

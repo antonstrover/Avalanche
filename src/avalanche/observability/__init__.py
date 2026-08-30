@@ -23,8 +23,14 @@ from avalanche.observability.metrics import (
     TrainingSnapshot,
     WorkerSnapshot,
 )
-from avalanche.observability.reporter import RichReporter
+from avalanche.observability.reporter import (
+    PipelineApp,
+    SummaryOutcome,
+    TextualReporter,
+    compact_summary,
+)
 from avalanche.observability.resources import (
+    ProcessIdentity,
     ProcessResource,
     ProcessTreeSampler,
     ResourceSample,
@@ -51,15 +57,19 @@ __all__ = [
     "ParquetSizeEstimator",
     "ParquetSizeSnapshot",
     "PipelineSnapshot",
+    "PipelineApp",
+    "ProcessIdentity",
     "ProcessResource",
     "ProcessTreeSampler",
     "QueueMetricEmitter",
     "ResourceSample",
-    "RichReporter",
+    "SummaryOutcome",
+    "TextualReporter",
     "SignificantEvent",
     "StageSnapshot",
     "StageStatus",
     "TrainingSnapshot",
     "WorkerSnapshot",
+    "compact_summary",
     "drain_metric_events",
 ]
