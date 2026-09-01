@@ -11,6 +11,7 @@ from avalanche.config.models import (
     RoutingConfig,
     SensorPolicyConfig,
 )
+from avalanche.control.types import VISIBLE_FAILURE_CAPACITY
 from avalanche.scenarios.sensors import (
     BLOCKED_SENSOR_CHANNELS,
     ROUTE_SENSOR_CHANNELS,
@@ -63,6 +64,28 @@ def sources(
         "queued_no_route_count": np.full(node_count, value),
         "onboard_blocked_count": np.full(edge_count, value),
     }
+
+
+def operational_sources(edge_count: int, node_count: int) -> dict[str, np.ndarray]:
+    """Return sources for every legacy and operational sensor."""
+    values = sources(edge_count, 1.0, node_count=node_count)
+    values.update(
+        {
+            "node_demand": np.ones(node_count, dtype=np.int64),
+            "node_crowding": np.ones(node_count, dtype=np.int64),
+            "edge_occupancy": np.ones(edge_count, dtype=np.int64),
+            "lift_occupancy": np.ones(edge_count, dtype=np.int64),
+            "weather": np.ones(4, dtype=np.float64),
+            "visible_failure_kind": np.zeros(VISIBLE_FAILURE_CAPACITY, dtype=np.int16),
+            "visible_failure_target": np.zeros(
+                VISIBLE_FAILURE_CAPACITY, dtype=np.int32
+            ),
+            "visible_failure_present": np.zeros(
+                VISIBLE_FAILURE_CAPACITY, dtype=np.bool_
+            ),
+        }
+    )
+    return values
 
 
 def test_bootstrap_packet_has_required_identity_and_times():
@@ -259,6 +282,47 @@ def test_blocked_draws_do_not_change_operational_route_reports():
         first_packet.reported_onboard_blocked_count,
         second_packet.reported_onboard_blocked_count,
     )
+
+
+def test_operational_sampling_does_not_advance_the_legacy_sensor_stream():
+    """Keep legacy reports stable when the complete packet adds new sensors."""
+    first = RouteSensorChannel(
+        SensorPolicyConfig(),
+        60.0,
+        np.random.default_rng(30),
+        np.random.default_rng(31),
+        operational_rng=np.random.default_rng(32),
+    )
+    second = RouteSensorChannel(
+        SensorPolicyConfig(),
+        60.0,
+        np.random.default_rng(30),
+        np.random.default_rng(31),
+        operational_rng=np.random.default_rng(32),
+    )
+
+    first.bootstrap(**operational_sources(40, 10))
+    second.bootstrap(**sources(40, 1.0, node_count=10))
+    first_packet = first.deliver(60.0)
+    second_packet = second.deliver(60.0)
+
+    for name in (
+        "reported_speed_factor",
+        "reported_density_ratio",
+        "reported_weather_risk",
+        "reported_queue_length",
+        "reported_boarding_throughput",
+        "availability_missing",
+        "speed_factor_missing",
+        "density_ratio_missing",
+        "weather_risk_missing",
+        "queue_length_missing",
+        "boarding_throughput_missing",
+    ):
+        np.testing.assert_array_equal(
+            getattr(first_packet, name),
+            getattr(second_packet, name),
+        )
 
 
 def test_perfect_packet_defaults_new_reports_to_zero():

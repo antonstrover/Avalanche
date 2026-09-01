@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 import numpy as np
@@ -354,6 +354,7 @@ def train_gru(
     epochs: int = 40,
     learning_rate: float = 1e-3,
     information_profile: InformationProfile | str = InformationProfile.PRINCIPAL,
+    feature_version: int = FEATURE_VERSION,
     emitter: MetricEmitter | None = None,
     stage_id: str = "gru-training",
 ) -> TrainedGRU:
@@ -422,7 +423,7 @@ def train_gru(
         metadata={
             "model_version": MODEL_VERSION,
             "model_kind": "gru",
-            "feature_version": FEATURE_VERSION,
+            "feature_version": feature_version,
             "information_profile": profile.value,
             "window_length": WINDOW_LENGTH,
             "gru_layers": 1,
@@ -683,14 +684,38 @@ def compare_declared_models(
     held_out: pd.DataFrame,
     *,
     config: TrainingConfig | None = None,
+    feature_names: tuple[str, ...] | None = None,
+    feature_version: int | None = None,
     emitter: MetricEmitter | None = None,
     stage_id: str | None = None,
 ) -> tuple[ModelComparison, ModelComparison]:
-    """Compare the declared models on the same held-out window endpoints."""
+    """Compare the declared models on the same held-out window endpoints.
+
+    Use an explicit schema only for a verified historical replay.
+    """
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)
     base_stage = stage_id or f"monitor-{profile.value.replace('_', '-')}"
-    feature_names = feature_names_for(profile)
+    if feature_names is not None and feature_version is None:
+        raise ValueError("explicit feature names need their feature version")
+    if feature_version is None:
+        feature_version = FEATURE_VERSION
+    if isinstance(feature_version, bool) or not isinstance(feature_version, int):
+        raise TypeError("the comparison feature version must be an integer")
+    if feature_version <= 0:
+        raise ValueError("the comparison feature version must be positive")
+    if feature_names is None:
+        if feature_version != FEATURE_VERSION:
+            raise ValueError("a historical feature version needs its feature names")
+        feature_names = feature_names_for(profile)
+    feature_names = tuple(feature_names)
+    invalid_names = any(not isinstance(name, str) or not name for name in feature_names)
+    if (
+        not feature_names
+        or invalid_names
+        or len(set(feature_names)) != len(feature_names)
+    ):
+        raise ValueError("the comparison feature names must be unique")
     validation_windows = build_run_windows(validation, feature_names)
     held_out_windows = build_run_windows(held_out, feature_names)
     validation_rows = _window_rows(validation, validation_windows)
@@ -700,11 +725,13 @@ def compare_declared_models(
         train,
         validation,
         config,
+        feature_names=feature_names,
+        feature_version=feature_version,
         emitter=emitter,
         stage_id=f"{base_stage}-perceptron",
     )
     perceptron_calibration = calibrate_and_gate(
-        perceptron.logits(_features(validation_rows, profile)),
+        perceptron.logits(_features(validation_rows, profile, feature_names)),
         validation_rows,
         emitter=emitter,
         stage_id=f"{base_stage}-perceptron-calibration",
@@ -712,7 +739,7 @@ def compare_declared_models(
     )
     perceptron_result = _comparison_result(
         "perceptron",
-        perceptron.logits(_features(held_out_rows, profile)),
+        perceptron.logits(_features(held_out_rows, profile, feature_names)),
         held_out_rows,
         perceptron_calibration,
     )
@@ -725,6 +752,7 @@ def compare_declared_models(
         epochs=config.epochs,
         learning_rate=config.learning_rate,
         information_profile=profile,
+        feature_version=feature_version,
         emitter=emitter,
         stage_id=f"{base_stage}-gru-training",
     )
@@ -1512,10 +1540,16 @@ def _load_verified_scoring_model(
 
 
 def _features(
-    frame: pd.DataFrame, information_profile: InformationProfile | str
+    frame: pd.DataFrame,
+    information_profile: InformationProfile | str,
+    feature_names: tuple[str, ...] | None = None,
 ) -> np.ndarray:
     """Return feature values in their declared order."""
-    names = feature_names_for(information_profile)
+    names = (
+        feature_names_for(information_profile)
+        if feature_names is None
+        else feature_names
+    )
     return frame.loc[:, list(names)].to_numpy(dtype=np.float32)
 
 
@@ -1631,7 +1665,10 @@ def _write_lock(
         lock_version=LOCK_VERSION,
         attempt_name=attempt_name,
         model_kind=metadata["model_kind"],
-        information_profile=information_profile.value,
+        information_profile=cast(
+            Literal["principal", "oracle_fallback", "oracle_true_state"],
+            information_profile.value,
+        ),
         feature_names=feature_names_for(information_profile),
         model_filename=model_path.name,
         model_sha256=_checksum(model_path),

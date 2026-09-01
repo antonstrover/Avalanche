@@ -717,7 +717,11 @@ class TextualReporter:
             if self._summary_printed:
                 return
             self._summary_printed = True
-        self.console.print(compact_summary(snapshot, self._outcome))
+        summary = compact_summary(snapshot, self._outcome)
+        if self.enabled:
+            self.console.print(summary)
+        else:
+            self.console.print(summary.plain, markup=False, highlight=False)
 
     def __enter__(self) -> TextualReporter:
         self.start()

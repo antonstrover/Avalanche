@@ -534,10 +534,11 @@ def test_perceptron_emits_batch_and_weighted_epoch_metrics():
         rows,
         rows,
         config,
+        feature_version=2,
         emitter=emitter,
         stage_id="test-perceptron",
     )
-    plain = train_perceptron(rows, rows, config)
+    plain = train_perceptron(rows, rows, config, feature_version=2)
 
     progress = [event for event in emitter.events if event.kind == "epoch_progress"]
     batches = [event for event in progress if event.values["phase"] == "batch"]
@@ -561,6 +562,7 @@ def test_perceptron_emits_batch_and_weighted_epoch_metrics():
     assert completed.values["validation_brier_score"] >= 0.0
     assert completed.values["validation_average_precision"] >= 0.0
     values = rows.loc[:, list(FEATURE_NAMES)].to_numpy(dtype=np.float32)
+    assert instrumented.metadata["feature_version"] == 2
     assert np.array_equal(instrumented.logits(values), plain.logits(values))
 
 
@@ -571,16 +573,18 @@ def test_gru_emits_one_metric_for_each_epoch():
         windows,
         FEATURE_NAMES,
         epochs=2,
+        feature_version=2,
         emitter=emitter,
         stage_id="test-gru",
     )
-    plain = train_gru(windows, FEATURE_NAMES, epochs=2)
+    plain = train_gru(windows, FEATURE_NAMES, epochs=2, feature_version=2)
 
     epochs = [event for event in emitter.events if event.kind == "epoch_progress"]
     assert len(epochs) == 2
     assert epochs[-1].values["epoch"] == 2
     assert epochs[-1].values["samples"] == 2 * len(windows.labels)
     assert epochs[-1].values["training_loss"] >= 0.0
+    assert instrumented.metadata["feature_version"] == 2
     assert np.array_equal(
         instrumented.logits(windows.features),
         plain.logits(windows.features),

@@ -15,14 +15,16 @@ RESULT = REPO / "docs" / "monitor-hardening" / "gru-ablation-result.json"
 
 
 def test_the_real_models_match_the_recorded_held_out_result():
-    rows = load_nonformal_legacy_dataset_v4_fixture(DATASET)
-    parts = split_declared_runs(rows)
+    fixture = load_nonformal_legacy_dataset_v4_fixture(DATASET)
+    parts = split_declared_runs(fixture.rows)
 
     results = compare_declared_models(
         parts["train"],
         parts["validation"],
         parts["test"],
         config=TrainingConfig(seed=20260825, epochs=60),
+        feature_names=fixture.feature_names,
+        feature_version=fixture.feature_version,
     )
     recorded = json.loads(RESULT.read_text())
 

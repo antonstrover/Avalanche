@@ -152,8 +152,9 @@ def test_two_resets_share_one_static_route_identity():
     assert first.routes is second.routes
 
 
-def test_the_blocked_sensor_stream_preserves_each_existing_stream_state():
-    existing_names = STREAM_NAMES[:-1]
+def test_the_appended_sensor_streams_preserve_each_existing_stream_state():
+    assert STREAM_NAMES[-2:] == ("operational_sensor", "audit_missing")
+    existing_names = STREAM_NAMES[:-2]
     original = np.random.default_rng(SEED).spawn(len(existing_names))
     extended = np.random.default_rng(SEED).spawn(len(STREAM_NAMES))
 
@@ -161,6 +162,22 @@ def test_the_blocked_sensor_stream_preserves_each_existing_stream_state():
         existing_names, original, extended[: len(existing_names)], strict=True
     ):
         assert before.bit_generator.state == after.bit_generator.state, name
+
+
+@pytest.mark.parametrize("stream_name", ("operational_sensor", "audit_missing"))
+def test_disturbing_an_appended_stream_preserves_every_existing_stream(stream_name):
+    plain = MountainSim(FIXTURE)
+    plain.reset(SEED)
+    disturbed = MountainSim(FIXTURE)
+    disturbed.reset(SEED)
+
+    disturbed.streams[stream_name].random(100)
+
+    for name in STREAM_NAMES[:-2]:
+        assert (
+            plain.streams[name].bit_generator.state
+            == disturbed.streams[name].bit_generator.state
+        )
 
 
 def test_route_tie_draws_do_not_change_external_schedules_or_sensor_packets():
@@ -204,6 +221,29 @@ def test_blocked_sensor_draws_do_not_change_operational_sensor_packets():
     disturbed = MountainSim(FIXTURE)
     disturbed.reset(SEED)
     disturbed.streams["blocked_sensor"].random(100)
+
+    for _ in range(24):
+        plain.tick()
+        disturbed.tick()
+
+    assert plain.route_sensor_packet.sample_time == 60.0
+    assert disturbed.route_sensor_packet.sample_time == 60.0
+    np.testing.assert_array_equal(
+        plain.route_sensor_packet.reported_speed_factor,
+        disturbed.route_sensor_packet.reported_speed_factor,
+    )
+    np.testing.assert_array_equal(
+        plain.route_sensor_packet.speed_factor_missing,
+        disturbed.route_sensor_packet.speed_factor_missing,
+    )
+
+
+def test_operational_sensor_draws_do_not_change_legacy_route_packets():
+    plain = MountainSim(FIXTURE)
+    plain.reset(SEED)
+    disturbed = MountainSim(FIXTURE)
+    disturbed.reset(SEED)
+    disturbed.streams["operational_sensor"].random(100)
 
     for _ in range(24):
         plain.tick()

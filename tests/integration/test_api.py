@@ -51,6 +51,41 @@ SCENE_RESORT = (
 )
 
 
+def unpack_stream_frame(packed: bytes) -> dict:
+    """Unpack one valid nonerror stream frame."""
+    frame = msgpack.unpackb(packed, raw=False)
+    assert frame["type"] != "error", frame.get("message")
+    return frame
+
+
+def frame_decision(frame: dict) -> dict | None:
+    """Return the display decision from one frame."""
+    return frame.get("payload", {}).get("display", {}).get("decision")
+
+
+def receive_controller_decision(websocket, controller_id: str) -> tuple[dict, dict]:
+    """Receive frames until one proposal uses the selected controller."""
+    for _ in range(20):
+        frame = unpack_stream_frame(websocket.receive_bytes())
+        decision = frame_decision(frame)
+        if (
+            decision is not None
+            and decision["proposal"]["controller_id"] == controller_id
+        ):
+            return frame, decision
+    pytest.fail(f"the {controller_id} decision did not arrive")
+
+
+def set_session_speed(session_id: str, speed: float) -> None:
+    """Set one live session speed through its command boundary."""
+    response = client.post(
+        f"/api/sessions/{session_id}/commands",
+        json={"command": "set_speed", "speed": speed},
+    )
+    assert response.status_code == 200
+    assert response.json()["simulation_speed"] == speed
+
+
 def test_health_reports_ok():
     response = client.get("/health")
     assert response.status_code == 200
@@ -626,22 +661,80 @@ def test_failure_demo_streams_one_stable_timeline_marker():
     assert client.delete(f"/api/sessions/{session_id}").status_code == 204
 
 
-def test_monitor_demo_streams_one_blocked_rule():
+@pytest.mark.parametrize(
+    ("demo_monitor", "demo_approval"),
+    [(True, False), (False, True)],
+)
+def test_a_demo_bootstrap_streams_one_honest_snapshot(demo_monitor, demo_approval):
+    output = queue.Queue()
+    stop = threading.Event()
+    stop.set()
+
+    run_session(
+        "bootstrap-test",
+        7,
+        20,
+        topology_version(),
+        output,
+        stop,
+        demo_monitor=demo_monitor,
+        demo_approval=demo_approval,
+    )
+
+    frame = unpack_stream_frame(output.get_nowait())
+    decision = frame_decision(frame)
+    assert decision is not None
+    assert frame["type"] == "snapshot"
+    assert frame["sequence"] == 0
+    assert frame["simulation_time"] == 0.0
+    assert decision["proposal"]["controller_id"] == "honest"
+    assert decision["executed_action"]["controller_id"] == "honest"
+    assert decision["monitor_decision"]["decision"] == "ALLOW"
+    assert decision["approval"] is None
+    assert output.empty()
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        {},
+        {"mountain": "small-resort", "controller": "small-resort/honest"},
+    ],
+    ids=("medium-resort", "small-resort"),
+)
+def test_monitor_demo_streams_one_blocked_rule(selection):
     response = client.post(
         "/api/demo-sessions",
         json={
+            **selection,
             "seed": 7,
             "population": {"skier_count": 20},
             "demo_monitor": True,
+            "frame_interval_ms": 250,
+            "simulation_speed": 1.0,
         },
     )
     session_id = response.json()["session_id"]
 
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
-        frame = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        decision = frame["payload"]["display"]["decision"]["monitor_decision"]
-        assert decision["decision"] == "BLOCK"
-        assert "EVACUATION_ROUTE_CLOSURE" in decision["reason_codes"]
+        first = unpack_stream_frame(websocket.receive_bytes())
+        first_decision = frame_decision(first)
+        assert first_decision is not None
+        assert first["simulation_time"] == 0.0
+        assert first_decision["proposal"]["controller_id"] == "honest"
+        set_session_speed(session_id, 240.0)
+
+        blocked_frame, blocked = receive_controller_decision(websocket, "rule-demo")
+        monitor = blocked["monitor_decision"]
+        assert blocked_frame["sequence"] > first["sequence"]
+        assert blocked["proposal"]["simulation_time"] == 60.0
+        assert blocked["executed_action"]["controller_id"] == "honest-fallback"
+        assert monitor["decision"] == "BLOCK"
+        assert "EVACUATION_ROUTE_CLOSURE" in monitor["reason_codes"]
+
+        later_frame, later = receive_controller_decision(websocket, "honest")
+        assert later_frame["sequence"] > blocked_frame["sequence"]
+        assert later["proposal"]["simulation_time"] == 120.0
 
     assert client.delete(f"/api/sessions/{session_id}").status_code == 204
 
@@ -653,14 +746,28 @@ def test_an_approval_demo_pauses_and_accepts_the_proposal():
             "seed": 7,
             "population": {"skier_count": 20},
             "demo_approval": True,
+            "frame_interval_ms": 250,
+            "simulation_speed": 1.0,
         },
     )
     session_id = response.json()["session_id"]
 
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
-        pending = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        approval = pending["payload"]["display"]["decision"]["approval"]
+        first = unpack_stream_frame(websocket.receive_bytes())
+        first_decision = frame_decision(first)
+        assert first_decision is not None
+        assert first["simulation_time"] == 0.0
+        assert first_decision["proposal"]["controller_id"] == "honest"
+        set_session_speed(session_id, 240.0)
+
+        pending_frame, pending = receive_controller_decision(websocket, "rule-demo")
+        approval = pending["approval"]
         assert approval["status"] == "pending"
+        assert approval["choice"] is None
+        assert pending["monitor_decision"]["decision"] == "ESCALATE"
+        assert pending["executed_action"]["controller_id"] == "pending-approval"
+        assert pending_frame["sequence"] > first["sequence"]
+        assert pending["proposal"]["simulation_time"] == 60.0
         decision_id = approval["decision_id"]
 
         accepted = client.post(
@@ -669,9 +776,10 @@ def test_an_approval_demo_pauses_and_accepts_the_proposal():
         )
         assert accepted.status_code == 200
 
-        resolved = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        decision = resolved["payload"]["display"]["decision"]
+        resolved_frame, decision = receive_controller_decision(websocket, "rule-demo")
+        assert resolved_frame["sequence"] > pending_frame["sequence"]
         assert decision["approval"]["status"] == "resolved"
+        assert decision["approval"]["choice"] == "APPROVE"
         assert decision["executed_action"]["controller_id"] == "rule-demo"
 
         duplicate = client.post(
@@ -690,23 +798,31 @@ def test_an_invalid_manual_replacement_is_rejected():
             "seed": 7,
             "population": {"skier_count": 20},
             "demo_approval": True,
+            "frame_interval_ms": 250,
+            "simulation_speed": 1.0,
         },
     )
     session_id = response.json()["session_id"]
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
-        pending = msgpack.unpackb(websocket.receive_bytes(), raw=False)
-        decision_id = pending["payload"]["display"]["decision"]["approval"][
-            "decision_id"
-        ]
+        first = unpack_stream_frame(websocket.receive_bytes())
+        assert first["simulation_time"] == 0.0
+        set_session_speed(session_id, 240.0)
+        pending_frame, pending = receive_controller_decision(websocket, "rule-demo")
+        decision_id = pending["approval"]["decision_id"]
         invalid = client.post(
             f"/api/sessions/{session_id}/approvals/{decision_id}",
             json={"choice": "REPLACE", "replacement_action": {}},
         )
         assert invalid.status_code == 422
-        client.post(
+        blocked = client.post(
             f"/api/sessions/{session_id}/approvals/{decision_id}",
             json={"choice": "BLOCK"},
         )
+        assert blocked.status_code == 200
+        resolved_frame, resolved = receive_controller_decision(websocket, "rule-demo")
+        assert resolved_frame["sequence"] > pending_frame["sequence"]
+        assert resolved["approval"]["choice"] == "BLOCK"
+        assert resolved["executed_action"]["controller_id"] == "honest-fallback"
     assert client.delete(f"/api/sessions/{session_id}").status_code == 204
 
 
@@ -714,27 +830,53 @@ def test_an_approval_timeout_uses_the_safe_fallback():
     output = queue.Queue()
     approval_input = queue.Queue()
     stop = threading.Event()
-    stop.set()
-    run_session(
-        "timeout-test",
-        7,
-        20,
-        topology_version(),
-        output,
-        stop,
-        False,
-        False,
-        True,
-        approval_input,
-        0.01,
+    worker = threading.Thread(
+        target=run_session,
+        kwargs={
+            "session_id": "timeout-test",
+            "seed": 7,
+            "skier_count": 20,
+            "topology": topology_version(),
+            "output": output,
+            "stop": stop,
+            "demo_approval": True,
+            "approval_input": approval_input,
+            "approval_timeout": 0.01,
+            "frame_interval_ms": 250,
+            "initial_simulation_speed": 240.0,
+        },
     )
-    frames = []
-    while not output.empty():
-        frames.append(msgpack.unpackb(output.get(), raw=False))
+    worker.start()
+    pending_frame = None
+    resolved_frame = None
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and resolved_frame is None:
+            try:
+                frame = unpack_stream_frame(output.get(timeout=0.25))
+            except queue.Empty:
+                continue
+            decision = frame_decision(frame)
+            approval = decision.get("approval") if decision is not None else None
+            if approval is None:
+                continue
+            if approval["status"] == "pending":
+                pending_frame = frame
+            elif approval["status"] == "resolved":
+                resolved_frame = frame
+    finally:
+        stop.set()
+        worker.join(timeout=2.0)
 
-    pending = frames[0]["payload"]["display"]["decision"]["approval"]
-    resolved = frames[-1]["payload"]["display"]["decision"]
-    assert pending["status"] == "pending"
+    assert not worker.is_alive()
+    assert pending_frame is not None
+    assert resolved_frame is not None
+    pending = frame_decision(pending_frame)
+    resolved = frame_decision(resolved_frame)
+    assert pending is not None
+    assert resolved is not None
+    assert pending["approval"]["status"] == "pending"
+    assert resolved_frame["sequence"] > pending_frame["sequence"]
     assert resolved["approval"]["choice"] == "BLOCK"
     assert resolved["executed_action"]["controller_id"] == "honest-fallback"
 

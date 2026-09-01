@@ -1,6 +1,6 @@
 """Each attack must hold the population and state invariants."""
 
-import copy
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from avalanche.config import ResolvedConfig, load_yaml
-from avalanche.control import ApprovalChoice, SimulatedApprover
+from avalanche.control import (
+    ApprovalChoice,
+    ControllerObservation,
+    SimulatedApprover,
+    observation_as_json,
+)
 from avalanche.controllers import build_controller, build_fallback
 from avalanche.env import AvalancheEnv, build_resolved_environment
 from avalanche.monitors import build_monitor
@@ -60,7 +65,7 @@ def build(resolved: ResolvedConfig) -> tuple[AvalancheEnv, Any]:
     return env, controller
 
 
-def check_invariants(env: AvalancheEnv, observation: dict[str, Any]) -> None:
+def check_invariants(env: AvalancheEnv, observation: ControllerObservation) -> None:
     """Check the population, the state, and the finite values of one interval."""
     pop = env.sim.population
     assert len(pop) == SKIER_COUNT
@@ -84,13 +89,23 @@ def check_invariants(env: AvalancheEnv, observation: dict[str, Any]) -> None:
     assert np.all((capacity >= 0.0) & (capacity <= 1.0))
     assert np.all(state.occupancy <= env.topology.edge_safe_capacity)
 
-    for name, value in observation.items():
-        if isinstance(value, np.ndarray) and value.dtype.kind == "f":
-            assert np.all(np.isfinite(value)), name
+    for sensor in observation.operational_evidence.packet.sensors:
+        if sensor.values.dtype.kind == "f":
+            assert np.all(np.isfinite(sensor.values[~sensor.missing])), sensor.name
     for name, value in env.sim.metrics.snapshot(pop).as_dict().items():
         for item in value if isinstance(value, tuple) else (value,):
             if isinstance(item, (int, float)) and not isinstance(item, bool):
                 assert np.isfinite(item), name
+
+
+def observation_payload(observation: ControllerObservation) -> str:
+    """Return one stable value for an exact observation comparison."""
+    return json.dumps(
+        observation_as_json(observation),
+        allow_nan=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 @pytest.fixture(scope="module", params=FIXTURES, ids=IDENTITIES)
@@ -113,8 +128,8 @@ def test_each_attack_holds_the_invariants_in_every_interval(resolved_attack):
     truncated = False
     while not (terminated or truncated):
         proposal = controller.propose(env.controller_observation())
-        observation, _, terminated, truncated, _ = env.step_proposal(proposal)
-        check_invariants(env, observation)
+        _, _, terminated, truncated, _ = env.step_proposal(proposal)
+        check_invariants(env, env.controller_observation())
 
     assert env.sim.step > 0
 
@@ -125,21 +140,15 @@ def test_the_attack_controller_cannot_change_the_simulator(resolved_attack):
         env.step_proposal(controller.propose(env.controller_observation()))
 
     observation = env.controller_observation()
-    safe = copy.deepcopy(observation)
+    safe = observation_payload(observation)
     checksum = env.sim.state_checksum()
 
     proposal = controller.propose(observation)
-    for value in observation.values():
-        if isinstance(value, np.ndarray):
-            value.fill(0)
 
     assert env.sim.state_checksum() == checksum
     assert proposal.simulation_time == env.sim.simulation_time
-    for name, value in safe.items():
-        if isinstance(value, np.ndarray):
-            np.testing.assert_array_equal(
-                value, env.controller_observation()[name], err_msg=name
-            )
+    assert observation_payload(observation) == safe
+    assert observation_payload(env.controller_observation()) == safe
 
 
 def test_the_attack_proposal_goes_through_the_adjudicator(resolved_attack):

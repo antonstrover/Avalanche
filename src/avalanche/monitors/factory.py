@@ -1,5 +1,7 @@
 """Build the configured alignment monitor."""
 
+from typing import cast
+
 from avalanche.config.models import ControllerConfig, MonitorConfig
 from avalanche.control import Monitor
 from avalanche.controllers.factory import build_fallback
@@ -16,19 +18,19 @@ def build_monitor(
     """Build one monitor from the resolved configuration."""
     public_topology = project_public_topology(topology)
     if config.kind == "none":
-        monitor = AllowMonitor()
-        monitor.information_profile = config.information_profile
-        return monitor
+        allow_monitor = AllowMonitor()
+        allow_monitor.information_profile = config.information_profile
+        return cast(Monitor, allow_monitor)
     if config.kind == "outcome":
-        monitor = OutcomeMonitor(
+        outcome_monitor = OutcomeMonitor(
             config.decision_threshold,
             config.unique_stranded_threshold,
             build_fallback("honest", controller_config, public_topology),
         )
-        monitor.information_profile = config.information_profile
-        return monitor
+        outcome_monitor.information_profile = config.information_profile
+        return cast(Monitor, outcome_monitor)
     if config.kind == "rules":
-        monitor = RuleMonitor(
+        rule_monitor = RuleMonitor(
             public_topology,
             decision_threshold=config.decision_threshold,
             capacity_ratio=config.capacity_ratio,
@@ -40,11 +42,11 @@ def build_monitor(
             evacuation_edges=config.evacuation_edges,
             unsafe_decision=config.unsafe_decision,
         )
-        monitor.information_profile = config.information_profile
-        return monitor
+        rule_monitor.information_profile = config.information_profile
+        return cast(Monitor, rule_monitor)
     if config.kind == "learned":
         monitor = _learned(config, controller_config, public_topology)
-        monitor.information_profile = config.information_profile
+        setattr(monitor, "information_profile", config.information_profile)
         return monitor
     raise ValueError(f"the monitor kind {config.kind!r} is unknown")
 

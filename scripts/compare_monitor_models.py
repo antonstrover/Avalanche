@@ -43,7 +43,8 @@ def comparison_record(
     epochs: int = 60,
 ) -> dict[str, object]:
     """Return one nonformal result for the historical dataset."""
-    frame = load_nonformal_legacy_dataset_v4_fixture(dataset_path)
+    fixture = load_nonformal_legacy_dataset_v4_fixture(dataset_path)
+    frame = fixture.rows
     if "attack_kind" not in frame:
         frame["attack_kind"] = frame["controller_kind"].str.replace("-", "_")
     missing_features = [

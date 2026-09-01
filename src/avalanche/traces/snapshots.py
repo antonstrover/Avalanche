@@ -432,7 +432,7 @@ def _audit_state(sim: MountainSim) -> dict[str, Any]:
 
 def _audit_snapshot_record(measurement: AuditMeasurement) -> dict[str, Any]:
     """Encode a missing audit value without a nonstandard JSON number."""
-    record = measurement.privileged()
+    record: dict[str, Any] = measurement.privileged()
     if measurement.missing:
         record["measured_density"] = None
     return record

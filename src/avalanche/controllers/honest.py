@@ -1,6 +1,7 @@
 """Propose deterministic actions for safe resort operation."""
 
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 
@@ -27,6 +28,7 @@ from avalanche.controllers.responses import (
 from avalanche.env.actions import (
     PISTE_CLOSE,
     ActionContract,
+    ControlPermissions,
     apply_action_contract,
     neutral_action,
 )
@@ -94,7 +96,7 @@ class HonestController:
             self._edge_index(value) for value in self.config.evacuation_edges
         )
         self._seed = 0
-        self._last_action = neutral_action(self.topology)
+        self._last_action = neutral_action(cast(Topology, self.topology))
         self._last_proposal_time: float | None = None
         self._last_proposal: ActionProposal | None = None
         self.selected_policy_variant: PolicyVariant = "standard-linear"
@@ -102,7 +104,7 @@ class HonestController:
     def reset(self, seed: int) -> None:
         """Reset the controller without adding random behavior."""
         self._seed = seed
-        self._last_action = neutral_action(self.topology)
+        self._last_action = neutral_action(cast(Topology, self.topology))
         self._last_proposal_time = None
         self._last_proposal = None
         self.selected_policy_variant = select_policy_variant(
@@ -118,15 +120,23 @@ class HonestController:
             and simulation_time == self._last_proposal_time
         ):
             return self._last_proposal
-        desired = neutral_action(self.topology)
-        permissions = evidence.static.control_permissions()
+        if self._fully_masked_without_events(observation):
+            return self._neutral_bootstrap_proposal(simulation_time)
+        desired = neutral_action(cast(Topology, self.topology))
+        permissions = cast(ControlPermissions, evidence.static.control_permissions())
         available = evidence.value("edge_availability").astype(bool)
+        availability_present = ~evidence.missing("edge_availability")
+        action_available = available.copy()
+        for event in evidence.events:
+            if event.target_type != "node" and not availability_present[event.target]:
+                action_available[event.target] = True
         contract = ActionContract(
             control_permissions=permissions,
-            reported_edge_available=available,
+            reported_edge_available=action_available,
         )
         closed = ~available
         density = evidence.value("edge_density").astype(float)
+        density_present = ~evidence.missing("edge_density")
         queues = evidence.value("lift_queue_length").astype(float)
         occupancy = evidence.value("edge_occupancy").astype(float)
         node_demand = evidence.value("node_demand").astype(float)
@@ -176,6 +186,8 @@ class HonestController:
             (self.topology.edge_type == PISTE)
             & self.topology.piste_permissions
             & ~closed
+            & availability_present
+            & density_present
             & (density >= self.config.unsafe_density_ratio * safety_factor)
         )
         close_targets = [
@@ -543,6 +555,42 @@ class HonestController:
         self._last_proposal = proposal
         return proposal
 
+    def _fully_masked_without_events(self, observation: ControllerObservation) -> bool:
+        """Return whether the restricted bootstrap has no public event."""
+        evidence = observation.operational_evidence
+        return not evidence.events and all(
+            bool(np.all(sensor.missing)) for sensor in evidence.packet.sensors
+        )
+
+    def _neutral_bootstrap_proposal(self, simulation_time: float) -> ActionProposal:
+        """Return the neutral proposal for one restricted bootstrap."""
+        action = neutral_action(cast(Topology, self.topology))
+        policy = POLICY_SPECS[self.selected_policy_variant]
+        proposal = ActionProposal(
+            controller_id="honest",
+            simulation_time=simulation_time,
+            action=freeze_action(action),
+            explanation="Keep the neutral resort action.",
+            evidence=freeze_evidence(
+                {
+                    "rules": (),
+                    "targets": {},
+                    "policy_version": HONEST_POLICY_VERSION,
+                    "policy_variant": self.selected_policy_variant,
+                    "response_curve": policy.curve,
+                    "safety_margin": policy.margin,
+                    "responses": (),
+                    "rate_limits": self.config.action_rate_limits.__dict__,
+                }
+            ),
+        )
+        self._last_action = {
+            name: np.asarray(values).copy() for name, values in action.items()
+        }
+        self._last_proposal_time = simulation_time
+        self._last_proposal = proposal
+        return proposal
+
     @staticmethod
     def _response(
         kind: str,
@@ -594,7 +642,9 @@ class HonestController:
         capacity = np.maximum(self.topology.node_safe_capacity, 1.0)
         addressable = np.asarray(masks["nodes"], dtype=bool)
         return np.flatnonzero(
-            addressable & (crowding / capacity >= self.config.crowding_ratio)
+            addressable
+            & ~observation.operational_evidence.missing("node_crowding")
+            & (crowding / capacity >= self.config.crowding_ratio)
         )
 
     def _late_telemetry_edges(

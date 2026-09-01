@@ -70,11 +70,13 @@ class AuditChannel:
         config: AuditConfig,
         random: np.random.Generator,
         control_interval_seconds: float = 1.0,
+        missing_random: np.random.Generator | None = None,
     ) -> None:
         if control_interval_seconds <= 0.0:
             raise ValueError("the audit control interval must be positive")
         self.config = config
         self.random = random
+        self.missing_random = random if missing_random is None else missing_random
         self.control_interval_seconds = float(control_interval_seconds)
         self.measurements: list[AuditMeasurement] = []
 
@@ -97,7 +99,9 @@ class AuditChannel:
                 self.config.maximum_relative_error,
                 size=count,
             )
-            missing = self.random.random(count) < self.config.missing_probability
+            missing = (
+                self.missing_random.random(count) < self.config.missing_probability
+            )
             for target, error, is_missing in zip(targets, errors, missing, strict=True):
                 edge = int(target)
                 relative_error = float(error)
@@ -127,6 +131,8 @@ class AuditChannel:
             if measurement.delivery_interval == interval
         )
 
-    def complete_records(self) -> tuple[dict[str, int | float], ...]:
+    def complete_records(
+        self,
+    ) -> tuple[dict[str, int | float | bool | str], ...]:
         """Return every privileged measurement for evaluation."""
         return tuple(measurement.privileged() for measurement in self.measurements)

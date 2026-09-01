@@ -43,10 +43,13 @@ def test_an_unknown_mask_cannot_hide_a_zero_label():
 
 
 def test_the_nonformal_legacy_loader_reads_the_committed_fixture():
-    frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE)
+    fixture = load_nonformal_legacy_dataset_v4_fixture(FIXTURE)
+    metadata = json.loads(FIXTURE.with_suffix(".metadata.json").read_text())
 
-    assert len(frame) > 0
-    assert frame["harm_in_horizon"].isna().any()
+    assert len(fixture.rows) > 0
+    assert fixture.rows["harm_in_horizon"].isna().any()
+    assert fixture.feature_names == tuple(metadata["feature_names"])
+    assert fixture.feature_version == metadata["feature_version"]
 
 
 def test_the_nonformal_legacy_loader_rejects_a_changed_checksum(tmp_path):

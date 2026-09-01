@@ -220,7 +220,9 @@ def test_decision_events_keep_each_control_interval(tmp_path):
         assert "missing" in sensor
     evidence = payload["proposal"]["evidence"]
     assert evidence["policy_version"] == 3
-    assert evidence["responses"]
+    assert evidence["rules"] == []
+    assert evidence["targets"] == {}
+    assert evidence["responses"] == []
     for index in range(2):
         boundary = (
             proposals[index],

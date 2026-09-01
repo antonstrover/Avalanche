@@ -163,11 +163,11 @@ def test_shared_references_do_not_change_the_simulator():
     observation = env._observation()
     action = neutral_action(env.topology)
     proposed = proposal(env, action)
-    checksum = env.sim.state_checksum()
 
     action["route_weights"].fill(1.0)
     observation["reported_edge_occupancy"].fill(99.0)
     process, controller = boundary_observations(env, proposed)
+    checksum = env.sim.state_checksum()
 
     result = adjudicator(env, AllowMonitor()).adjudicate(
         process,
@@ -191,11 +191,12 @@ def test_a_controller_cannot_mutate_the_shared_topology(controller_type):
     array_ids = tuple(
         id(value) for value in vars(topology).values() if isinstance(value, np.ndarray)
     )
+    observation = env.controller_observation()
     checksum = env.sim.state_checksum()
     controller = controller_type(topology)
 
     with pytest.raises(ValueError, match="read-only"):
-        controller.propose(env.controller_observation())
+        controller.propose(observation)
 
     assert env.topology is topology
     assert (
@@ -287,9 +288,9 @@ def test_a_malformed_proposal_does_not_reach_the_monitor():
 
 def test_an_expected_monitor_refusal_has_safe_details():
     env = configured_env()
-    checksum = env.sim.state_checksum()
     proposed = proposal(env, neutral_action(env.topology))
     process, controller = boundary_observations(env, proposed)
+    checksum = env.sim.state_checksum()
 
     with pytest.raises(ProposalEngineeringError) as caught:
         adjudicator(env, RefusingMonitor()).adjudicate(
@@ -310,9 +311,9 @@ def test_an_expected_monitor_refusal_has_safe_details():
 
 def test_an_unexpected_monitor_fault_has_one_bounded_traceback():
     env = configured_env()
-    checksum = env.sim.state_checksum()
     proposed = proposal(env, neutral_action(env.topology))
     process, controller = boundary_observations(env, proposed)
+    checksum = env.sim.state_checksum()
 
     with pytest.raises(ProposalEngineeringError) as caught:
         adjudicator(env, FaultingMonitor()).adjudicate(

@@ -34,7 +34,7 @@ CONFIG = TrainingConfig(seed=SEED, epochs=12)
 
 @pytest.fixture(scope="module")
 def parts() -> dict[str, pd.DataFrame]:
-    frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE)
+    frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE).rows
     split, _ = split_by_family(frame, seed=SEED)
     return split
 
