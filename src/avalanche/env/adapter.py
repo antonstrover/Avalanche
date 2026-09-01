@@ -84,6 +84,7 @@ class AvalancheEnvConfig:
     intervention_capacity: int = 16
     ability_count: int = len(ABILITY_NAMES)
     group_count: int = len(CUSTOMER_GROUP_NAMES)
+    run_to_horizon: bool = False
 
     def __post_init__(self) -> None:
         """Reject invalid environment settings."""
@@ -137,8 +138,8 @@ class _RewardSnapshot:
 
     completed_journeys: int
     wait_time: float
-    dangerous_density: float
-    stranded_skiers: int
+    dangerous_density_seconds: float
+    cumulative_stranded_seconds: float
     skier_wait_times: np.ndarray
 
 
@@ -383,7 +384,7 @@ class AvalancheEnv(gym.Env):
             self.config.episode_duration_seconds,
             self.config.time_epsilon_seconds,
         )
-        self._ended = terminated or truncated
+        self._ended = truncated or (terminated and not self.config.run_to_horizon)
         observation = self._observation()
         info = self._base_info(observation)
         info.update(
@@ -440,7 +441,7 @@ class AvalancheEnv(gym.Env):
         )
         self.sim.metrics.update_decision(
             result.decision,
-            harm_count=float(np.sum(self.sim.state.harm_count, dtype=np.int64)),
+            cumulative_stranded_seconds=(self.sim.metrics.cumulative_stranded_seconds),
         )
         _apply_executed_action(self.sim, result.executed_action)
         self.last_proposal = proposal
@@ -517,10 +518,10 @@ class AvalancheEnv(gym.Env):
         return _RewardSnapshot(
             completed_journeys=int(np.count_nonzero(pop.status == Status.COMPLETE)),
             wait_time=float(np.sum(pop.wait_time, dtype=np.float64)),
-            dangerous_density=float(
+            dangerous_density_seconds=float(
                 np.sum(self.sim.state.dangerous_density_seconds, dtype=np.float64)
             ),
-            stranded_skiers=int(np.count_nonzero(pop.status == Status.STRANDED)),
+            cumulative_stranded_seconds=(self.sim.metrics.cumulative_stranded_seconds),
             skier_wait_times=pop.wait_time.copy(),
         )
 
@@ -540,10 +541,14 @@ class AvalancheEnv(gym.Env):
         return RewardTransition(
             completed_journeys=after.completed_journeys - before.completed_journeys,
             wait_time=max(after.wait_time - before.wait_time, 0.0),
-            dangerous_density=max(
-                after.dangerous_density - before.dangerous_density, 0.0
+            dangerous_density_seconds=max(
+                after.dangerous_density_seconds - before.dangerous_density_seconds,
+                0.0,
             ),
-            stranded_skiers=after.stranded_skiers,
+            cumulative_stranded_seconds=max(
+                after.cumulative_stranded_seconds - before.cumulative_stranded_seconds,
+                0.0,
+            ),
             group_mean_wait_times=group_wait_times,
             intervention_cost=intervention_cost,
         )
@@ -553,7 +558,7 @@ class AvalancheEnv(gym.Env):
         status = self.sim.population.status
         if status.size == 0:
             return False
-        return bool(np.all(np.isin(status, (Status.COMPLETE, Status.INJURED))))
+        return bool(np.all(status == Status.COMPLETE))
 
     def _metrics(
         self,

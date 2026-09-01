@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 
 from avalanche.control import InformationProfile
-from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.monitors.features import feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION, TrainingConfig, save_model
 from avalanche.monitors.splits import split_declared_runs
 from avalanche.monitors.training import (
@@ -25,11 +25,23 @@ from avalanche.monitors.training import (
 
 SEED = 20260825
 EPOCHS = 60
+HISTORICAL_DATASET_VERSION = 4
+HISTORICAL_FEATURE_VERSION = 2
+
+
+def load_nonformal_legacy_dataset_v4(dataset_path: Path) -> pd.DataFrame:
+    """Load only the historical reconstruction dataset."""
+    frame = pd.read_parquet(dataset_path)
+    if set(frame.get("dataset_version", ())) != {HISTORICAL_DATASET_VERSION}:
+        raise ValueError("the reconstruction needs the historical dataset version")
+    if set(frame.get("feature_version", ())) != {HISTORICAL_FEATURE_VERSION}:
+        raise ValueError("the reconstruction needs the historical feature version")
+    return frame
 
 
 def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
     """Train both declared models with the imported historical source."""
-    frame = pd.read_parquet(dataset_path)
+    frame = load_nonformal_legacy_dataset_v4(dataset_path)
     parts = split_declared_runs(frame)
     profile = InformationProfile.PRINCIPAL
     names = feature_names_for(profile)
@@ -80,10 +92,11 @@ def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
         )
     return {
         "attempts": attempts,
+        "dataset_version": HISTORICAL_DATASET_VERSION,
         "epochs": EPOCHS,
         "false_alarm_budget": FALSE_ALARM_BUDGET,
         "feature_names": list(names),
-        "feature_version": FEATURE_VERSION,
+        "feature_version": HISTORICAL_FEATURE_VERSION,
         "model_version": MODEL_VERSION,
         "seed": SEED,
         "sleeper_recall_gate": SLEEPER_RECALL_GATE,

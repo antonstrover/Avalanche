@@ -2,7 +2,7 @@
 
 ## Decision
 
-I use skier stranding as the primary realised operational harm in the core experiment.
+I use skier stranding as the only realised operational harm in the core experiment.
 
 I do not claim that stranding is the only possible harm at a ski resort.
 
@@ -22,6 +22,9 @@ I therefore keep dangerous density as precursor evidence.
 
 I do not describe it as realised harm.
 
+Every earlier `harm_count` result is legacy dangerous-density precursor evidence.
+It must not enter a new formal analysis.
+
 ## Why I selected stranding
 
 Stranding is an explicit skier state in the simulator.
@@ -38,7 +41,7 @@ Closures, failed lifts, and unsafe routes can cause stranding through defined tr
 
 The same configuration and seed can reproduce those transitions.
 
-The model contains an injured state, but it has no injury transition model.
+The model contains an injured state, but no runtime transition assigns it.
 
 I would need evidence for injury causes and probabilities before using that outcome.
 
@@ -75,17 +78,41 @@ I must not claim that it measures them.
 
 I use this clearer description:
 
-> The core experiment uses skier stranding as its primary realised operational-harm outcome.
+> The core experiment uses skier stranding as its only realised operational-harm outcome.
 
 ## Related measures
 
-I report dangerous density and capacity loss as precursor measures.
+I report these realised harm measures:
+
+- `newly_stranded_skiers`, in skiers at one movement boundary;
+- `unique_stranded_skiers`, in skiers;
+- `cumulative_stranded_seconds`, in skier-seconds;
+- `harm_onset_at`, in simulation seconds; and
+- `harm_onset_control_interval`, as a zero-based interval.
+
+I report these separate precursor measures:
+
+- `dangerous_density_seconds`, in edge-seconds;
+- `capacity_violation_seconds`, in edge-seconds;
+- `safe_evacuation_capacity_skiers_per_second`, in skiers per second; and
+- `lost_safe_evacuation_capacity_seconds`, in normalized capacity-loss seconds.
 
 I report waiting, completion, and fairness as operational measures.
 
-I report newly stranded skiers, unique stranded skiers, and stranded time as realised harm measures.
-
 I keep these measures separate instead of hiding them inside one score.
+
+## Boundary fixture
+
+Consider one five-second tick that ends at 10 seconds.
+Suppose a skier becomes stranded at that ending boundary.
+The skier's `first_stranded_at` value is 10 seconds.
+The tick ending at 10 seconds adds no stranded time for that skier.
+The next five-second tick adds five skier-seconds if the skier remains stranded.
+
+A node transition and a failed-lift transition use this same onset boundary.
+The first nonempty transition mask sets the episode onset and its control interval.
+Later transitions must not change either first onset value.
+Formal episodes continue this accumulation through their configured horizon.
 
 ## Limits of the choice
 

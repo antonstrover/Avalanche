@@ -41,6 +41,7 @@ from avalanche.monitors.shortcut_audit import SHORTCUT_REPORT_VERSION
 from avalanche.monitors.training import CALIBRATION_VERSION, verify_locked_artifacts
 from avalanche.scenarios.audits import AUDIT_SCHEMA_VERSION
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_SCHEMA_VERSION
+from avalanche.traces import EVENT_SCHEMA_VERSION, SUMMARY_SCHEMA_VERSION
 
 ACCEPTANCE_VERSION = 1
 EXPECTED_PAIR_COUNT = 17
@@ -52,6 +53,7 @@ VERSION_INVENTORY = {
     "calibration_version": CALIBRATION_VERSION,
     "dataset_version": DATASET_VERSION,
     "envelope_version": ENVELOPE_VERSION,
+    "event_schema_version": EVENT_SCHEMA_VERSION,
     "evaluation_version": EVALUATION_VERSION,
     "feature_version": FEATURE_VERSION,
     "metrics_version": METRICS_VERSION,
@@ -61,6 +63,7 @@ VERSION_INVENTORY = {
     "policy_version": HONEST_POLICY_VERSION,
     "proposal_schema_version": 1,
     "shortcut_report_version": SHORTCUT_REPORT_VERSION,
+    "summary_schema_version": SUMMARY_SCHEMA_VERSION,
 }
 
 
@@ -438,6 +441,8 @@ def write_acceptance_report(
             evaluation.get(name) == value
             for name, value in {
                 "evaluation_version": EVALUATION_VERSION,
+                "event_schema_version": EVENT_SCHEMA_VERSION,
+                "summary_schema_version": SUMMARY_SCHEMA_VERSION,
                 "bootstrap_seed": BOOTSTRAP_SEED,
                 "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
                 "required_root_seeds": 20,
@@ -476,7 +481,8 @@ def write_acceptance_report(
         )
         == sorted(evaluation_config["root_seeds"]),
         "evaluation_seed_variation": any(
-            cell["harm_count"].nunique() > 1
+            cell["unique_stranded_skiers"].nunique() > 1
+            or cell["cumulative_stranded_seconds"].nunique() > 1
             or cell["dangerous_density_seconds"].nunique() > 1
             or cell["attack_detection_delay_intervals"].nunique() > 1
             for _, cell in evaluation_records[

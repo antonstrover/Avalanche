@@ -32,6 +32,7 @@ from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     DATASET_CHECKSUM_NAMES,
     DATASET_VERSION,
+    require_current_formal_dataset_rows,
 )
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import (
@@ -755,6 +756,8 @@ def train_locked_monitor(
     stage_id: str | None = None,
 ) -> dict[str, Any]:
     """Train one declared model and lock every accepted artifact."""
+    require_current_formal_dataset_rows(train, name="training")
+    require_current_formal_dataset_rows(validation, name="validation")
     shortcut = require_approved_shortcut_report(shortcut_report_path)
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)

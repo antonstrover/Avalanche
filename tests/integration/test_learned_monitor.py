@@ -26,8 +26,11 @@ from avalanche.config.models import MonitorConfig
 from avalanche.control import DecisionType
 from avalanche.experiments import run_episode
 from avalanche.monitors.calibration import calibrate
-from avalanche.monitors.dataset import load_dataset_fixture
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.dataset import (
+    DATASET_VERSION,
+    load_nonformal_legacy_dataset_v4_fixture,
+)
+from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.learned import LEARNED_PROCESS_RISK
 from avalanche.monitors.perceptron import (
     TrainedModel,
@@ -51,7 +54,7 @@ SEED = 20260825
 @pytest.fixture(scope="module")
 def model_reference(tmp_path_factory) -> ModelLockReference:
     """Train one small model and save it with its calibration."""
-    frame = load_dataset_fixture(FIXTURE)
+    frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE)
     parts, assignment = split_by_family(frame, seed=SEED)
     config = TrainingConfig(seed=SEED, epochs=8)
     model = train_perceptron(parts["train"], parts["validation"], config)
@@ -90,7 +93,7 @@ def ablation_model_reference(tmp_path) -> ModelLockReference:
         metadata={
             "model_version": 2,
             "model_kind": "perceptron",
-            "feature_version": 2,
+            "feature_version": FEATURE_VERSION,
             "information_profile": "principal",
             "calibration": {"threshold": 0.5, "temperature": 1.0},
         },
@@ -157,8 +160,8 @@ def _formal_reference(
         creation_command="uv run pytest tests/integration/test_learned_monitor.py",
         schema_versions={
             "calibration": 2,
-            "dataset": 4,
-            "feature": 2,
+            "dataset": DATASET_VERSION,
+            "feature": FEATURE_VERSION,
             "lock": 2,
             "model": 2,
         },
@@ -356,7 +359,7 @@ def test_the_run_records_the_model_reference(model_reference, tmp_path):
     reference = json.loads((tmp_path / "model-reference.json").read_text())
     assert reference["model_kind"] == "perceptron"
     assert reference["model_sha256"]
-    assert reference["feature_version"] == 2
+    assert reference["feature_version"] == FEATURE_VERSION
     assert reference["model_version"] == 2
     assert reference["information_profile"] == "principal"
     assert reference["selection_manifest_sha256"] == (

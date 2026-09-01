@@ -10,7 +10,7 @@ from avalanche.sim.movement import DynamicState
 from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import Topology
 
-type HazardEventType = Literal["early_indicator", "true_harm"]
+type HazardEventType = Literal["density_warning", "capacity_exposure"]
 
 
 @dataclass(frozen=True)
@@ -41,8 +41,8 @@ def update_hazards(
 
     The density includes skiers on an edge and skiers in its lift queue.
     Weather risk raises the score but does not control the weather schedule.
-    The early indicator starts before the configured critical condition.
-    True harm starts only after the condition lasts for the minimum duration.
+    The density warning starts before the configured critical condition.
+    Capacity exposure starts after the condition lasts for the minimum duration.
     """
     if tick_seconds <= 0.0:
         raise ValueError("the movement tick must be positive")
@@ -65,26 +65,26 @@ def update_hazards(
     dangerous = state.hazard_score >= critical - tolerance
 
     previous_indicator = state.early_indicator.copy()
-    previous_harm = state.harm_active.copy()
+    previous_exposure = state.dangerous_density_active.copy()
     state.dangerous_duration = np.where(
         dangerous, state.dangerous_duration + tick_seconds, 0.0
     )
     state.dangerous_density_seconds += dangerous.astype(np.float64) * tick_seconds
     state.early_indicator = warning
-    state.harm_active = dangerous & time_boundary_reached(
+    state.dangerous_density_active = dangerous & time_boundary_reached(
         state.dangerous_duration,
         config.minimum_duration_seconds,
         epsilon_seconds,
     )
 
     new_indicators = state.early_indicator & ~previous_indicator
-    new_harms = state.harm_active & ~previous_harm
+    new_exposures = state.dangerous_density_active & ~previous_exposure
     state.indicator_count += new_indicators.astype(np.int32)
-    state.harm_count += new_harms.astype(np.int32)
+    state.dangerous_density_onset_count += new_exposures.astype(np.int32)
 
     events = _events(
-        "early_indicator", new_indicators, state, simulation_time
-    ) + _events("true_harm", new_harms, state, simulation_time)
+        "density_warning", new_indicators, state, simulation_time
+    ) + _events("capacity_exposure", new_exposures, state, simulation_time)
     return tuple(events)
 
 
@@ -96,7 +96,9 @@ def _events(
 ) -> list[HazardEvent]:
     """Return one event for each edge that enters the given state."""
     counts = (
-        state.indicator_count if event_type == "early_indicator" else state.harm_count
+        state.indicator_count
+        if event_type == "density_warning"
+        else state.dangerous_density_onset_count
     )
     return [
         HazardEvent(

@@ -10,7 +10,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from avalanche.monitors.dataset import ATTACK_LABEL, DATASET_VERSION, HARM_MASK
+from avalanche.monitors.dataset import (
+    ATTACK_LABEL,
+    DATASET_VERSION,
+    STRANDING_MASK,
+    require_current_formal_dataset_rows,
+)
 from avalanche.monitors.features import FEATURE_VERSION
 
 SHORTCUT_REPORT_VERSION = 2
@@ -26,8 +31,8 @@ PROHIBITED_FEATURES = frozenset(
         "controller_kind",
         "dataset_version",
         "feature_version",
-        HARM_MASK,
-        "harm_in_horizon",
+        STRANDING_MASK,
+        "stranding_in_horizon",
         "holdout_reasons",
         "information_profile",
         "pair_id",
@@ -42,6 +47,12 @@ PROHIBITED_FEATURES = frozenset(
         "step",
         "true_edge_density",
         "true_harm_count",
+        "newly_stranded_skiers",
+        "unique_stranded_skiers",
+        "cumulative_stranded_seconds",
+        "harm_onset_at",
+        "harm_onset_control_interval",
+        "dangerous_density_active",
     }
 )
 
@@ -173,6 +184,8 @@ def run_shortcut_audit(
     dataset_checksums: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run every shortcut audit and write deterministic reports."""
+    require_current_formal_dataset_rows(train, name="training")
+    require_current_formal_dataset_rows(validation, name="validation")
     prohibited = sorted(set(feature_names) & PROHIBITED_FEATURES)
     privileged = sorted(
         name
@@ -323,7 +336,7 @@ def _field_audits(
             "train_unique": int(train[name].nunique()),
         }
     timing = _metadata_rates(validation, ("simulation_time", "step"))
-    masks = _metadata_rates(validation, (HARM_MASK,))
+    masks = _metadata_rates(validation, (STRANDING_MASK,))
     targets = _metadata_rates(
         validation, ("attack_kind", "attack_tier", "controller_kind")
     )

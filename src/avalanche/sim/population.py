@@ -28,6 +28,8 @@ POPULATION_ARRAY_FIELDS = (
     "group",
     "compliance",
     "status",
+    "first_stranded_at",
+    "ever_stranded",
     "wait_time",
     "journey_time",
     "blocked_time",
@@ -74,6 +76,8 @@ class SkierArrays:
     group: np.ndarray
     compliance: np.ndarray
     status: np.ndarray
+    first_stranded_at: np.ndarray
+    ever_stranded: np.ndarray
     wait_time: np.ndarray
     journey_time: np.ndarray
     blocked_time: np.ndarray
@@ -113,6 +117,8 @@ def empty_population(count: int) -> SkierArrays:
         group=np.zeros(count, dtype=np.int8),
         compliance=np.zeros(count, dtype=np.float64),
         status=np.full(count, Status.ACTIVE, dtype=np.int8),
+        first_stranded_at=np.full(count, -1.0, dtype=np.float64),
+        ever_stranded=np.zeros(count, dtype=np.bool_),
         wait_time=np.zeros(count, dtype=np.float64),
         journey_time=np.zeros(count, dtype=np.float64),
         blocked_time=np.zeros(count, dtype=np.float64),

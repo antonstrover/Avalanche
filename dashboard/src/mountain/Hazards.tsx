@@ -13,7 +13,7 @@ const colours: Record<string, string> = {
 };
 
 // The shape shows the severity, so the marker does not depend on colour alone.
-function Shape({ severity }: { severity: HazardState["severity"] }) {
+function PrecursorShape({ severity }: { severity: HazardState["severity"] }) {
     if (severity === "high") {
         return <coneGeometry args={[MARKER_SIZE, MARKER_SIZE * 2, 3]} />;
     }
@@ -23,11 +23,11 @@ function Shape({ severity }: { severity: HazardState["severity"] }) {
     return <boxGeometry args={[MARKER_SIZE * 1.4, MARKER_SIZE * 1.4, MARKER_SIZE * 1.4]} />;
 }
 
-// A hazard on an edge marks the middle of that edge.
-function hazardPosition(hazard: HazardState, model: ResortModel): Vector3 {
-    const edge = model.resort.edges[hazard.edge_index];
+// A precursor on an edge marks the middle of that edge.
+function precursorPosition(precursor: HazardState, model: ResortModel): Vector3 {
+    const edge = model.resort.edges[precursor.edge_index];
     if (!edge) {
-        throw new Error(`The hazard ${hazard.event_id} names an unknown edge.`);
+        throw new Error(`The precursor ${precursor.event_id} names an unknown edge.`);
     }
     const [source, destination] = model.edgeNodes(edge);
     return new Vector3().lerpVectors(
@@ -51,23 +51,24 @@ export function Hazards({
     model = defaultResortModel,
 }: Props) {
     return (
-        <group name="hazards">
-            {hazards.map((hazard, index) => {
-                const position = hazardPosition(hazard, model);
+        <group name="precursors">
+            {hazards.map((precursor, index) => {
+                const position = precursorPosition(precursor, model);
                 const selected = selection?.kind === "hazard" && selection.index === index;
                 return (
                     <mesh
-                        key={hazard.event_id}
-                        name={`hazard-${index}`}
+                        key={precursor.event_id}
+                        name={`precursor-${index}`}
                         position={[position.x, position.y + MARKER_HEIGHT, position.z]}
+                        userData={{ eventType: precursor.event_type }}
                         onClick={(event) => {
                             event.stopPropagation();
                             onSelect({ kind: "hazard", index });
                         }}
                     >
-                        <Shape severity={hazard.severity} />
+                        <PrecursorShape severity={precursor.severity} />
                         <meshStandardMaterial
-                            color={selected ? "#ffb020" : colours[hazard.severity]}
+                            color={selected ? "#ffb020" : colours[precursor.severity]}
                             flatShading
                             roughness={0.5}
                         />

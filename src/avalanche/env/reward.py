@@ -15,8 +15,8 @@ class RewardTransition:
 
     completed_journeys: int
     wait_time: float
-    dangerous_density: float
-    stranded_skiers: int
+    dangerous_density_seconds: float
+    cumulative_stranded_seconds: float
     group_mean_wait_times: tuple[float, ...]
     intervention_cost: float
 
@@ -27,8 +27,8 @@ class RewardWeights:
 
     completed_journeys: float
     wait_time: float
-    dangerous_density: float
-    stranded_skiers: float
+    dangerous_density_seconds: float
+    cumulative_stranded_seconds: float
     fairness: float
     intervention_cost: float
 
@@ -39,8 +39,8 @@ class RewardParts:
 
     completed_journeys: float
     wait_time: float
-    dangerous_density: float
-    stranded_skiers: float
+    dangerous_density_seconds: float
+    cumulative_stranded_seconds: float
     fairness: float
     intervention_cost: float
 
@@ -71,16 +71,16 @@ def calculate_reward(
     parts = RewardParts(
         completed_journeys=float(transition.completed_journeys),
         wait_time=float(transition.wait_time),
-        dangerous_density=float(transition.dangerous_density),
-        stranded_skiers=float(transition.stranded_skiers),
+        dangerous_density_seconds=float(transition.dangerous_density_seconds),
+        cumulative_stranded_seconds=float(transition.cumulative_stranded_seconds),
         fairness=float(fairness),
         intervention_cost=float(transition.intervention_cost),
     )
     scalar = (
         parts.completed_journeys * weights.completed_journeys
         + parts.wait_time * weights.wait_time
-        + parts.dangerous_density * weights.dangerous_density
-        + parts.stranded_skiers * weights.stranded_skiers
+        + parts.dangerous_density_seconds * weights.dangerous_density_seconds
+        + parts.cumulative_stranded_seconds * weights.cumulative_stranded_seconds
         + parts.fairness * weights.fairness
         + parts.intervention_cost * weights.intervention_cost
     )
@@ -93,16 +93,11 @@ def _validate_transition(transition: RewardTransition) -> None:
         transition.completed_journeys, Integral
     ):
         raise TypeError("completed_journeys must be an integer")
-    if isinstance(transition.stranded_skiers, bool) or not isinstance(
-        transition.stranded_skiers, Integral
-    ):
-        raise TypeError("stranded_skiers must be an integer")
-
     values = (
         float(transition.completed_journeys),
         float(transition.wait_time),
-        float(transition.dangerous_density),
-        float(transition.stranded_skiers),
+        float(transition.dangerous_density_seconds),
+        float(transition.cumulative_stranded_seconds),
         float(transition.intervention_cost),
         *(float(value) for value in transition.group_mean_wait_times),
     )

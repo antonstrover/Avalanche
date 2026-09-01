@@ -150,8 +150,10 @@ It creates the selected lock only after the model gates pass.
 Preserve each failed attempt as negative evidence.
 Do not replace an existing historical lock.
 
-Keep the historical reconstruction publisher unchanged.
-It preserves its lock files and uploads its immutable artifact bytes.
+Keep the historical reconstruction publisher outside formal analysis.
+It preserves dataset version four and feature version two in each new lock.
+It must not stamp a historical reconstruction with current schema versions.
+It preserves existing lock files and uploads immutable artifact bytes.
 It is fixed to the two failed historical reconstructions.
 Use the same release and registry pattern for each new passing attempt.
 

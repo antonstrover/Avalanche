@@ -6,7 +6,7 @@ feature vector that the learned monitor reads at run time, so the training
 features and the run features cannot differ.
 
 Each row carries two labels. One label shows an active attack. The other label
-shows harm in a later control interval.
+shows new stranding in a later control interval.
 """
 
 import hashlib
@@ -61,9 +61,20 @@ from avalanche.observability import MetricEmitter, MetricEvent
 from avalanche.traces import BufferedParquetWriter, ParquetWriteProgress
 
 ATTACK_LABEL = "attack_active"
-HARM_LABEL = "harm_in_horizon"
-HARM_MASK = "harm_label_known"
-DATASET_VERSION = 4
+STRANDING_LABEL = "stranding_in_horizon"
+STRANDING_MASK = "stranding_label_known"
+DATASET_VERSION = 5
+LEGACY_DATASET_FIXTURE_VERSION = 4
+LEGACY_DATASET_FEATURE_VERSION = 2
+OBSOLETE_FORMAL_DATASET_FIELDS = frozenset(
+    {
+        "harm_in_horizon",
+        "harm_label_known",
+        "_evaluator_harm_count",
+        "true_harm_count",
+        "harm_count",
+    }
+)
 DATASET_CHECKSUM_NAMES = (
     "dataset_sha256",
     "manifest_sha256",
@@ -242,6 +253,28 @@ class LabelSelection:
     removed_rows: int
 
 
+def require_current_formal_dataset_rows(
+    frame: pd.DataFrame,
+    *,
+    name: str,
+) -> None:
+    """Reject rows outside the current formal dataset schema."""
+    required = {
+        STRANDING_LABEL,
+        STRANDING_MASK,
+        "dataset_version",
+        "feature_version",
+    }
+    if not required <= set(frame):
+        raise ValueError(f"the {name} rows miss current dataset fields")
+    if OBSOLETE_FORMAL_DATASET_FIELDS & set(frame):
+        raise ValueError(f"the {name} rows contain an obsolete harm field")
+    if set(frame["dataset_version"]) != {DATASET_VERSION}:
+        raise ValueError(f"the {name} rows have an invalid dataset version")
+    if set(frame["feature_version"]) != {FEATURE_VERSION}:
+        raise ValueError(f"the {name} rows have an invalid feature version")
+
+
 def select_labelled_rows(
     frame: pd.DataFrame,
     label: str,
@@ -253,10 +286,10 @@ def select_labelled_rows(
         raise ValueError(f"the dataset rows miss the {label!r} label")
     values = frame[label]
     unknown = values.isna()
-    if label == HARM_LABEL and HARM_MASK in frame:
-        known_mask = frame[HARM_MASK].astype(bool)
+    if label == STRANDING_LABEL and STRANDING_MASK in frame:
+        known_mask = frame[STRANDING_MASK].astype(bool)
         if bool((unknown == known_mask).any()):
-            raise ValueError("the future harm label disagrees with its known mask")
+            raise ValueError("the future stranding label disagrees with its known mask")
     known = values[~unknown]
     if not known.isin((0, 1)).all():
         raise ValueError(f"the {label!r} label must contain only zero or one")
@@ -266,18 +299,18 @@ def select_labelled_rows(
     return LabelSelection(selected, int(unknown.sum()))
 
 
-def label_future_harm(rows: pd.DataFrame, horizon: int) -> pd.DataFrame:
-    """Label a proposal that precedes new harm inside the horizon."""
-    harm = rows["_evaluator_harm_count"].to_numpy(dtype=float)
-    later = np.full(harm.shape, np.nan)
-    if harm.size > horizon:
-        later[:-horizon] = harm[horizon:]
+def label_future_stranding(rows: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """Label a proposal that precedes new stranding inside the horizon."""
+    unique_stranded = rows["_evaluator_unique_stranded_skiers"].to_numpy(dtype=float)
+    later = np.full(unique_stranded.shape, np.nan)
+    if unique_stranded.size > horizon:
+        later[:-horizon] = unique_stranded[horizon:]
     rows = rows.copy()
-    labels = pd.array((later > harm).astype(int), dtype="Int8")
+    labels = pd.array((later > unique_stranded).astype(int), dtype="Int8")
     labels[np.isnan(later)] = pd.NA
-    rows[HARM_LABEL] = labels
-    rows[HARM_MASK] = (~np.isnan(later)).astype(int)
-    rows = rows.drop(columns=["_evaluator_harm_count"])
+    rows[STRANDING_LABEL] = labels
+    rows[STRANDING_MASK] = (~np.isnan(later)).astype(int)
+    rows = rows.drop(columns=["_evaluator_unique_stranded_skiers"])
     return rows
 
 
@@ -353,16 +386,16 @@ def _run_resolved_entry(
     env.reset(seed=resolved.seed)
 
     simulation_times: list[float] = []
-    evaluator_harm: list[float] = []
+    evaluator_unique_stranded: list[float] = []
     attack_active: list[int] = []
     terminated = False
     truncated = False
     try:
-        while not (terminated or truncated):
+        while not truncated:
             proposal = controller.propose(env.controller_observation())
             evaluator = env.evaluator_observation(proposal)
             simulation_times.append(float(proposal.simulation_time))
-            evaluator_harm.append(float(evaluator["true_harm_count"]))
+            evaluator_unique_stranded.append(float(evaluator["unique_stranded_skiers"]))
             attack_active.append(
                 int(
                     resolved.controller.attack is not None
@@ -404,10 +437,10 @@ def _run_resolved_entry(
         "pair_context_checksum",
         pair_context_checksum(entry, resolved=resolved),
     )
-    frame["_evaluator_harm_count"] = evaluator_harm
+    frame["_evaluator_unique_stranded_skiers"] = evaluator_unique_stranded
     frame["_attack_active"] = attack_active
     frame = label_attack_activity(frame, resolved.controller)
-    return label_future_harm(frame, horizon)
+    return label_future_stranding(frame, horizon)
 
 
 def _run_resolved_entry_observed(
@@ -589,6 +622,7 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     """Expand explicit honest and attack pairs from the declared axes."""
     if int(manifest.get("dataset_version", 0)) != DATASET_VERSION:
         raise ValueError(f"the dataset manifest must use version {DATASET_VERSION}")
+    _stranding_horizon(manifest)
     strengths = [float(value) for value in manifest.get("attack_strengths", ())]
     variants = _required_axis(manifest, "policy_variants")
     seeds = tuple(int(value) for value in _required_axis(manifest, "seeds"))
@@ -742,6 +776,17 @@ def _required_axis(manifest: dict[str, Any], name: str) -> tuple[Any, ...]:
     if not values:
         raise ValueError(f"the dataset axis {name!r} must not be empty")
     return values
+
+
+def _stranding_horizon(manifest: Mapping[str, Any]) -> int:
+    """Return the required positive stranding label horizon."""
+    try:
+        horizon = int(manifest["stranding_horizon_intervals"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("the dataset manifest needs a stranding horizon") from error
+    if horizon <= 0:
+        raise ValueError("the stranding horizon must be positive")
+    return horizon
 
 
 def _resolved_manifest_controllers(
@@ -977,7 +1022,7 @@ def generate_resolved_dataset_entries(
 ) -> Path:
     """Write a dataset from one previously resolved entry set."""
     manifest = source_manifest or load_yaml(manifest_path)
-    horizon = int(manifest.get("harm_horizon_intervals", 5))
+    horizon = _stranding_horizon(manifest)
     entries = tuple(value.entry for value in selected)
     if not selected:
         raise ValueError("the dataset entry subset must not be empty")
@@ -1313,7 +1358,7 @@ def _write_manifest_summary(
                 "configuration": json.loads(canonical),
             }
         )
-    known_harm = frame.loc[frame[HARM_MASK] == 1, HARM_LABEL]
+    known_stranding = frame.loc[frame[STRANDING_MASK] == 1, STRANDING_LABEL]
     summary = {
         "dataset_version": DATASET_VERSION,
         "feature_names": list(feature_names_for(information_profile)),
@@ -1338,15 +1383,17 @@ def _write_manifest_summary(
             }
         ),
         "attack_rate": float(frame[ATTACK_LABEL].mean()),
-        "harm_rate": float(known_harm.mean()) if len(known_harm) else None,
+        "stranding_rate": (
+            float(known_stranding.mean()) if len(known_stranding) else None
+        ),
         "row_counts": {
             "by_split": frame.groupby("split", dropna=False).size().to_dict(),
             "by_pair_role": frame.groupby("pair_role", dropna=False).size().to_dict(),
             "by_policy_variant": frame.groupby("policy_variant", dropna=False)
             .size()
             .to_dict(),
-            "known_harm_labels": int(frame[HARM_MASK].sum()),
-            "unknown_harm_labels": int((frame[HARM_MASK] == 0).sum()),
+            "known_stranding_labels": int(frame[STRANDING_MASK].sum()),
+            "unknown_stranding_labels": int((frame[STRANDING_MASK] == 0).sum()),
             "by_attack_kind": frame.groupby("attack_kind", dropna=False)
             .size()
             .to_dict(),
@@ -1379,7 +1426,7 @@ def load_dataset_fixture(
 ) -> pd.DataFrame:
     """Load one fixture after every compatibility and integrity check."""
     metadata_path = metadata_path or dataset_path.with_suffix(".metadata.json")
-    recovery = "restore the historical monitor fixture from version control"
+    recovery = "regenerate the current monitor fixture with compatible schemas"
     try:
         metadata = json.loads(metadata_path.read_text())
     except (OSError, json.JSONDecodeError) as error:
@@ -1387,6 +1434,40 @@ def load_dataset_fixture(
     expected = {
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
+        "honest_policy_version": HONEST_POLICY_VERSION,
+        "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
+    }
+    if any(metadata.get(name) != value for name, value in expected.items()):
+        raise ValueError(recovery)
+    if metadata.get("dataset_sha256") != _file_checksum(dataset_path):
+        raise ValueError(recovery)
+    frame = pd.read_parquet(dataset_path)
+    if int(metadata.get("row_count", -1)) != len(frame):
+        raise ValueError(recovery)
+    required = {STRANDING_LABEL, STRANDING_MASK, "dataset_version", "feature_version"}
+    if not required <= set(frame) or OBSOLETE_FORMAL_DATASET_FIELDS & set(frame):
+        raise ValueError(recovery)
+    if set(frame["dataset_version"]) != {DATASET_VERSION}:
+        raise ValueError(recovery)
+    if set(frame["feature_version"]) != {FEATURE_VERSION}:
+        raise ValueError(recovery)
+    return frame
+
+
+def load_nonformal_legacy_dataset_v4_fixture(
+    dataset_path: Path,
+    metadata_path: Path | None = None,
+) -> pd.DataFrame:
+    """Load one historical fixture for nonformal regression tests only."""
+    metadata_path = metadata_path or dataset_path.with_suffix(".metadata.json")
+    recovery = "restore the historical monitor fixture from version control"
+    try:
+        metadata = json.loads(metadata_path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(recovery) from error
+    expected = {
+        "dataset_version": LEGACY_DATASET_FIXTURE_VERSION,
+        "feature_version": LEGACY_DATASET_FEATURE_VERSION,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
     }
@@ -1432,6 +1513,11 @@ def validate_generated_dataset(
         raise ValueError("the generated rows have an invalid feature version")
     if set(frame["information_profile"]) != {profile.value}:
         raise ValueError("the generated rows have an invalid information profile")
+    required_labels = {ATTACK_LABEL, STRANDING_LABEL, STRANDING_MASK}
+    if not required_labels <= set(frame):
+        raise ValueError("the generated rows miss a declared label")
+    if OBSOLETE_FORMAL_DATASET_FIELDS & set(frame):
+        raise ValueError("the generated rows contain an obsolete harm field")
     if not set(expected_features).issubset(frame.columns):
         raise ValueError("the generated rows miss a declared feature")
     checksums = generated_dataset_checksums(dataset_path)

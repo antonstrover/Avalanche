@@ -27,8 +27,8 @@ INCIDENT_KIND_NAMES = (
     FailureKind.LIFT_STOPPAGE.value,
     FailureKind.LATE_TELEMETRY.value,
     FailureKind.SUDDEN_CLOSURE.value,
-    "early_indicator",
-    "true_harm",
+    "density_warning",
+    "capacity_exposure",
 )
 INCIDENT_KIND_INDEX = {name: index for index, name in enumerate(INCIDENT_KIND_NAMES)}
 INTERVENTION_DECISION_NAMES = (

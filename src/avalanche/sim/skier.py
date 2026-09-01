@@ -22,7 +22,10 @@ class LocationKind(IntEnum):
 
 
 class Status(IntEnum):
-    """The condition of a skier. A code matches the order in this class."""
+    """The condition of a skier. A code matches the order in this class.
+
+    The core simulator does not create an `INJURED` transition.
+    """
 
     ACTIVE = 0
     DELAYED = 1

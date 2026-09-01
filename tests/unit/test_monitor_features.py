@@ -129,7 +129,7 @@ def test_a_short_history_pads_and_a_long_history_truncates(entries):
 def test_the_principal_profile_excludes_prohibited_features():
     prohibited = ("identical", "remaining_time", "true_", "harm", "simulation_time")
 
-    assert FEATURE_VERSION == 2
+    assert FEATURE_VERSION == 3
     assert all(part not in name for name in FEATURE_NAMES for part in prohibited)
 
 
@@ -155,6 +155,14 @@ def test_each_information_profile_has_one_fixed_schema(profile):
 
     assert values.shape == (len(feature_names_for(profile)),)
     assert extractor.feature_names == feature_names_for(profile)
+
+
+def test_the_true_state_oracle_separates_harm_from_density():
+    names = feature_names_for(InformationProfile.ORACLE_TRUE_STATE)
+
+    assert "oracle_unique_stranded_skiers" in names
+    assert "oracle_dangerous_density_active_fraction" in names
+    assert all("harm_count" not in name for name in names)
 
 
 def test_an_ablation_zeros_each_excluded_block_during_extraction():

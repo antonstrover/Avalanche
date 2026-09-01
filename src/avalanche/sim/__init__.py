@@ -4,6 +4,11 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from avalanche.sim.engine import MountainSim
+from avalanche.sim.evacuation import (
+    ResolvedEnvironmentContext,
+    current_safe_evacuation_capacity,
+    resolve_environment_context,
+)
 from avalanche.sim.graph import build_graph, validate_graph
 from avalanche.sim.hazards import HazardEvent, HazardEventType, update_hazards
 from avalanche.sim.movement import (
@@ -54,6 +59,9 @@ from avalanche.sim.topology import (
 
 __all__ = [
     "MountainSim",
+    "ResolvedEnvironmentContext",
+    "current_safe_evacuation_capacity",
+    "resolve_environment_context",
     "build_graph",
     "validate_graph",
     "HazardEvent",

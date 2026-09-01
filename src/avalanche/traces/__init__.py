@@ -13,6 +13,7 @@ from avalanche.traces.snapshots import (
 )
 from avalanche.traces.writer import (
     EVENT_SCHEMA_VERSION,
+    SUMMARY_SCHEMA_VERSION,
     EventRecord,
     EventState,
     TraceWriter,
@@ -23,6 +24,7 @@ __all__ = [
     "BufferedParquetWriter",
     "EVENT_SCHEMA_VERSION",
     "SNAPSHOT_SCHEMA_VERSION",
+    "SUMMARY_SCHEMA_VERSION",
     "EventRecord",
     "EventState",
     "ParquetWriteProgress",

@@ -688,6 +688,7 @@ class ConfigurationResolver:
         self, resolved: ResolvedConfig, topology: Any
     ) -> list[str]:
         """Validate every topology reference and wrapper precondition."""
+        from avalanche.sim.ability import ABILITY_NAMES, ability_edge_mask
         from avalanche.sim.topology import EDGE_TYPE_NAMES
 
         errors: list[str] = []
@@ -730,6 +731,39 @@ class ConfigurationResolver:
                     f"{reference!r} is not controllable"
                 )
             return index
+
+        environment_context = None
+        try:
+            environment_context = resolved.scenario.environment_context.for_mountain(
+                resolved.mountain.name
+            )
+        except ValueError as error:
+            errors.append(f"scenario /scenario/environment_context: {error}")
+        if environment_context is not None:
+            context_index = next(
+                index
+                for index, context in enumerate(
+                    resolved.scenario.environment_context.evacuation_targets
+                )
+                if context.mountain == resolved.mountain.name
+            )
+            for target_index, target in enumerate(
+                environment_context.evacuation_target_edges
+            ):
+                pointer = (
+                    "/scenario/environment_context/evacuation_targets/"
+                    f"{context_index}/evacuation_target_edges/{target_index}/edge"
+                )
+                edge_index = require_edge(pointer, target.edge)
+                if edge_index is None:
+                    continue
+                for ability in target.abilities:
+                    ability_index = ABILITY_NAMES.index(ability)
+                    if not bool(ability_edge_mask(topology, ability_index)[edge_index]):
+                        errors.append(
+                            f"scenario {pointer}: {target.edge!r} is unsafe for "
+                            f"the {ability} ability"
+                        )
 
         controller = resolved.controller
         if controller.balanced_lifts is not None:

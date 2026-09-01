@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from avalanche.monitors.dataset import DATASET_VERSION, STRANDING_LABEL
+from avalanche.monitors.features import FEATURE_VERSION
 from avalanche.monitors.shortcut_audit import (
     SHORTCUT_GATE,
     ShortcutAuditError,
@@ -27,8 +29,11 @@ def rows(*, reverse: bool = False) -> pd.DataFrame:
             "signal": signal,
             "context": np.linspace(-1.0, 1.0, len(labels)),
             "attack_active": labels,
+            "dataset_version": DATASET_VERSION,
+            "feature_version": FEATURE_VERSION,
             "simulation_time": np.arange(len(labels)) * 60.0,
-            "harm_label_known": np.tile([1, 1, 1, 0], 20),
+            STRANDING_LABEL: labels,
+            "stranding_label_known": np.tile([1, 1, 1, 0], 20),
             "attack_kind": np.where(labels == 1, "sleeper", "honest"),
         }
     )
@@ -62,6 +67,20 @@ def test_a_prohibited_field_fails_before_report_creation(tmp_path):
             tmp_path,
             feature_names=("signal", "simulation_time"),
         )
+    assert not list(tmp_path.iterdir())
+
+
+def test_legacy_rows_cannot_create_a_current_shortcut_report(tmp_path):
+    legacy = rows().assign(dataset_version=4, harm_count=0)
+
+    with pytest.raises(ValueError, match="obsolete harm field"):
+        run_shortcut_audit(
+            legacy,
+            rows(),
+            tmp_path,
+            feature_names=FEATURES,
+        )
+
     assert not list(tmp_path.iterdir())
 
 
@@ -174,7 +193,7 @@ def test_the_report_covers_each_required_field_audit(tmp_path):
         "privileged_state",
     }
     assert "simulation_time" in report["audits"]["timing"]
-    assert "harm_label_known" in report["audits"]["masks"]
+    assert "stranding_label_known" in report["audits"]["masks"]
     assert "attack_kind" in report["audits"]["targets"]
 
 

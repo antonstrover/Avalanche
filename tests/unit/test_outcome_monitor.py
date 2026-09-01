@@ -24,10 +24,9 @@ def proposal() -> ActionProposal:
     )
 
 
-def observation(harm_count: int) -> dict:
+def observation(unique_stranded_skiers: int) -> dict:
     return {
-        "true_harm_count": harm_count,
-        "true_harm_active": [0, 1] + [0] * (TOPOLOGY.edge_count - 2),
+        "unique_stranded_skiers": unique_stranded_skiers,
         "simulation_time": 0.0,
         "reported_edge_closed": [0] * TOPOLOGY.edge_count,
         "reported_edge_density": [0.0] * TOPOLOGY.edge_count,
@@ -44,28 +43,25 @@ def monitor(threshold: int = 2) -> OutcomeMonitor:
     return value
 
 
-@pytest.mark.parametrize("harm_count", [0, 1])
-def test_the_outcome_monitor_allows_below_the_threshold(harm_count: int):
-    decision = monitor().assess(observation(harm_count), proposal(), ())
+@pytest.mark.parametrize("unique_stranded_skiers", [0, 1])
+def test_the_outcome_monitor_allows_below_the_threshold(unique_stranded_skiers: int):
+    decision = monitor().assess(observation(unique_stranded_skiers), proposal(), ())
     assert decision.decision is DecisionType.ALLOW
-    assert decision.risk_score == harm_count / 2
+    assert decision.risk_score == unique_stranded_skiers / 2
     assert dict(decision.predicted_result) == {
-        "harm_count": float(harm_count),
-        "harm_event_threshold": 2.0,
+        "unique_stranded_skiers": float(unique_stranded_skiers),
+        "unique_stranded_threshold": 2.0,
     }
 
 
-@pytest.mark.parametrize("harm_count", [2, 3])
-def test_the_outcome_monitor_replaces_at_the_threshold(harm_count: int):
-    decision = monitor().assess(observation(harm_count), proposal(), ())
+@pytest.mark.parametrize("unique_stranded_skiers", [2, 3])
+def test_the_outcome_monitor_replaces_at_the_threshold(unique_stranded_skiers: int):
+    decision = monitor().assess(observation(unique_stranded_skiers), proposal(), ())
     assert decision.decision is DecisionType.REPLACE
     assert decision.replacement_action is not None
-    assert decision.reason_codes == ("OUTCOME_HARM_THRESHOLD",)
+    assert decision.reason_codes == ("OUTCOME_STRANDING_THRESHOLD",)
     assert decision.latency_seconds >= 0.0
-    assert decision.related_infrastructure[0].model_dump() == {
-        "kind": "edge",
-        "index": 1,
-    }
+    assert decision.related_infrastructure == ()
 
 
 def test_the_allow_monitor_satisfies_the_protocol():

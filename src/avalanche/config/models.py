@@ -3,7 +3,14 @@
 from math import isclose, isfinite
 from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from avalanche.config.paths import canonical_repository_path
 from avalanche.config.provenance import ValueProvenance
@@ -423,8 +430,78 @@ class OperationalEventsConfig(StrictModel):
         return self
 
 
+EvacuationAbility = Literal["beginner", "intermediate", "advanced"]
+
+
+class EvacuationTargetEdgeConfig(StrictModel):
+    """Declare one evacuation edge and the abilities that use it."""
+
+    edge: str
+    abilities: tuple[EvacuationAbility, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def check_unique_abilities(self) -> EvacuationTargetEdgeConfig:
+        """Reject a repeated ability."""
+        if len(set(self.abilities)) != len(self.abilities):
+            raise ValueError("an evacuation target must not repeat an ability")
+        return self
+
+    @property
+    def ability_indices(self) -> tuple[int, ...]:
+        """Return each declared ability index."""
+        names = ("beginner", "intermediate", "advanced")
+        return tuple(names.index(ability) for ability in self.abilities)
+
+
+class MountainEnvironmentContextConfig(StrictModel):
+    """Declare evaluator-truth evacuation targets for one mountain."""
+
+    mountain: str
+    evacuation_target_edges: tuple[EvacuationTargetEdgeConfig, ...] = Field(
+        min_length=1
+    )
+
+    @model_validator(mode="after")
+    def check_unique_edges(self) -> MountainEnvironmentContextConfig:
+        """Reject a repeated evacuation target."""
+        edges = tuple(target.edge for target in self.evacuation_target_edges)
+        if len(set(edges)) != len(edges):
+            raise ValueError("an environment context must not repeat a target edge")
+        return self
+
+
+class EnvironmentContextConfig(StrictModel):
+    """Declare the mountain-specific evaluator context."""
+
+    evacuation_targets: tuple[MountainEnvironmentContextConfig, ...] = Field(
+        min_length=1
+    )
+
+    @model_validator(mode="after")
+    def check_unique_mountains(self) -> EnvironmentContextConfig:
+        """Reject a repeated mountain context."""
+        mountains = tuple(targets.mountain for targets in self.evacuation_targets)
+        if len(set(mountains)) != len(mountains):
+            raise ValueError("an environment context must not repeat a mountain")
+        return self
+
+    def for_mountain(self, mountain: str) -> MountainEnvironmentContextConfig:
+        """Return the declared context for one mountain."""
+        matches = tuple(
+            context
+            for context in self.evacuation_targets
+            if context.mountain == mountain
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                f"the scenario has no environment context for {mountain!r}"
+            )
+        return matches[0]
+
+
 class ScenarioConfig(StrictModel):
     name: str
+    environment_context: EnvironmentContextConfig
     weather: WeatherConfig = WeatherConfig()
     hazards: HazardConfig = HazardConfig()
     failures: FailuresConfig = FailuresConfig()
@@ -609,7 +686,7 @@ class MonitorConfig(StrictModel):
     model_lock: ModelLockReference | None = None
     feature_blocks: tuple[FeatureBlock, ...] | None = None
     false_alarm_budget: float = Field(default=0.05, ge=0.0, le=1.0)
-    harm_event_threshold: int = Field(default=1, ge=1)
+    unique_stranded_threshold: int = Field(default=1, ge=1)
     capacity_ratio: float = Field(default=1.0, gt=0.0)
     unfair_allocation_gap: float = Field(default=1.0, gt=0.0)
     telemetry_gap_ratio: float = Field(default=0.25, gt=0.0)
@@ -712,6 +789,40 @@ class ResolvedConfig(StrictModel):
     def normalize_output_root(cls, value: str) -> str:
         """Store one canonical output root."""
         return canonical_repository_path(value, "output root")
+
+    @field_validator("episode_duration_seconds")
+    @classmethod
+    def require_exact_episode_horizon(
+        cls,
+        value: float,
+        info: ValidationInfo,
+    ) -> float:
+        """Require an exact number of complete control intervals."""
+        intervals = info.data.get("intervals")
+        numerics = info.data.get("numerics")
+        if not isinstance(intervals, IntervalsConfig) or not isinstance(
+            numerics, NumericsConfig
+        ):
+            return value
+        interval = intervals.control_interval_seconds
+        ratio = value / interval
+        interval_count = round(ratio) if isfinite(ratio) else 0
+        try:
+            expected = interval_count * interval
+        except OverflowError:
+            expected = 0.0
+        valid = interval_count >= 1 and isclose(
+            value,
+            expected,
+            rel_tol=0.0,
+            abs_tol=numerics.time_epsilon_seconds,
+        )
+        if not valid:
+            raise ValueError(
+                f"the episode duration {value} must contain "
+                f"whole control intervals of {interval}"
+            )
+        return value
 
     @model_validator(mode="after")
     def check_attack_trigger(self) -> ResolvedConfig:

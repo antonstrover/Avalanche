@@ -1,5 +1,6 @@
 """Check the timed stranded-state transition."""
 
+import ast
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +9,7 @@ import pytest
 from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS
 from avalanche.sim import (
     LocationKind,
+    MountainSim,
     build_route_table,
     load_topology,
     population_from_starts,
@@ -41,7 +43,7 @@ def edge_index(topology, source: str, destination: str) -> int:
     return int(matches[0])
 
 
-def test_a_closed_route_marks_a_skier_after_the_limit():
+def test_a_closed_route_returns_a_candidate_after_the_limit():
     topology = load_topology(FIXTURE)
     routes = build_route_table(topology)
     source = topology.node_index["base_village"]
@@ -56,7 +58,7 @@ def test_a_closed_route_marks_a_skier_after_the_limit():
     assert update_stranded(population, routes, state, 5.0, 10.0).size == 0
     changed = update_stranded(population, routes, state, 5.0, 10.0)
     np.testing.assert_array_equal(changed, [0])
-    assert population.status[0] == Status.STRANDED
+    assert population.status[0] == Status.ACTIVE
 
 
 def test_an_open_route_clears_the_blocked_time():
@@ -95,7 +97,7 @@ def test_the_stranding_limit_uses_the_shared_epsilon():
     changed = update_stranded(population, routes, state, 5.0, 10.0, epsilon)
 
     np.testing.assert_array_equal(changed, [0])
-    np.testing.assert_array_equal(population.status, [Status.STRANDED, Status.ACTIVE])
+    np.testing.assert_array_equal(population.status, [Status.ACTIVE, Status.ACTIVE])
 
 
 def test_both_lift_counters_use_the_shared_epsilon():
@@ -135,10 +137,7 @@ def test_both_lift_counters_use_the_shared_epsilon():
     )
 
     np.testing.assert_array_equal(changed, [0, 2])
-    np.testing.assert_array_equal(
-        population.status,
-        [Status.STRANDED, Status.ACTIVE, Status.STRANDED, Status.ACTIVE],
-    )
+    np.testing.assert_array_equal(population.status, [Status.ACTIVE] * 4)
 
 
 def test_queued_no_route_strands_at_timeout():
@@ -179,7 +178,7 @@ def test_queued_no_route_strands_at_timeout():
     np.testing.assert_array_equal(changed, [0])
     assert population.queue_no_route_blocked_seconds[0] == 10.0
     assert population.onboard_blocked_seconds[0] == 0.0
-    assert population.status[0] == Status.STRANDED
+    assert population.status[0] == Status.ACTIVE
 
 
 @pytest.mark.parametrize(
@@ -222,7 +221,7 @@ def test_each_closure_source_uses_one_continuous_period(field: str):
     )
 
     np.testing.assert_array_equal(second, [0, 1])
-    np.testing.assert_array_equal(population.status, [Status.STRANDED, Status.STRANDED])
+    np.testing.assert_array_equal(population.status, [Status.ACTIVE, Status.ACTIVE])
     np.testing.assert_array_equal(
         population.queue_no_route_blocked_seconds, [10.0, 0.0]
     )
@@ -343,3 +342,92 @@ def test_recovery_does_not_revive_a_stranded_skier():
     assert population.status[1] == Status.STRANDED
     assert population.remaining_travel_seconds[0] < 30.0
     assert population.remaining_travel_seconds[1] == 30.0
+
+
+def test_node_and_failed_lift_stranding_commit_at_one_boundary():
+    """Commit both stranding paths with the same onset semantics."""
+    sim = MountainSim(FIXTURE)
+    sim.reset(
+        19,
+        {
+            "hazards": {"stranded_after_seconds": 10.0},
+            "failures": {
+                "schedule": [
+                    {
+                        "kind": "lift_stoppage",
+                        "target": "lift1_base->lift1_top",
+                        "start_time_seconds": 0.0,
+                        "duration_seconds": 30.0,
+                        "controller_visible": True,
+                    }
+                ]
+            },
+            "control_interval_seconds": 60.0,
+        },
+    )
+    topology = sim.topology
+    assert topology is not None
+    base = topology.node_index["base_village"]
+    lift_base = topology.node_index["lift1_base"]
+    destination = topology.node_index["base_exit"]
+    lift = edge_index(topology, "lift1_base", "lift1_top")
+    sim.population = population_from_starts([base, lift_base], destination)
+    sim.population.location_kind[1] = LocationKind.LIFT
+    sim.population.location_index[1] = lift
+    sim.population.required_travel_seconds[1] = 30.0
+    sim.population.remaining_travel_seconds[1] = 30.0
+    sim.state.closed[topology.edges_from(base)] = True
+
+    first = sim.tick()
+    second = sim.tick()
+
+    assert first.newly_stranded_indices.size == 0
+    np.testing.assert_array_equal(second.newly_stranded_indices, [0, 1])
+    assert second.stranding_boundary_seconds == 10.0
+    assert second.control_interval_index == 0
+    np.testing.assert_array_equal(sim.population.status, [Status.STRANDED] * 2)
+    np.testing.assert_array_equal(sim.population.ever_stranded, [True, True])
+    np.testing.assert_array_equal(sim.population.first_stranded_at, [10.0, 10.0])
+
+
+def test_the_first_stranding_timestamp_is_sticky():
+    """Keep the first boundary after a later stranded tick."""
+    sim = MountainSim(FIXTURE)
+    sim.reset(20, {"hazards": {"stranded_after_seconds": 5.0}})
+    topology = sim.topology
+    assert topology is not None
+    base = topology.node_index["base_village"]
+    destination = topology.node_index["base_exit"]
+    sim.population = population_from_starts([base], destination)
+    sim.state.closed[topology.edges_from(base)] = True
+
+    onset = sim.tick()
+    onset_metrics = sim.metrics.snapshot(sim.population)
+    later = sim.tick()
+    later_metrics = sim.metrics.snapshot(sim.population)
+
+    np.testing.assert_array_equal(onset.newly_stranded_indices, [0])
+    assert later.newly_stranded_indices.size == 0
+    assert sim.population.first_stranded_at[0] == 5.0
+    assert sim.population.ever_stranded[0]
+    assert onset_metrics.unique_stranded_skiers == 1
+    assert later_metrics.unique_stranded_skiers >= onset_metrics.unique_stranded_skiers
+    assert later_metrics.cumulative_stranded_seconds >= (
+        onset_metrics.cumulative_stranded_seconds
+    )
+
+
+def test_no_source_assignment_creates_an_injured_status():
+    """Keep the unused status outside every direct transition assignment."""
+    source_root = Path(__file__).resolve().parents[2] / "src" / "avalanche"
+    assignments = []
+    for path in source_root.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                continue
+            value = node.value
+            if isinstance(value, ast.Attribute) and value.attr == "INJURED":
+                assignments.append(f"{path}:{node.lineno}")
+
+    assert assignments == []

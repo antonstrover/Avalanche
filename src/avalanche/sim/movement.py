@@ -47,10 +47,15 @@ ON_EDGE = (LocationKind.PISTE, LocationKind.LIFT)
 
 @dataclass(frozen=True)
 class MovementTransitions:
-    """Record the skier identities and times of edge completions."""
+    """Record simultaneous edge completions and new stranding transitions."""
 
     completed_skiers: np.ndarray
     edge_completed_at: np.ndarray
+    newly_stranded_indices: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
+    stranding_boundary_seconds: float | None = None
+    control_interval_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -92,9 +97,9 @@ DYNAMIC_STATE_ARRAY_FIELDS = (
     "dangerous_duration",
     "dangerous_density_seconds",
     "early_indicator",
-    "harm_active",
+    "dangerous_density_active",
     "indicator_count",
-    "harm_count",
+    "dangerous_density_onset_count",
     "reported_occupancy",
     "reported_queue_length",
     "reported_speed_factor",
@@ -198,11 +203,15 @@ class DynamicState:
     early_indicator: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.bool_)
     )
-    harm_active: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.bool_))
+    dangerous_density_active: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.bool_)
+    )
     indicator_count: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.int32)
     )
-    harm_count: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
+    dangerous_density_onset_count: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
     route_preferences: np.ndarray = field(
         default_factory=lambda: np.zeros((len(ABILITY_NAMES), 0), dtype=np.float64)
     )
@@ -247,9 +256,9 @@ def new_dynamic_state(topology: Topology) -> DynamicState:
         dangerous_duration=np.zeros(topology.edge_count, dtype=np.float64),
         dangerous_density_seconds=np.zeros(topology.edge_count, dtype=np.float64),
         early_indicator=np.zeros(topology.edge_count, dtype=np.bool_),
-        harm_active=np.zeros(topology.edge_count, dtype=np.bool_),
+        dangerous_density_active=np.zeros(topology.edge_count, dtype=np.bool_),
         indicator_count=np.zeros(topology.edge_count, dtype=np.int32),
-        harm_count=np.zeros(topology.edge_count, dtype=np.int32),
+        dangerous_density_onset_count=np.zeros(topology.edge_count, dtype=np.int32),
         route_preferences=np.zeros(
             (len(ABILITY_NAMES), topology.edge_count), dtype=np.float64
         ),
@@ -800,7 +809,7 @@ def update_lift_blocked_times(
     stranded_after_seconds: float,
     epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
 ) -> np.ndarray:
-    """Update both lift blocked counters and commit stranding together."""
+    """Update both lift blocked counters and return stranding candidates."""
     returned = np.asarray(returned_queue_skiers, dtype=np.int64).reshape(-1)
     if np.any((returned < 0) | (returned >= len(pop))):
         raise ValueError("a returned queue skier index is outside the population")
@@ -872,7 +881,6 @@ def update_lift_blocked_times(
         newly_queue_stranded,
         newly_onboard_stranded,
     ).astype(np.int64, copy=False)
-    pop.status[newly_stranded] = Status.STRANDED
     return newly_stranded
 
 
@@ -886,7 +894,7 @@ def update_stranded(
     *,
     topology: Topology | None = None,
 ) -> np.ndarray:
-    """Mark skiers after a route closure blocks them for too long."""
+    """Return skiers whose route closure has reached the timeout."""
     active_nodes = (
         (pop.status == Status.ACTIVE)
         & (pop.location_kind == LocationKind.NODE)
@@ -925,5 +933,4 @@ def update_stranded(
             epsilon_seconds,
         )
     ]
-    pop.status[newly_stranded] = Status.STRANDED
     return newly_stranded

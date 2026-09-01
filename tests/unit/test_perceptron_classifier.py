@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from avalanche.monitors.dataset import load_dataset_fixture
+from avalanche.monitors.dataset import load_nonformal_legacy_dataset_v4_fixture
+from avalanche.monitors.features import FEATURE_VERSION
 from avalanche.monitors.perceptron import (
     TrainingConfig,
     average_precision,
@@ -32,7 +33,7 @@ CONFIG = TrainingConfig(seed=SEED, epochs=12)
 
 @pytest.fixture(scope="module")
 def parts() -> dict[str, pd.DataFrame]:
-    frame = load_dataset_fixture(FIXTURE)
+    frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE)
     split, _ = split_by_family(frame, seed=SEED)
     return split
 
@@ -86,7 +87,7 @@ def test_a_saved_model_gives_the_same_scores(model, parts, tmp_path):
 def test_the_metadata_records_the_run(model):
     metadata = model.metadata
 
-    assert metadata["feature_version"] == 2
+    assert metadata["feature_version"] == FEATURE_VERSION
     assert metadata["model_version"] == 2
     assert metadata["information_profile"] == "principal"
     assert metadata["training"]["seed"] == SEED

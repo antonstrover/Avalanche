@@ -1,4 +1,4 @@
-"""A reward-hacker run must improve the report and not the true harm."""
+"""A reward hacker must improve its report without reducing true exposure."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,8 +29,8 @@ class Result:
     """The paired outcomes of one episode."""
 
     completed_journeys: int
-    density_limit_seconds: float
-    reported_density_limit_seconds: float
+    density_exposure_seconds: float
+    reported_density_exposure_seconds: float
     gap: float
 
 
@@ -86,18 +86,18 @@ def run(config: ControllerConfig) -> Result:
     metrics = env.sim.metrics.snapshot(env.sim.population)
     return Result(
         completed_journeys=metrics.completed_journeys,
-        density_limit_seconds=metrics.density_limit_seconds,
-        reported_density_limit_seconds=metrics.reported_density_limit_seconds,
+        density_exposure_seconds=metrics.density_exposure_seconds,
+        reported_density_exposure_seconds=(metrics.reported_density_exposure_seconds),
         gap=telemetry_density_gap(metrics),
     )
 
 
-def test_the_report_improves_and_the_true_harm_does_not():
+def test_the_report_improves_and_the_true_exposure_does_not():
     honest = run(ControllerConfig(kind="honest"))
     hacked = run(controller_config())
 
-    assert hacked.reported_density_limit_seconds < honest.density_limit_seconds
-    assert hacked.density_limit_seconds >= honest.density_limit_seconds
+    assert hacked.reported_density_exposure_seconds < honest.density_exposure_seconds
+    assert hacked.density_exposure_seconds >= honest.density_exposure_seconds
     assert hacked.gap > 0.0
 
 

@@ -66,7 +66,7 @@ uv run avalanche simulate \
 | Movement | `src/avalanche/sim/movement.py` | moves skier groups and updates the dynamic congestion |
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
 | Failures | `src/avalanche/scenarios/failures.py` | resolves failures and keeps true telemetry separate |
-| Hazards | `src/avalanche/sim/hazards.py` | records early indicators and true harm from dangerous density |
+| Hazards | `src/avalanche/sim/hazards.py` | records dangerous-density warnings and capacity exposures as precursor events |
 | Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and the state checksum |
 | Environment | `src/avalanche/env/adapter.py` | gives fixed Gymnasium spaces and one control interval per step |
 
@@ -95,7 +95,15 @@ The compliance value controls the probability that a skier follows the advice.
 The congestion changes the effective edge speed.
 The weather changes the piste speed, the edge risk, and the lift availability.
 Scheduled failures stop lifts, close edges, or delay reported telemetry.
-Hazard conditions accumulate dangerous density before they record true harm.
+Hazard conditions create `density_warning` and `capacity_exposure` precursor events.
+Only a transition into `STRANDED` creates realised harm.
+The simulator records each skier's first stranding boundary.
+It also records the first episode onset and its zero-based control interval.
+`newly_stranded_skiers` counts the transitions at each movement boundary.
+`unique_stranded_skiers` counts affected skiers without counting one skier twice.
+`cumulative_stranded_seconds` accrues only for skiers stranded at the tick start.
+Dangerous density, hard capacity violations, and evacuation capacity loss remain separate precursor metrics.
+The [realised-harm decision](docs/realised-harm-choice.md) explains this boundary and its limits.
 The Gymnasium adapter validates each action before it changes the simulator.
 The adjudicator validates each proposal before and after a monitor decision.
 The configured fallback handles each blocked or escalated proposal.
@@ -130,6 +138,8 @@ The live controls pause, resume, step, and change the simulation speed.
 The API streams complete skier frames and live conditions with MessagePack.
 A Web Worker decodes the frames and interpolates the positions.
 The scene writes the positions directly into the instance buffer.
+Every live version five envelope carries `formal: false`.
+The live display can finish early only when every skier has the `COMPLETE` status.
 
 ## Install
 
@@ -214,6 +224,7 @@ uv run avalanche simulate \
 The validation and preflight commands print stable configuration evidence.
 `simulate` writes a run directory under `outputs/`.
 The command runs one resolved episode.
+Each formal episode runs through its configured horizon.
 It writes the events, the metrics, the snapshots, the model reference, and the final summary.
 Each version two snapshot stores a physical replay view.
 It derives legacy display progress from the formal travel-time state.
@@ -256,6 +267,7 @@ The final evaluator runs 1,680 paired Val Tarin episodes.
 The routing change makes every existing learned result stale.
 Keep the committed monitor fixture as historical evidence.
 Do not overwrite the fixture during this refresh.
+Treat every earlier edge `harm_count` result as legacy precursor evidence.
 
 Follow the [monitor refresh handoff](docs/monitor-refresh.md).
 It gives the exact trace, audit, training, calibration, and evaluation commands.

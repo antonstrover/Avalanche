@@ -18,7 +18,8 @@ from avalanche.experiments.adaptive import (
     write_adaptive_extension,
 )
 from avalanche.experiments.final_evaluation import ATTACK_KINDS
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.dataset import DATASET_VERSION
+from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.training import AttemptLockV2
 
 
@@ -94,8 +95,8 @@ def model_lock(tmp_path, name: str, content: bytes):
         creation_command="uv run pytest tests/unit/test_adaptive.py",
         schema_versions={
             "calibration": 2,
-            "dataset": 4,
-            "feature": 2,
+            "dataset": DATASET_VERSION,
+            "feature": FEATURE_VERSION,
             "lock": 2,
             "model": 2,
         },

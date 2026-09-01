@@ -7,7 +7,7 @@ Resolve an include from the directory of its declaring file.
 
 The mountain component owns `mountain` and `population`.
 The scenario component owns the intervals and the numerical boundary value.
-It also owns the schedules, seed, duration, snapshots, and trace level.
+It also owns the schedules, environment context, seed, duration, snapshots, and trace level.
 The controller component owns only `controller`.
 The monitor component owns `monitor`, `fallback`, and `approval`.
 
@@ -25,6 +25,19 @@ The resolver defaults `runtime.worker_count` to one.
 The resolved digest includes every logical configuration value.
 The scientific digest excludes the output root and worker count.
 The time epsilon must equal 0.000000001 seconds.
+The episode duration must contain whole control intervals.
+
+## Evacuation context
+
+Use `scenario.environment_context.evacuation_targets` to declare targets for each compatible mountain.
+Each mountain entry names `mountain` and `evacuation_target_edges`.
+Each target names an `edge` and its evacuation `abilities`.
+Configuration validation must reject an unknown mountain, edge, or ability.
+It must reject an edge that is unsafe for any declared ability.
+
+The runtime selects the entry for the resolved mountain.
+It freezes `baseline_safe_evacuation_capacity_skiers_per_second` from the initial physical state.
+It must not recompute that baseline during the episode.
 
 ## Mountain validation
 
@@ -58,7 +71,7 @@ Use `/api/demo-sessions` for display-only demonstrations.
 The formal `/api/sessions` endpoint rejects every demo behaviour field.
 
 The training component manifest lists every controller and override selection.
-Each training seed selects one formal override with four workers.
+Each training seed selects one formal override with eight workers.
 Regenerate those components after changing a training controller or matrix axis.
 
 Run:

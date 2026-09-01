@@ -38,7 +38,7 @@ def generate() -> None:
         "honest": {},
         "attacks": {},
     }
-    _write_yaml(OVERRIDES / "parallel.yaml", {"runtime": {"worker_count": 4}})
+    _write_yaml(OVERRIDES / "parallel.yaml", {"runtime": {"worker_count": 8}})
     for seed in source["seeds"]:
         name = f"seed-{int(seed)}.yaml"
         _write_yaml(OVERRIDES / name, {"include": "parallel.yaml", "seed": seed})

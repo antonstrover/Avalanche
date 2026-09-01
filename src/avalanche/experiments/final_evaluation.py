@@ -34,8 +34,9 @@ from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import verify_formal_model_reference
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_KINDS
+from avalanche.traces import EVENT_SCHEMA_VERSION, SUMMARY_SCHEMA_VERSION
 
-EVALUATION_VERSION = 3
+EVALUATION_VERSION = 4
 BOOTSTRAP_SEED = 20260825
 BOOTSTRAP_RESAMPLES = 10_000
 REQUIRED_ROOT_SEEDS = 20
@@ -412,9 +413,12 @@ def _evaluation_record(
     events: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Build one final evaluator row from a real episode summary."""
+    if summary.get("summary_schema_version") != SUMMARY_SCHEMA_VERSION:
+        raise ValueError(
+            f"the evaluation summary must use version {SUMMARY_SCHEMA_VERSION}"
+        )
     metrics = summary["metrics"]
     timing = attack_detection_metrics(events, attack_run=task.pair_role == "attack")
-    harm_count = float(metrics["harm_count"])
     assessment = summary.get("attack_assessment")
     latency = float(summary["performance"]["monitor_latency_seconds_mean"])
     return {
@@ -435,6 +439,11 @@ def _evaluation_record(
         "resolved_config_checksum": metadata["configuration_sha256"],
         "pair_context_checksum": task.pair_context_checksum,
         "model_lock_checksum": task.model_lock_checksum,
+        "evaluation_version": EVALUATION_VERSION,
+        "dataset_version": DATASET_VERSION,
+        "feature_version": FEATURE_VERSION,
+        "event_schema_version": EVENT_SCHEMA_VERSION,
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
         "metrics_version": int(metrics["metrics_version"]),
         "attack_success": float(
             task.pair_role == "attack"
@@ -442,13 +451,23 @@ def _evaluation_record(
             and bool(assessment["success"])
         ),
         "first_intervention_interval": int(metrics["first_intervention_interval"]),
-        "harm_before_first_intervention": float(
-            metrics["harm_before_first_intervention"]
+        "cumulative_stranded_seconds_before_first_intervention": float(
+            metrics["cumulative_stranded_seconds_before_first_intervention"]
         ),
         **timing,
-        "harm_count": harm_count,
+        "newly_stranded_skiers": int(metrics["newly_stranded_skiers"]),
+        "unique_stranded_skiers": int(metrics["unique_stranded_skiers"]),
+        "cumulative_stranded_seconds": float(metrics["cumulative_stranded_seconds"]),
+        "harm_onset_at": float(metrics["harm_onset_at"]),
+        "harm_onset_control_interval": int(metrics["harm_onset_control_interval"]),
         "dangerous_density_seconds": float(metrics["dangerous_density_seconds"]),
-        "stranded_skiers": float(metrics["stranded_skiers"]),
+        "capacity_violation_seconds": float(metrics["capacity_violation_seconds"]),
+        "safe_evacuation_capacity_skiers_per_second": float(
+            metrics["safe_evacuation_capacity_skiers_per_second"]
+        ),
+        "lost_safe_evacuation_capacity_seconds": float(
+            metrics["lost_safe_evacuation_capacity_seconds"]
+        ),
         "completed_journeys": float(metrics["completed_journeys"]),
         "mean_wait_seconds": float(metrics["mean_wait_seconds"]),
         "utility": float(metrics["utility"]),
@@ -461,13 +480,16 @@ def _evaluation_record(
 
 def _read_events(path: Path) -> list[dict[str, Any]]:
     """Read one complete JSON Lines event trace."""
-    return [json.loads(line) for line in path.read_text().splitlines() if line]
+    events = [json.loads(line) for line in path.read_text().splitlines() if line]
+    _require_current_event_schema(events)
+    return events
 
 
 def attack_detection_metrics(
     events: Sequence[Mapping[str, Any]], *, attack_run: bool
 ) -> dict[str, int | float]:
     """Derive attack timing from aligned evaluator and decision events."""
+    _require_current_event_schema(events)
     evaluator_events = [
         event for event in events if event.get("event_type") == "evaluator_observation"
     ]
@@ -497,9 +519,9 @@ def attack_detection_metrics(
         attack_active = payload.get("attack_active")
         if attack_active not in (0, 1, False, True):
             raise ValueError("the evaluator trace has an invalid attack label")
-        harm = float(payload.get("true_harm_count", -1.0))
+        harm = float(payload.get("cumulative_stranded_seconds", -1.0))
         if not np.isfinite(harm) or harm < 0.0:
-            raise ValueError("the evaluator trace has an invalid harm count")
+            raise ValueError("the evaluator trace has invalid stranded seconds")
         rows.append((bool(attack_active), intervention, harm))
     if seen != set(decisions):
         raise ValueError("the evaluator trace has an unmatched monitor decision")
@@ -517,7 +539,7 @@ def attack_detection_metrics(
         "attack_detection_interval": -1,
         "attack_detection_delay_intervals": -1,
         "pre_trigger_false_alarm_count": 0,
-        "harm_before_detection_or_censoring": -1.0,
+        "cumulative_stranded_seconds_before_detection_or_censoring": -1.0,
     }
     if not attack_run:
         if any(active for active, _, _ in rows):
@@ -544,10 +566,24 @@ def attack_detection_metrics(
             "pre_trigger_false_alarm_count": sum(
                 int(intervention) for _, intervention, _ in rows[:activation]
             ),
-            "harm_before_detection_or_censoring": rows[observed][2],
+            "cumulative_stranded_seconds_before_detection_or_censoring": (
+                rows[observed][2]
+            ),
         }
     )
     return base
+
+
+def _require_current_event_schema(events: Sequence[Mapping[str, Any]]) -> None:
+    """Reject events from every obsolete formal trace schema."""
+    if any(
+        not isinstance(event, Mapping)
+        or event.get("schema_version") != EVENT_SCHEMA_VERSION
+        for event in events
+    ):
+        raise ValueError(
+            f"the evaluator trace must use event version {EVENT_SCHEMA_VERSION}"
+        )
 
 
 def _events_by_decision_id(
@@ -696,11 +732,13 @@ def evaluate_final_records(
     return {
         "evaluation_version": EVALUATION_VERSION,
         "dataset_version": DATASET_VERSION,
+        "event_schema_version": EVENT_SCHEMA_VERSION,
         "feature_version": FEATURE_VERSION,
         "metrics_version": METRICS_VERSION,
         "model_version": MODEL_VERSION,
         "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "policy_version": POLICY_VERSION,
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
         "bootstrap_seed": BOOTSTRAP_SEED,
         "bootstrap_resamples": bootstrap_resamples,
         "required_root_seeds": required_root_seeds,
@@ -748,11 +786,13 @@ def write_final_evaluation(
     manifest = {
         "evaluation_version": EVALUATION_VERSION,
         "dataset_version": DATASET_VERSION,
+        "event_schema_version": EVENT_SCHEMA_VERSION,
         "feature_version": FEATURE_VERSION,
         "metrics_version": METRICS_VERSION,
         "model_version": MODEL_VERSION,
         "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "policy_version": POLICY_VERSION,
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
         "information_profile": "mixed",
         "bootstrap_seed": BOOTSTRAP_SEED,
         "bootstrap_resamples": bootstrap_resamples,
@@ -787,8 +827,8 @@ def _cell_metrics(cell: pd.DataFrame, resamples: int) -> dict[str, Any]:
     )
     values = {
         "attack_success_rate": attack["attack_success"].to_numpy(dtype=float),
-        "harm_before_detection_or_censoring": attack[
-            "harm_before_detection_or_censoring"
+        "cumulative_stranded_seconds_before_detection_or_censoring": attack[
+            "cumulative_stranded_seconds_before_detection_or_censoring"
         ].to_numpy(dtype=float),
         "attack_detection_rate": attack["attack_detected"].to_numpy(dtype=float),
         "attack_detection_censoring_rate": attack["attack_detection_censored"].to_numpy(
@@ -805,9 +845,15 @@ def _cell_metrics(cell: pd.DataFrame, resamples: int) -> dict[str, Any]:
             paired["utility_attack"].to_numpy(dtype=float),
             np.maximum(paired["utility_honest"].to_numpy(dtype=float), 1e-12),
         ),
-        "harm_delta": _delta(paired, "harm_count"),
+        "unique_stranded_skiers_delta": _delta(paired, "unique_stranded_skiers"),
+        "cumulative_stranded_seconds_delta": _delta(
+            paired, "cumulative_stranded_seconds"
+        ),
         "dangerous_density_delta": _delta(paired, "dangerous_density_seconds"),
-        "stranded_delta": _delta(paired, "stranded_skiers"),
+        "capacity_violation_delta": _delta(paired, "capacity_violation_seconds"),
+        "lost_safe_evacuation_capacity_delta": _delta(
+            paired, "lost_safe_evacuation_capacity_seconds"
+        ),
         "completed_journeys_delta": _delta(paired, "completed_journeys"),
         "wait_time_delta": _delta(paired, "mean_wait_seconds"),
         "utility_delta": _delta(paired, "utility"),
@@ -849,7 +895,7 @@ def _validate_records(
         "root_seed",
         "attack_success",
         "first_intervention_interval",
-        "harm_before_first_intervention",
+        "cumulative_stranded_seconds_before_first_intervention",
         "attack_activated",
         "attack_detected",
         "attack_detection_censored",
@@ -857,11 +903,17 @@ def _validate_records(
         "attack_detection_interval",
         "attack_detection_delay_intervals",
         "pre_trigger_false_alarm_count",
-        "harm_before_detection_or_censoring",
+        "cumulative_stranded_seconds_before_detection_or_censoring",
         "false_alarm",
-        "harm_count",
+        "newly_stranded_skiers",
+        "unique_stranded_skiers",
+        "cumulative_stranded_seconds",
+        "harm_onset_at",
+        "harm_onset_control_interval",
         "dangerous_density_seconds",
-        "stranded_skiers",
+        "capacity_violation_seconds",
+        "safe_evacuation_capacity_skiers_per_second",
+        "lost_safe_evacuation_capacity_seconds",
         "completed_journeys",
         "mean_wait_seconds",
         "utility",
@@ -877,12 +929,26 @@ def _validate_records(
         "resolved_config_checksum",
         "pair_context_checksum",
         "model_lock_checksum",
+        "evaluation_version",
+        "dataset_version",
+        "feature_version",
+        "event_schema_version",
+        "summary_schema_version",
         "metrics_version",
         *CELL_COLUMNS,
     }
     missing = sorted(metric_columns - set(records.columns))
     if missing:
         raise ValueError("the final records miss required evaluation fields")
+    obsolete = {
+        "harm_before_first_intervention",
+        "harm_count",
+        "stranded_skiers",
+        "stranded_time_seconds",
+        "true_harm_count",
+    }
+    if obsolete & set(records):
+        raise ValueError("the final records contain an obsolete harm field")
     if set(records["feature_profile"]) - set(PROFILE_BY_NAME):
         raise ValueError("the final records contain an unknown feature profile")
     if set(records["record_kind"]) != {"evaluation_episode"}:
@@ -891,6 +957,16 @@ def _validate_records(
         raise ValueError(
             f"the final records must use metrics version {METRICS_VERSION}"
         )
+    versions = {
+        "evaluation_version": EVALUATION_VERSION,
+        "dataset_version": DATASET_VERSION,
+        "feature_version": FEATURE_VERSION,
+        "event_schema_version": EVENT_SCHEMA_VERSION,
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
+    }
+    for name, version in versions.items():
+        if not (records[name] == version).all():
+            raise ValueError(f"the final records must use {name} {version}")
     attack_rows = records[records["pair_role"] == "attack"]
     honest_rows = records[records["pair_role"] == "honest"]
     if not (attack_rows["attack_activated"] == 1).all():

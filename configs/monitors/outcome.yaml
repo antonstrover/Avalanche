@@ -2,7 +2,7 @@ monitor:
   kind: outcome
   information_profile: principal
   decision_threshold: 1.0
-  harm_event_threshold: 1
+  unique_stranded_threshold: 1
 
 fallback:
   policy: honest
