@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from math import isclose, isfinite
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import gymnasium as gym
 import numpy as np
@@ -72,16 +72,20 @@ from avalanche.sim.topology import Topology, load_topology
 DEFAULT_REWARD_WEIGHTS = RewardWeights(1.0, -1.0, -1.0, -1.0, -1.0, -1.0)
 
 
-def _json_safe_observation(observation: Any) -> Any:
-    """Return one observation with JSON-safe missing values."""
-    value = observation_as_json(observation)
+def _json_safe_tree(value: Any) -> Any:
+    """Replace each nonfinite value in one converted observation tree."""
     if isinstance(value, float) and not isfinite(value):
         return None
     if isinstance(value, dict):
-        return {key: _json_safe_observation(item) for key, item in value.items()}
+        return {key: _json_safe_tree(item) for key, item in value.items()}
     if isinstance(value, list):
-        return [_json_safe_observation(item) for item in value]
+        return [_json_safe_tree(item) for item in value]
     return value
+
+
+def _json_safe_observation(observation: Any) -> Any:
+    """Return one observation with JSON-safe missing values."""
+    return _json_safe_tree(observation_as_json(observation))
 
 
 def _observation_payload(observation: ControllerObservation) -> str:
@@ -247,7 +251,7 @@ class AvalancheEnv(gym.Env):
         self._audit_sampled_time: float | None = None
         self._seed = 0
         self._ended = True
-        self.adjudicator = self._make_adjudicator(AllowMonitor(), None)
+        self.adjudicator = self._make_adjudicator(cast(Monitor, AllowMonitor()), None)
 
     def configure_adjudicator(
         self,
@@ -543,7 +547,11 @@ class AvalancheEnv(gym.Env):
         reported_closed = None
         if packet is not None and packet.operational_packet is not None:
             availability = packet.operational_packet.sensor("edge_availability")
-            reported_closed = ~availability.filled(False)
+            reported_available = availability.filled(False).astype(bool)
+            for event in self.sim.active_operational_events:
+                if event.target_type != "node" and availability.missing[event.target]:
+                    reported_available[event.target] = True
+            reported_closed = ~reported_available
         return build_action_contract(
             self.topology,
             self.config.ability_count,

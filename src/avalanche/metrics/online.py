@@ -172,14 +172,13 @@ class OnlineMetrics:
             raise ValueError("the metric tick must be finite and positive")
         if newly_stranded_skiers < 0:
             raise ValueError("the newly stranded count must be nonnegative")
-        if newly_stranded_skiers and (
-            movement_boundary_seconds is None or control_interval_index is None
-        ):
-            raise ValueError("a new stranding needs its movement boundary")
+        if newly_stranded_skiers:
+            if movement_boundary_seconds is None or control_interval_index is None:
+                raise ValueError("a new stranding needs its movement boundary")
+            if self.harm_onset_at is None:
+                self.harm_onset_at = float(movement_boundary_seconds)
+                self.harm_onset_control_interval = int(control_interval_index)
         self.newly_stranded_skiers = int(newly_stranded_skiers)
-        if newly_stranded_skiers and self.harm_onset_at is None:
-            self.harm_onset_at = float(movement_boundary_seconds)
-            self.harm_onset_control_interval = int(control_interval_index)
 
         self.dangerous_density_seconds = float(
             np.sum(state.dangerous_density_seconds, dtype=np.float64)

@@ -541,6 +541,7 @@ def test_disabled_and_noninteractive_reporters_skip_the_observer():
     assert not noninteractive.active
     assert disabled_stream.getvalue().count("COMPLETED") == 1
     assert noninteractive_stream.getvalue().count("COMPLETED") == 1
+    assert disabled_stream.getvalue() == noninteractive_stream.getvalue()
     assert "\x1b[" not in disabled_stream.getvalue()
     assert "\x1b[" not in noninteractive_stream.getvalue()
 

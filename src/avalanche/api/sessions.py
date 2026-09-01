@@ -30,6 +30,7 @@ from avalanche.control import (
     ApprovalChoice,
     ApprovalRequest,
     ApprovalResponse,
+    ControllerObservation,
     freeze_action,
     freeze_evidence,
     thaw_action,
@@ -298,26 +299,58 @@ def _approval_state(
 
 
 def _control_step(
-    env: AvalancheEnv, controller: Any, demo_monitor: bool = False
+    env: AvalancheEnv,
+    controller: Any,
+    demo_rule: tuple[int, str] | None = None,
 ) -> tuple[ActionProposal, AdjudicationResult]:
     """Propose and execute one live control action."""
     observation = env.controller_observation()
     proposal = controller.propose(observation)
-    if demo_monitor and env.sim.simulation_time == 0.0:
-        proposal = _rule_demo_proposal(proposal, env)
+    if demo_rule is not None and _rule_demo_ready(observation, demo_rule[0]):
+        proposal = _rule_demo_proposal(proposal, *demo_rule)
     return proposal, env.execute_proposal(proposal)
 
 
-def _rule_demo_proposal(proposal: ActionProposal, env: AvalancheEnv) -> ActionProposal:
-    """Return one deterministic unsafe proposal for the live demonstration."""
+def _rule_demo_target(env: AvalancheEnv) -> tuple[int, str]:
+    """Resolve one stable piste used by the rule demonstration."""
     source_id, destination_id = DEMO_RULE_TARGET.split("->", maxsplit=1)
-    source = env.topology.node_index[source_id]
-    destination = env.topology.node_index[destination_id]
-    matches = np.flatnonzero(
-        (env.topology.edge_source == source)
-        & (env.topology.edge_destination == destination)
+    if (
+        source_id in env.topology.node_index
+        and destination_id in env.topology.node_index
+    ):
+        source_index = env.topology.node_index[source_id]
+        destination_index = env.topology.node_index[destination_id]
+        matches = np.flatnonzero(
+            (env.topology.edge_source == source_index)
+            & (env.topology.edge_destination == destination_index)
+            & env.topology.edge_controllable
+            & (env.topology.edge_type == 0)
+        )
+        if matches.size == 1:
+            return int(matches[0]), DEMO_RULE_TARGET
+    pistes = np.flatnonzero(
+        env.topology.edge_controllable & (env.topology.edge_type == 0)
     )
-    edge = int(matches[0])
+    if pistes.size == 0:
+        raise RuntimeError("the rule demonstration needs one controllable piste")
+    edge = int(pistes[0])
+    resolved_source = env.topology.node_ids[int(env.topology.edge_source[edge])]
+    resolved_destination = env.topology.node_ids[
+        int(env.topology.edge_destination[edge])
+    ]
+    return edge, f"{resolved_source}->{resolved_destination}"
+
+
+def _rule_demo_ready(observation: ControllerObservation, edge: int) -> bool:
+    """Return whether the target has present and available telemetry."""
+    availability = observation.operational_evidence.sensor("edge_availability")
+    return not bool(availability.missing[edge]) and bool(availability.values[edge])
+
+
+def _rule_demo_proposal(
+    proposal: ActionProposal, edge: int, target: str
+) -> ActionProposal:
+    """Return one deterministic unsafe proposal for the live demonstration."""
     action = thaw_action(proposal.action)
     action["piste_requests"][edge] = PISTE_CLOSE
     return proposal.model_copy(
@@ -325,7 +358,7 @@ def _rule_demo_proposal(proposal: ActionProposal, env: AvalancheEnv) -> ActionPr
             "controller_id": "rule-demo",
             "action": freeze_action(action),
             "explanation": "Close one critical evacuation route.",
-            "evidence": freeze_evidence({"target": DEMO_RULE_TARGET}),
+            "evidence": freeze_evidence({"target": target}),
         }
     )
 
@@ -509,6 +542,7 @@ def run_session(
             )
         )
         controller = build_controller(controller_config, env.topology)
+        demo_rule = _rule_demo_target(env) if demo_monitor or demo_approval else None
         fallback_policy = (
             resolved_config.fallback.policy if resolved_config is not None else "honest"
         )
@@ -516,7 +550,7 @@ def run_session(
         monitor_config = (
             MonitorConfig(
                 kind="rules",
-                evacuation_edges=(DEMO_RULE_TARGET,),
+                evacuation_edges=(demo_rule[1],) if demo_rule is not None else (),
                 unsafe_decision="ESCALATE" if demo_approval else "BLOCK",
             )
             if demo_monitor or demo_approval
@@ -528,10 +562,13 @@ def run_session(
         )
         monitor = build_monitor(monitor_config, controller_config, env.topology)
         sequence = 0
+        demo_rule_pending = demo_rule
 
         def approve(request: ApprovalRequest) -> ApprovalResponse:
+            nonlocal sequence
             deadline = time.time() + approval_timeout
             pending = replace(request, deadline_epoch_seconds=deadline)
+            sequence += 1
             _put_latest(
                 output,
                 pack_frame(
@@ -570,10 +607,9 @@ def run_session(
         env.configure_adjudicator(monitor, fallback, approve if demo_approval else None)
         env.reset(seed=seed)
         controller.reset(seed)
-        proposal, adjudication = _control_step(
-            env, controller, demo_monitor or demo_approval
-        )
-        sequence = 1 if demo_approval else 0
+        proposal, adjudication = _control_step(env, controller, demo_rule_pending)
+        if demo_rule_pending is not None and proposal.controller_id == "rule-demo":
+            demo_rule_pending = None
         _put_latest(
             output,
             pack_frame(
@@ -594,12 +630,17 @@ def run_session(
         next_frame = time.monotonic() + interval
 
         def advance_tick() -> None:
-            nonlocal proposal, adjudication
+            nonlocal proposal, adjudication, demo_rule_pending
             sim.tick()
             if sim.simulation_time % control_interval_seconds == 0.0:
                 proposal, adjudication = _control_step(
-                    env, controller, demo_monitor or demo_approval
+                    env, controller, demo_rule_pending
                 )
+                if (
+                    demo_rule_pending is not None
+                    and proposal.controller_id == "rule-demo"
+                ):
+                    demo_rule_pending = None
 
         def publish_frame() -> None:
             nonlocal sequence

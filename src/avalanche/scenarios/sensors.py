@@ -3,6 +3,7 @@
 import hashlib
 import json
 from dataclasses import dataclass, replace
+from typing import Literal, TypedDict, cast
 
 import numpy as np
 
@@ -19,6 +20,10 @@ from avalanche.control.types import (
 )
 
 ROUTE_SENSOR_SCHEMA_VERSION = 3
+OPERATIONAL_SENSOR_SCHEMA_VERSION = cast(
+    Literal[3],
+    OPERATIONAL_EVIDENCE_SCHEMA_VERSION,
+)
 FAILURE_SENSOR_CAPACITY = VISIBLE_FAILURE_CAPACITY
 ROUTE_SENSOR_CHANNELS = (
     "availability",
@@ -32,6 +37,29 @@ BLOCKED_SENSOR_CHANNELS = (
     "queued_no_route_count",
     "onboard_blocked_count",
 )
+
+type StrandingLocationKind = Literal["node", "piste", "lift", "queue"]
+
+
+class _SampleValues(TypedDict):
+    """Type the keyword values shared by bootstrap sensor samples."""
+
+    availability: np.ndarray
+    speed_factor: np.ndarray
+    density_ratio: np.ndarray
+    weather_risk: np.ndarray
+    queue_length: np.ndarray
+    boarding_throughput: np.ndarray
+    queued_no_route_count: np.ndarray
+    onboard_blocked_count: np.ndarray
+    node_demand: np.ndarray | None
+    node_crowding: np.ndarray | None
+    edge_occupancy: np.ndarray | None
+    lift_occupancy: np.ndarray | None
+    weather: np.ndarray | None
+    visible_failure_kind: np.ndarray | None
+    visible_failure_target: np.ndarray | None
+    visible_failure_present: np.ndarray | None
 
 
 def _immutable_array(values: np.ndarray, dtype: str) -> np.ndarray:
@@ -138,6 +166,7 @@ class RouteSensorChannel:
         route_rng: np.random.Generator,
         blocked_rng: np.random.Generator,
         stranding_rng: np.random.Generator | None = None,
+        operational_rng: np.random.Generator | None = None,
     ) -> None:
         if control_interval_seconds <= 0.0:
             raise ValueError("the control interval must be positive")
@@ -146,6 +175,7 @@ class RouteSensorChannel:
         self.route_rng = route_rng
         self.blocked_rng = blocked_rng
         self.stranding_rng = route_rng if stranding_rng is None else stranding_rng
+        self.operational_rng = route_rng if operational_rng is None else operational_rng
         self.policy_identity = route_sensor_policy_identity(policy)
         self.latest: RouteSensorPacket | None = None
         self.pending: list[RouteSensorPacket] = []
@@ -174,7 +204,7 @@ class RouteSensorChannel:
         stranding_locations: tuple[tuple[str, str, int], ...] = (),
     ) -> RouteSensorPacket:
         """Create the bootstrap report and the first delayed report."""
-        values = {
+        values: _SampleValues = {
             "availability": availability,
             "speed_factor": speed_factor,
             "density_ratio": density_ratio,
@@ -534,13 +564,13 @@ class RouteSensorChannel:
             )
 
         weather_source = self._source_or_zeros(weather, 4, "<f8")
-        weather_noise = self.route_rng.uniform(
+        weather_noise = self.operational_rng.uniform(
             -self.policy.maximum_relative_noise,
             self.policy.maximum_relative_noise,
             4,
         )
         weather_values = weather_source * (1.0 + weather_noise)
-        weather_values[3] = weather_source[3] + self.route_rng.uniform(
+        weather_values[3] = weather_source[3] + self.operational_rng.uniform(
             -self.policy.temperature_maximum_additive_noise_celsius,
             self.policy.temperature_maximum_additive_noise_celsius,
         )
@@ -587,7 +617,7 @@ class RouteSensorChannel:
             self.policy_identity, sample_time, report_time, ordered
         )
         return OperationalSensorPacket(
-            schema_version=OPERATIONAL_EVIDENCE_SCHEMA_VERSION,
+            schema_version=OPERATIONAL_SENSOR_SCHEMA_VERSION,
             packet_identity=identity,
             policy_identity=self.policy_identity,
             control_interval_seconds=self.control_interval_seconds,
@@ -624,7 +654,7 @@ class RouteSensorChannel:
             ordered,
         )
         return OperationalSensorPacket(
-            schema_version=OPERATIONAL_EVIDENCE_SCHEMA_VERSION,
+            schema_version=OPERATIONAL_SENSOR_SCHEMA_VERSION,
             packet_identity=identity,
             policy_identity=self.policy_identity,
             control_interval_seconds=self.control_interval_seconds,
@@ -636,7 +666,7 @@ class RouteSensorChannel:
 
     def _sample_count(self, source: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Apply relative noise, rounding, clipping, and missingness."""
-        noise = self.route_rng.uniform(
+        noise = self.operational_rng.uniform(
             -self.policy.maximum_relative_noise,
             self.policy.maximum_relative_noise,
             source.size,
@@ -646,7 +676,7 @@ class RouteSensorChannel:
 
     def _missing(self, size: int) -> np.ndarray:
         """Draw one independent missing mask from the sensor stream."""
-        return self.route_rng.random(size) < self.policy.missing_probability
+        return self.operational_rng.random(size) < self.policy.missing_probability
 
     def _source_or_zeros(
         self, values: np.ndarray | None, size: int, dtype: str
@@ -709,7 +739,7 @@ class RouteSensorChannel:
             reports.append(
                 ReportedStranding(
                     schema_version=1,
-                    location_kind=location_kind,
+                    location_kind=cast(StrandingLocationKind, location_kind),
                     topology_id=topology_id,
                     count=0 if missing else count,
                     missing=missing,

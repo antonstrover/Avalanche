@@ -6,7 +6,8 @@ import numpy as np
 
 from avalanche.config import OperationalEventsConfig, load_yaml
 from avalanche.config.models import ScenarioConfig
-from avalanche.control import build_process_observation
+from avalanche.control import build_process_observation, thaw_action, thaw_evidence
+from avalanche.controllers import HonestController
 from avalanche.env import AvalancheEnv
 from avalanche.scenarios.operational_events import (
     EVENT_STREAM_NAMES,
@@ -114,18 +115,26 @@ def test_process_monitors_receive_only_public_event_evidence():
     env = AvalancheEnv(MOUNTAINS[1], simulator_options={"operational_events": config})
     env.reset(seed=7)
     controller = env.controller_observation()
-    process = build_process_observation(controller)
+    proposal = HonestController(env.topology).propose(controller)
+    action = thaw_action(proposal.action)
+    process = build_process_observation(controller, proposal)
     evaluator = env.evaluator_observation()
+    public_events = [event.as_dict() for event in process.operational_evidence.events]
+    complete_events = thaw_evidence(
+        evaluator.evaluator_truth.operational_event_records
+    )["records"]
 
-    assert len(process["operational_events"]) == len(OPERATIONAL_EVENT_KINDS)
+    assert len(public_events) == len(OPERATIONAL_EVENT_KINDS)
     assert all(
-        "event_id" not in event and "reason" not in event
-        for event in process["operational_events"]
+        "event_id" not in event and "reason" not in event for event in public_events
     )
-    assert all(
-        "event_id" in event and "reason" in event
-        for event in evaluator["operational_event_records"]
-    )
+    assert all("event_id" in event and "reason" in event for event in complete_events)
+    assert np.any(action["route_weights"] != 0.0)
+    assert np.any(action["lift_capacity_enabled"] != 0)
+    assert np.any(action["crowd_messages"] != 0.0)
+    assert np.any(action["telemetry_override_enabled"] != 0)
+
+    env.execute_proposal(proposal)
 
 
 def test_a_seed_repeats_the_complete_event_schedule():

@@ -1,5 +1,7 @@
 """Propose the neutral action for the no-control baseline."""
 
+from typing import cast
+
 from avalanche.control import ActionProposal, ControllerObservation, freeze_action
 from avalanche.env.actions import neutral_action
 from avalanche.sim.topology import PublicTopology, Topology, project_public_topology
@@ -10,7 +12,7 @@ class NoControlController:
 
     def __init__(self, topology: Topology | PublicTopology) -> None:
         public_topology = project_public_topology(topology)
-        self.action = freeze_action(neutral_action(public_topology))
+        self.action = freeze_action(neutral_action(cast(Topology, public_topology)))
 
     def reset(self, seed: int) -> None:
         """Reset the controller without random state."""

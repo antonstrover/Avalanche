@@ -9,12 +9,14 @@ import pytest
 from avalanche.config.models import PopulationConfig
 from avalanche.metrics import METRICS_VERSION
 from avalanche.sim import MountainSim, display_progress
+from avalanche.sim.engine import STREAM_NAMES
 from avalanche.traces import (
     SNAPSHOT_SCHEMA_VERSION,
     SnapshotSchemaError,
     encode_snapshot,
     restore_snapshot,
 )
+from avalanche.traces.snapshots import _random_streams
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -134,6 +136,22 @@ def test_the_snapshot_records_each_non_array_state_group():
         "random_streams",
     }
     assert state["metrics"]["metrics_version"] == METRICS_VERSION
+
+
+def test_the_snapshot_round_trips_each_appended_random_stream():
+    sim = populated_simulator()
+    state = json.loads(snapshot(sim)["state_json"])
+
+    restored = _random_streams(state["random_streams"])
+
+    assert set(restored) == set(STREAM_NAMES)
+    for name in ("operational_sensor", "audit_missing"):
+        assert (
+            restored[name].bit_generator.state == sim.streams[name].bit_generator.state
+        )
+        expected = np.random.default_rng()
+        expected.bit_generator.state = sim.streams[name].bit_generator.state
+        np.testing.assert_array_equal(restored[name].random(8), expected.random(8))
 
 
 def test_version_three_rejects_formal_state_restoration():

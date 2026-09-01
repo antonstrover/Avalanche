@@ -5,11 +5,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from avalanche.control import Controller, ControllerObservation
+from avalanche.control import (
+    Controller,
+    ControllerObservation,
+    build_controller_observation,
+)
 from avalanche.control.types import VISIBLE_FAILURE_CAPACITY
 from avalanche.controllers import HonestController, HonestControllerConfig
 from avalanche.controllers.honest import LATE_TELEMETRY
-from avalanche.sim import load_topology
+from avalanche.env import neutral_action
+from avalanche.sim import MountainSim, load_topology
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES
 from tests.operational_helpers import controller_observation
 
@@ -73,6 +78,24 @@ def test_the_controller_closes_an_unsafe_piste_with_an_alternative():
     assert proposal.action.piste_requests[target] == 2
 
 
+def test_the_controller_does_not_close_a_piste_from_missing_density():
+    target = edge("plan_bois->praz_ravine_upper")
+    density = np.zeros(TOPOLOGY.edge_count)
+    density[target] = 1.2
+    missing = np.zeros(TOPOLOGY.edge_count, dtype=np.bool_)
+    missing[target] = True
+    state = controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        sensor_values={"edge_density": density},
+        sensor_missing={"edge_density": missing},
+    )
+
+    proposal = controller().propose(state)
+
+    assert proposal.action.piste_requests[target] == 0
+
+
 def test_the_controller_balances_the_lift_queues():
     busy, quiet = (edge(reference) for reference in PAIR)
     queues = np.zeros(TOPOLOGY.edge_count)
@@ -83,6 +106,24 @@ def test_the_controller_balances_the_lift_queues():
     assert np.all(weights[:, busy] < 0.0)
     assert np.all(weights[:, quiet] > 0.0)
     assert np.all(np.abs(weights[:, (busy, quiet)]) <= 0.25)
+
+
+def test_the_controller_uses_the_safe_queue_fallback():
+    busy, quiet = (edge(reference) for reference in PAIR)
+    queues = np.zeros(TOPOLOGY.edge_count)
+    missing = np.zeros(TOPOLOGY.edge_count, dtype=np.bool_)
+    missing[busy] = True
+    state = controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        sensor_values={"lift_queue_length": queues},
+        sensor_missing={"lift_queue_length": missing},
+    )
+
+    proposal = controller().propose(state)
+    weights = np.asarray(proposal.action.route_weights)
+
+    assert np.any(weights[:, (busy, quiet)] != 0.0)
 
 
 def test_the_controller_reroutes_around_a_closure():
@@ -101,6 +142,28 @@ def test_the_controller_keeps_evacuation_capacity():
     proposal = controller().propose(observation())
     assert proposal.action.lift_capacity_enabled[target] == 1
     assert proposal.action.lift_capacity[target] == pytest.approx(0.8)
+
+
+def test_the_controller_uses_safe_evacuation_fallbacks():
+    target = edge(EVACUATION)
+    source = int(TOPOLOGY.edge_source[target])
+    node_missing = np.zeros(TOPOLOGY.node_count, dtype=np.bool_)
+    edge_missing = np.zeros(TOPOLOGY.edge_count, dtype=np.bool_)
+    node_missing[source] = True
+    edge_missing[target] = True
+    state = controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        sensor_missing={
+            "node_demand": node_missing,
+            "node_crowding": node_missing,
+            "lift_queue_length": edge_missing,
+        },
+    )
+
+    proposal = controller().propose(state)
+
+    assert proposal.action.lift_capacity_enabled[target] == 1
 
 
 def test_two_proposals_are_equal_and_do_not_change_the_observation():
@@ -141,6 +204,34 @@ def test_the_controller_warns_a_crowded_zone():
     assert "warn a crowded zone" in proposal.explanation
     # The warning must reach every customer group equally.
     assert np.all(np.ptp(messages, axis=1) == 0.0)
+
+
+def test_the_controller_does_not_warn_from_missing_crowding():
+    crowding = TOPOLOGY.node_capacity.astype(np.int64)
+    missing = np.ones(TOPOLOGY.node_count, dtype=np.bool_)
+    state = controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        sensor_values={"node_crowding": crowding},
+        sensor_missing={"node_crowding": missing},
+    )
+
+    proposal = controller().propose(state)
+
+    assert not np.any(np.asarray(proposal.action.crowd_messages))
+
+
+def test_the_fully_masked_bootstrap_without_events_is_neutral():
+    sim = MountainSim(FIXTURE)
+    sim.reset(31)
+    state = build_controller_observation(sim)
+
+    proposal = controller().propose(state)
+
+    for name, expected in neutral_action(TOPOLOGY).items():
+        np.testing.assert_array_equal(
+            np.asarray(getattr(proposal.action, name)), expected
+        )
 
 
 def test_the_controller_publishes_the_telemetry_of_a_late_edge():

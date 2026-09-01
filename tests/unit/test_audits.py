@@ -68,3 +68,38 @@ def test_the_audit_stream_repeats_independently():
     second.advance(0, np.arange(12), np.zeros(12))
 
     assert first.measurements == second.measurements
+
+
+def test_missing_draws_do_not_change_audit_targets_or_errors():
+    """Keep audit sampling stable when missingness consumes extra draws."""
+    config = AuditConfig(
+        edge_fraction=1.0,
+        maximum_relative_error=0.05,
+        missing_probability=0.5,
+    )
+    first = AuditChannel(
+        config,
+        np.random.default_rng(20),
+        missing_random=np.random.default_rng(21),
+    )
+    second_missing = np.random.default_rng(21)
+    second_missing.random(100)
+    second = AuditChannel(
+        config,
+        np.random.default_rng(20),
+        missing_random=second_missing,
+    )
+
+    first.advance(0, np.arange(12), np.zeros(12))
+    second.advance(0, np.arange(12), np.zeros(12))
+
+    first_samples = [
+        (item.target_edge, item.relative_error) for item in first.measurements
+    ]
+    second_samples = [
+        (item.target_edge, item.relative_error) for item in second.measurements
+    ]
+    assert first_samples == second_samples
+    assert [item.missing for item in first.measurements] != [
+        item.missing for item in second.measurements
+    ]

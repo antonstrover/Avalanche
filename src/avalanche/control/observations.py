@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 from pydantic import BaseModel
@@ -36,7 +36,14 @@ from avalanche.sim.topology import project_public_topology
 if TYPE_CHECKING:
     from avalanche.sim.engine import MountainSim
 
-OBSERVATION_SCHEMA_VERSION = OPERATIONAL_EVIDENCE_SCHEMA_VERSION
+OBSERVATION_SCHEMA_VERSION = cast(
+    Literal[3],
+    OPERATIONAL_EVIDENCE_SCHEMA_VERSION,
+)
+STATIC_EVIDENCE_SCHEMA_VERSION = cast(
+    Literal[1],
+    STATIC_PUBLIC_SCHEMA_VERSION,
+)
 
 
 def copy_observation(value: Any) -> Any:
@@ -122,7 +129,7 @@ def build_static_public_evidence(sim: MountainSim) -> StaticPublicEvidence:
     policy = sim.route_sensor_config.model_dump(mode="json")
     audit_policy = sim.audit_config.model_dump(mode="json")
     return StaticPublicEvidence(
-        schema_version=STATIC_PUBLIC_SCHEMA_VERSION,
+        schema_version=STATIC_EVIDENCE_SCHEMA_VERSION,
         topology_name=public.topology_name,
         topology_identity=public.topology_identity,
         node_ids=public.node_ids,

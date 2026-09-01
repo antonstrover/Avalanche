@@ -101,6 +101,8 @@ STREAM_NAMES = (
     "route_tie",
     "blocked_sensor",
     "stranding_sensor",
+    "operational_sensor",
+    "audit_missing",
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
@@ -233,6 +235,7 @@ class MountainSim:
             audits,
             self.streams["audit"],
             self.control_interval_seconds,
+            self.streams["audit_missing"],
         )
         self.delivered_audits = ()
         operational_events = options.get("operational_events", {})
@@ -300,6 +303,7 @@ class MountainSim:
             self.streams["sensor"],
             self.streams["blocked_sensor"],
             self.streams["stranding_sensor"],
+            self.streams["operational_sensor"],
         )
         self.route_sensor_packet = self.route_sensor_channel.bootstrap(
             **self._route_sensor_sources()
@@ -803,6 +807,8 @@ class MountainSim:
             "route_tie",
             "blocked_sensor",
             "stranding_sensor",
+            "operational_sensor",
+            "audit_missing",
         ):
             stream = self.streams.get(stream_name)
             if stream is None:

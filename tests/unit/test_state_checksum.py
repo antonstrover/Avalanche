@@ -109,6 +109,9 @@ def test_each_known_omission_changes_the_checksum(name: str):
         lambda sim: sim.streams["sensor"].random(),
         lambda sim: sim.streams["route_tie"].random(),
         lambda sim: sim.streams["blocked_sensor"].random(),
+        lambda sim: sim.streams["stranding_sensor"].random(),
+        lambda sim: sim.streams["operational_sensor"].random(),
+        lambda sim: sim.streams["audit_missing"].random(),
     ),
 )
 def test_each_transition_scalar_changes_the_checksum(change):
