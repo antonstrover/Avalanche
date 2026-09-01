@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path, PurePosixPath
@@ -175,6 +176,15 @@ class _Source:
     locations: dict[str, _Location]
 
 
+@dataclass(frozen=True)
+class _ParsedSource:
+    """Hold one parsed component before include merging."""
+
+    values: dict[str, Any]
+    locations: dict[str, _Location]
+    includes: tuple[str, ...]
+
+
 def _pointer(parts: tuple[str, ...]) -> str:
     encoded = (part.replace("~", "~0").replace("/", "~1") for part in parts)
     return "/" + "/".join(encoded) if parts else ""
@@ -330,6 +340,11 @@ class ConfigurationResolver:
     ) -> None:
         self.repo_root = (repo_root or Path(__file__).resolve().parents[3]).resolve()
         self.artifact_root = (artifact_root or self.repo_root).resolve()
+        self._parsed_sources: dict[tuple[Owner, PurePosixPath, str], _ParsedSource] = {}
+        self._source_digests: dict[tuple[Owner, PurePosixPath], str] = {}
+        self._topologies: dict[tuple[Path, str], Any] = {}
+        self._safe_route_errors: dict[tuple[Path, str], tuple[str, ...]] = {}
+        self._topology_digests: dict[Path, str] = {}
 
     def _read(
         self,
@@ -352,6 +367,43 @@ class ConfigurationResolver:
                 path, "the configuration file cannot be read"
             ) from error
         digest = hashlib.sha256(content).hexdigest()
+        parsed = self._parsed_source(logical, owner, path, content, digest)
+        values = deepcopy(parsed.values)
+        locations = dict(parsed.locations)
+        merged: dict[str, Any] = {}
+        merged_locations: dict[str, _Location] = {}
+        for include in parsed.includes:
+            try:
+                relative = _logical_path(include, "include")
+            except ValueError as error:
+                raise ConfigurationResolutionError(
+                    [f"{owner} {logical.as_posix()}: {error}"]
+                ) from error
+            included_logical = PurePosixPath(logical.parent, relative)
+            included = self._read(included_logical, owner, (*stack, logical))
+            _merge(merged, included.values, merged_locations, included.locations)
+        _merge(merged, values, merged_locations, locations)
+        return _Source(merged, merged_locations)
+
+    def _parsed_source(
+        self,
+        logical: PurePosixPath,
+        owner: Owner,
+        path: Path,
+        content: bytes,
+        digest: str,
+    ) -> _ParsedSource:
+        """Return one content-addressed parsed component."""
+        source_key = (owner, logical)
+        previous_digest = self._source_digests.get(source_key)
+        if previous_digest != digest:
+            if previous_digest is not None:
+                self._parsed_sources.pop((*source_key, previous_digest), None)
+            self._source_digests[source_key] = digest
+        cache_key = (*source_key, digest)
+        cached = self._parsed_sources.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             text = content.decode("utf-8")
         except UnicodeError as error:
@@ -377,36 +429,27 @@ class ConfigurationResolver:
                 f"{owner} {logical.as_posix()}: the top-level key {key!r} is not owned"
                 for key in unknown
             )
-        includes = values.pop("include", ())
-        if isinstance(includes, str):
-            includes = (includes,)
-        if not isinstance(includes, (list, tuple)) or not all(
-            isinstance(value, str) for value in includes
+        declared_includes = values.pop("include", ())
+        includes: tuple[str, ...]
+        if isinstance(declared_includes, str):
+            includes = (declared_includes,)
+        elif isinstance(declared_includes, (list, tuple)) and all(
+            isinstance(value, str) for value in declared_includes
         ):
+            includes = tuple(declared_includes)
+        else:
             errors.append(f"{owner} {logical.as_posix()}: include must name text paths")
             includes = ()
         if errors:
             raise ConfigurationResolutionError(errors)
-        merged: dict[str, Any] = {}
-        merged_locations: dict[str, _Location] = {}
-        for include in includes:
-            try:
-                relative = _logical_path(include, "include")
-            except ValueError as error:
-                raise ConfigurationResolutionError(
-                    [f"{owner} {logical.as_posix()}: {error}"]
-                ) from error
-            included_logical = PurePosixPath(logical.parent, relative)
-            included = self._read(included_logical, owner, (*stack, logical))
-            _merge(merged, included.values, merged_locations, included.locations)
-        values.pop("include", None)
         locations = {
             pointer: location
             for pointer, location in locations.items()
             if pointer != "/include" and not pointer.startswith("/include/")
         }
-        _merge(merged, values, merged_locations, locations)
-        return _Source(merged, merged_locations)
+        parsed = _ParsedSource(values, locations, includes)
+        self._parsed_sources[cache_key] = parsed
+        return parsed
 
     def _argument(self, value: str | Path, owner: Owner) -> PurePosixPath:
         try:
@@ -432,6 +475,46 @@ class ConfigurationResolver:
                 [f"the {description} path leaves the repository: {logical.as_posix()}"]
             )
         return path
+
+    def _cached_topology(self, path: Path) -> tuple[Any, tuple[Path, str]]:
+        """Return one topology keyed by its current file bytes."""
+        from avalanche.sim.topology import load_topology
+
+        try:
+            content = path.read_bytes()
+        except FileNotFoundError as error:
+            raise ConfigLoadError(
+                path, "the configuration file does not exist"
+            ) from error
+        except OSError as error:
+            raise ConfigLoadError(
+                path, "the configuration file cannot be read"
+            ) from error
+        digest = hashlib.sha256(content).hexdigest()
+        resolved_path = path.resolve()
+        previous_digest = self._topology_digests.get(resolved_path)
+        if previous_digest != digest:
+            if previous_digest is not None:
+                previous_key = (resolved_path, previous_digest)
+                self._topologies.pop(previous_key, None)
+                self._safe_route_errors.pop(previous_key, None)
+            self._topology_digests[resolved_path] = digest
+        cache_key = (resolved_path, digest)
+        topology = self._topologies.get(cache_key)
+        if topology is None:
+            topology = load_topology(path)
+            self._topologies[cache_key] = topology
+        return topology, cache_key
+
+    def _cached_safe_routes(
+        self, topology: Any, cache_key: tuple[Path, str]
+    ) -> tuple[str, ...]:
+        """Return one cached safe-route validation result."""
+        errors = self._safe_route_errors.get(cache_key)
+        if errors is None:
+            errors = tuple(_safe_routes(topology))
+            self._safe_route_errors[cache_key] = errors
+        return errors
 
     def component_values(self, owner: Owner, value: str | Path) -> dict[str, Any]:
         """Return one typed component envelope for selection displays."""
@@ -646,7 +729,6 @@ class ConfigurationResolver:
             ArtifactError,
             verify_formal_model_reference,
         )
-        from avalanche.sim.topology import load_topology
 
         errors: list[str] = []
         try:
@@ -662,12 +744,12 @@ class ConfigurationResolver:
         try:
             mountain_path = _logical_path(resolved.mountain.path, "mountain topology")
             topology_path = self._repository_file(mountain_path, "mountain topology")
-            topology = load_topology(topology_path)
+            topology, topology_key = self._cached_topology(topology_path)
         except (ConfigLoadError, ConfigurationResolutionError, ValueError) as error:
             errors.append(f"mountain /mountain/path: {error}")
         if topology is not None:
             errors.extend(self._validate_topology_references(resolved, topology))
-            errors.extend(_safe_routes(topology))
+            errors.extend(self._cached_safe_routes(topology, topology_key))
         if resolved.monitor.kind == "learned":
             if resolved.monitor.model_lock is None:
                 errors.append(

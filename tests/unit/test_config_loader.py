@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from avalanche.config import (
     ConfigLoadError,
     ConfigurationResolutionError,
     ConfigurationResolver,
+    composition,
     load_yaml,
 )
 
@@ -253,6 +255,182 @@ def test_live_resolution_loads_the_topology_once(monkeypatch):
     monkeypatch.setattr(topology, "load_topology", load_once)
     ConfigurationResolver().resolve_live(**SAMPLE, seed=9)
     assert len(calls) == 1
+
+
+def test_unchanged_sources_reuse_each_instance_cache(monkeypatch):
+    from avalanche.sim import topology
+
+    compose = composition.yaml.compose
+    load_topology = topology.load_topology
+    safe_routes = composition._safe_routes
+    calls = {"parse": 0, "topology": 0, "safe_routes": 0}
+
+    def tracked_compose(*args, **kwargs):
+        calls["parse"] += 1
+        return compose(*args, **kwargs)
+
+    def tracked_topology(path):
+        calls["topology"] += 1
+        return load_topology(path)
+
+    def tracked_safe_routes(loaded):
+        calls["safe_routes"] += 1
+        return safe_routes(loaded)
+
+    monkeypatch.setattr(composition.yaml, "compose", tracked_compose)
+    monkeypatch.setattr(topology, "load_topology", tracked_topology)
+    monkeypatch.setattr(composition, "_safe_routes", tracked_safe_routes)
+    resolver = ConfigurationResolver()
+
+    first = resolver.resolve(**SAMPLE)
+    second = resolver.resolve(**SAMPLE)
+
+    assert first == second
+    assert calls == {"parse": 4, "topology": 1, "safe_routes": 1}
+
+    another = ConfigurationResolver()
+    assert another.resolve(**SAMPLE) == first
+    assert calls == {"parse": 8, "topology": 2, "safe_routes": 2}
+
+
+def test_cached_sources_are_copied_before_include_merging(tmp_path):
+    _copy_sample(tmp_path)
+    scenario = tmp_path / "configs/scenarios/included.yaml"
+    scenario.write_text("include: default.yaml\nseed: 99\n")
+    selection = {**SAMPLE, "scenario": "configs/scenarios/included.yaml"}
+    resolver = ConfigurationResolver(tmp_path)
+    expected = resolver.resolve(**selection)
+
+    displayed = resolver.component_values("scenario", selection["scenario"])
+    displayed["intervals"]["control_interval_seconds"] = 300
+    repeated = resolver.resolve(**selection)
+
+    assert repeated == expected
+    assert repeated.intervals.control_interval_seconds == 60.0
+
+
+def test_an_include_byte_change_reapplies_the_include(tmp_path):
+    _copy_sample(tmp_path)
+    scenario = tmp_path / "configs/scenarios/included.yaml"
+    scenario.write_text("include: default.yaml\nseed: 99\n")
+    selection = {**SAMPLE, "scenario": "configs/scenarios/included.yaml"}
+    resolver = ConfigurationResolver(tmp_path)
+    first = resolver.resolve(**selection)
+    included = tmp_path / SAMPLE["scenario"]
+    included.write_text(
+        included.read_text().replace("trace_level: decision", "trace_level: summary")
+    )
+
+    second = resolver.resolve(**selection)
+    first_trace = next(
+        record for record in first.provenance if record.pointer == "/trace_level"
+    )
+    second_trace = next(
+        record for record in second.provenance if record.pointer == "/trace_level"
+    )
+
+    assert first.trace_level == "decision"
+    assert second.trace_level == "summary"
+    assert first.resolved_configuration_sha256 != second.resolved_configuration_sha256
+    assert first.scientific_configuration_sha256 != (
+        second.scientific_configuration_sha256
+    )
+    assert first_trace.source_path == second_trace.source_path
+    assert first_trace.source_sha256 != second_trace.source_sha256
+
+
+def test_a_source_byte_change_preserves_exact_logical_identities(tmp_path):
+    _copy_sample(tmp_path)
+    resolver = ConfigurationResolver(tmp_path)
+    first = resolver.resolve(**SAMPLE)
+    controller = tmp_path / SAMPLE["controller"]
+    controller.write_text(controller.read_text() + "\n# Keep the same values.\n")
+
+    second = resolver.resolve(**SAMPLE)
+    first_kind = next(
+        record for record in first.provenance if record.pointer == "/controller/kind"
+    )
+    second_kind = next(
+        record for record in second.provenance if record.pointer == "/controller/kind"
+    )
+
+    assert first.resolved_configuration_sha256 == second.resolved_configuration_sha256
+    assert first.scientific_configuration_sha256 == (
+        second.scientific_configuration_sha256
+    )
+    assert first_kind.source_sha256 != second_kind.source_sha256
+
+
+def test_a_topology_byte_change_invalidates_both_topology_caches(monkeypatch, tmp_path):
+    from avalanche.sim import topology
+
+    _copy_sample(tmp_path)
+    load_topology = topology.load_topology
+    safe_routes = composition._safe_routes
+    calls = {"topology": 0, "safe_routes": 0}
+
+    def tracked_topology(path):
+        calls["topology"] += 1
+        return load_topology(path)
+
+    def tracked_safe_routes(loaded):
+        calls["safe_routes"] += 1
+        return safe_routes(loaded)
+
+    monkeypatch.setattr(topology, "load_topology", tracked_topology)
+    monkeypatch.setattr(composition, "_safe_routes", tracked_safe_routes)
+    resolver = ConfigurationResolver(tmp_path)
+    first = resolver.resolve(**SAMPLE)
+    assert resolver.resolve(**SAMPLE) == first
+    mountain = tmp_path / "configs/mountain/medium-resort.yaml"
+    mountain.write_text(mountain.read_text() + "\n# Keep the same topology.\n")
+
+    changed_bytes = resolver.resolve(**SAMPLE)
+
+    assert changed_bytes == first
+    assert calls == {"topology": 2, "safe_routes": 2}
+
+
+def test_artifact_bytes_are_verified_after_component_cache_hits(monkeypatch, tmp_path):
+    from avalanche.monitors import training
+
+    _copy_sample(tmp_path)
+    registry = tmp_path / "artifacts/registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_bytes(b"verified-registry")
+    digest = hashlib.sha256(registry.read_bytes()).hexdigest()
+    monitor = load_yaml(tmp_path / SAMPLE["monitor"])
+    monitor["monitor"].update(
+        {
+            "kind": "learned",
+            "model_lock": {
+                "registry_path": "artifacts/registry.json",
+                "registry_sha256": digest,
+                "selection_manifest_path": "artifacts/selection.json",
+                "selection_manifest_sha256": "0" * 64,
+            },
+        }
+    )
+    monitor_path = tmp_path / "configs/monitors/learned.yaml"
+    monitor_path.write_text(yaml.safe_dump(monitor, sort_keys=False))
+    selection = {**SAMPLE, "monitor": "configs/monitors/learned.yaml"}
+    calls = []
+
+    def verify(reference, *, repo_root):
+        content = (repo_root / reference.registry_path).read_bytes()
+        calls.append(content)
+        if hashlib.sha256(content).hexdigest() != reference.registry_sha256:
+            raise training.ArtifactError("the artifact registry has changed")
+
+    monkeypatch.setattr(training, "verify_formal_model_reference", verify)
+    resolver = ConfigurationResolver(tmp_path, artifact_root=tmp_path)
+    resolver.resolve(**selection)
+    registry.write_bytes(b"changed-registry")
+
+    with pytest.raises(ConfigurationResolutionError, match="registry has changed"):
+        resolver.resolve(**selection)
+
+    assert calls == [b"verified-registry", b"changed-registry"]
 
 
 def test_resolution_rejects_each_missing_required_route(tmp_path):
