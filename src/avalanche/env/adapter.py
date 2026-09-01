@@ -1,9 +1,11 @@
 """Adapt the mountain simulator to the Gymnasium interface."""
 
-import json
-from collections.abc import Callable
+import hashlib
+import struct
+from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
+from enum import Enum
 from math import isclose, isfinite
 from pathlib import Path
 from typing import Any, cast
@@ -11,6 +13,7 @@ from typing import Any, cast
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+from pydantic import BaseModel
 
 from avalanche.config.models import (
     PROTOCOL_TIME_EPSILON_SECONDS,
@@ -30,10 +33,14 @@ from avalanche.control import (
     InformationProfile,
     Monitor,
     MonitorObservation,
+    StaticPublicEvidence,
+    TraceWindow,
     build_controller_observation,
     build_evaluator_observation,
+    build_history_entry,
     build_outcome_observation,
     build_process_observation,
+    build_static_public_evidence,
     freeze_action,
     observation_as_json,
     thaw_action,
@@ -88,14 +95,74 @@ def _json_safe_observation(observation: Any) -> Any:
     return _json_safe_tree(observation_as_json(observation))
 
 
-def _observation_payload(observation: ControllerObservation) -> str:
-    """Return one canonical payload for an integrity comparison."""
-    return json.dumps(
-        _json_safe_observation(observation),
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+def _fingerprint_value(digest: Any, value: Any) -> None:
+    """Add one complete typed value to an integrity fingerprint."""
+
+    def write(marker: bytes, payload: bytes = b"") -> None:
+        digest.update(marker)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+
+    if value is None:
+        write(b"n")
+    elif isinstance(value, np.ndarray):
+        write(b"a", value.dtype.str.encode())
+        _fingerprint_value(digest, tuple(value.shape))
+        write(b"b", value.tobytes(order="C"))
+    elif isinstance(value, np.generic):
+        write(b"g", value.dtype.str.encode())
+        _fingerprint_value(digest, value.item())
+    elif isinstance(value, BaseModel):
+        model_type = f"{type(value).__module__}.{type(value).__qualname__}"
+        write(b"p", model_type.encode())
+        for name in type(value).model_fields:
+            write(b"f", name.encode())
+            _fingerprint_value(digest, getattr(value, name))
+    elif isinstance(value, Mapping):
+        keys = tuple(value)
+        if any(not isinstance(key, str) for key in keys):
+            raise TypeError("an observation mapping key must be a string")
+        write(b"m", len(keys).to_bytes(8, "big"))
+        for key in sorted(keys):
+            write(b"k", key.encode())
+            _fingerprint_value(digest, value[key])
+    elif is_dataclass(value) and not isinstance(value, type):
+        value_type = f"{type(value).__module__}.{type(value).__qualname__}"
+        write(b"d", value_type.encode())
+        for item in fields(value):
+            write(b"f", item.name.encode())
+            _fingerprint_value(digest, getattr(value, item.name))
+    elif isinstance(value, tuple):
+        write(b"t", len(value).to_bytes(8, "big"))
+        for item in value:
+            _fingerprint_value(digest, item)
+    elif isinstance(value, list):
+        write(b"l", len(value).to_bytes(8, "big"))
+        for item in value:
+            _fingerprint_value(digest, item)
+    elif isinstance(value, Enum):
+        enum_type = f"{type(value).__module__}.{type(value).__qualname__}"
+        write(b"e", enum_type.encode())
+        _fingerprint_value(digest, value.value)
+    elif isinstance(value, bool):
+        write(b"o", b"1" if value else b"0")
+    elif isinstance(value, int):
+        write(b"i", str(value).encode())
+    elif isinstance(value, float):
+        write(b"r", struct.pack("!d", value))
+    elif isinstance(value, str):
+        write(b"s", value.encode())
+    elif isinstance(value, bytes):
+        write(b"y", value)
+    else:
+        raise TypeError(f"the observation value {type(value).__name__} is unsupported")
+
+
+def _observation_fingerprint(observation: ControllerObservation) -> str:
+    """Return one complete typed integrity fingerprint."""
+    digest = hashlib.sha256()
+    _fingerprint_value(digest, observation)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -243,8 +310,9 @@ class AvalancheEnv(gym.Env):
         self.last_executed_action: ExecutedAction | None = None
         self.last_evaluator_observation: EvaluatorObservation | None = None
         self._boundary_controller_observation: ControllerObservation | None = None
-        self._boundary_controller_payload: str | None = None
-        self._control_history: list[dict[str, Any]] = []
+        self._boundary_controller_fingerprint: str | None = None
+        self._static_public_evidence: StaticPublicEvidence | None = None
+        self._control_history: TraceWindow = ()
         self._intervention_history: list[InterventionRecord] = []
         self._cumulative_intervention_cost = 0.0
         self._audit_interval = 0
@@ -291,7 +359,8 @@ class AvalancheEnv(gym.Env):
     ) -> tuple[Observation, dict[str, Any]]:
         """Reset one seeded episode and return its first observation."""
         self._boundary_controller_observation = None
-        self._boundary_controller_payload = None
+        self._boundary_controller_fingerprint = None
+        self._static_public_evidence = None
         super().reset(seed=seed)
         run_seed = (
             int(self.np_random.integers(0, np.iinfo(np.int64).max))
@@ -323,7 +392,7 @@ class AvalancheEnv(gym.Env):
         self.last_adjudication = None
         self.last_executed_action = None
         self.last_evaluator_observation = None
-        self._control_history.clear()
+        self._control_history = ()
         self._intervention_history.clear()
         self._cumulative_intervention_cost = 0.0
         self._audit_interval = 0
@@ -429,9 +498,7 @@ class AvalancheEnv(gym.Env):
                 "monitor_decision": transition.adjudication.decision,
                 "adjudication": transition.adjudication,
                 "executed_action": transition.adjudication.executed_action,
-                "evaluator_observation": _json_safe_observation(
-                    transition.evaluator_observation
-                ),
+                "evaluator_observation": transition.evaluator_observation,
                 "current_intervention_cost": transition.intervention_cost,
             }
         )
@@ -444,15 +511,24 @@ class AvalancheEnv(gym.Env):
         if cached is None:
             reference = build_controller_observation(
                 self.sim,
-                tuple(self._control_history),
+                self._control_history,
+                self._static_evidence(),
             )
             self._boundary_controller_observation = reference
-            self._boundary_controller_payload = _observation_payload(reference)
+            self._boundary_controller_fingerprint = _observation_fingerprint(reference)
             return reference
-        if _observation_payload(cached) != self._boundary_controller_payload:
+        if _observation_fingerprint(cached) != self._boundary_controller_fingerprint:
             raise ValueError(
                 "the cached controller observation changed before delivery"
             )
+        return cached
+
+    def _static_evidence(self) -> StaticPublicEvidence:
+        """Return the static public evidence for this reset."""
+        cached = self._static_public_evidence
+        if cached is None:
+            cached = build_static_public_evidence(self.sim)
+            self._static_public_evidence = cached
         return cached
 
     def evaluator_observation(
@@ -474,7 +550,6 @@ class AvalancheEnv(gym.Env):
         result = self.adjudicator.adjudicate(
             monitor_observation,
             proposal,
-            tuple(self._control_history),
             simulation_time=self.sim.simulation_time,
             fallback_observation=observation,
         )
@@ -489,17 +564,12 @@ class AvalancheEnv(gym.Env):
             self.last_proposal = proposal
             self.last_adjudication = result
             self.last_executed_action = result.executed_action
-            self._control_history.append(
-                {
-                    "executed_action": {
-                        name: values.copy()
-                        for name, values in thaw_action(
-                            result.executed_action.action
-                        ).items()
-                    },
-                }
+            history_entry = build_history_entry(result.executed_action.action)
+            self._control_history = (
+                *self._control_history,
+                history_entry,
             )
-            del self._control_history[:-32]
+            self._control_history = self._control_history[-32:]
             if result.decision.decision is not DecisionType.ALLOW:
                 self._intervention_history.append(
                     InterventionRecord(proposal.simulation_time, result.decision)
@@ -508,7 +578,7 @@ class AvalancheEnv(gym.Env):
             return result
         finally:
             self._boundary_controller_observation = None
-            self._boundary_controller_payload = None
+            self._boundary_controller_fingerprint = None
 
     def _prepare_audits(self) -> None:
         """Sample audits once at the start of one control interval."""

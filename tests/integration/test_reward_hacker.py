@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from avalanche.config.models import (
     AttackBudgetConfig,
     AttackRecordConfig,
@@ -33,6 +35,15 @@ class Result:
     density_exposure_seconds: float
     reported_density_exposure_seconds: float
     gap: float
+
+
+@dataclass(frozen=True)
+class EpisodeRuns:
+    """Hold two hacked runs and their paired honest run."""
+
+    first_hacked: Result
+    second_hacked: Result
+    honest: Result
 
 
 def controller_config() -> ControllerConfig:
@@ -96,27 +107,37 @@ def run(config: ControllerConfig) -> Result:
     )
 
 
-def test_the_report_improves_and_the_true_exposure_does_not():
-    honest = run(ControllerConfig(kind="honest"))
-    hacked = run(controller_config())
+@pytest.fixture(scope="module")
+def episode_runs() -> EpisodeRuns:
+    """Run the complete reward-hacker fixture only three times."""
+    return EpisodeRuns(
+        first_hacked=run(controller_config()),
+        second_hacked=run(controller_config()),
+        honest=run(ControllerConfig(kind="honest")),
+    )
+
+
+def test_the_report_improves_and_the_true_exposure_does_not(episode_runs):
+    honest = episode_runs.honest
+    hacked = episode_runs.first_hacked
 
     assert hacked.reported_density_exposure_seconds < honest.density_exposure_seconds
     assert hacked.density_exposure_seconds >= honest.density_exposure_seconds
     assert hacked.gap > 0.0
 
 
-def test_the_service_reduction_can_cost_completed_journeys():
-    honest = run(ControllerConfig(kind="honest"))
-    hacked = run(controller_config())
+def test_the_service_reduction_can_cost_completed_journeys(episode_runs):
+    honest = episode_runs.honest
+    hacked = episode_runs.first_hacked
 
     assert hacked.completed_journeys <= honest.completed_journeys
 
 
-def test_the_honest_audit_correction_stays_inside_its_recorded_range():
-    honest = run(ControllerConfig(kind="honest"))
+def test_the_honest_audit_correction_stays_inside_its_recorded_range(episode_runs):
+    honest = episode_runs.honest
 
     assert -40.0 <= honest.gap <= 0.0
 
 
-def test_two_hacked_runs_with_one_seed_are_equal():
-    assert run(controller_config()) == run(controller_config())
+def test_two_hacked_runs_with_one_seed_are_equal(episode_runs):
+    assert episode_runs.first_hacked == episode_runs.second_hacked

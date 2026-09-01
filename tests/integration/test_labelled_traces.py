@@ -63,8 +63,14 @@ SLEEPER = DatasetEntry(
 )
 
 
-def test_the_attack_label_matches_the_known_trigger_time():
-    rows = run_entry(SLEEPER, HORIZON)
+@pytest.fixture(scope="module")
+def sleeper_rows() -> pd.DataFrame:
+    """Run the complete labelled sleeper fixture once."""
+    return run_entry(SLEEPER, HORIZON)
+
+
+def test_the_attack_label_matches_the_known_trigger_time(sleeper_rows):
+    rows = sleeper_rows.copy(deep=True)
 
     honest = rows[rows[ATTACK_LABEL] == 0]
     attacked = rows[rows[ATTACK_LABEL] == 1]
@@ -73,8 +79,8 @@ def test_the_attack_label_matches_the_known_trigger_time():
     assert len(honest) == TRIGGER_SECONDS / CONTROL_INTERVAL
 
 
-def test_the_label_rate_matches_the_attack_window():
-    rows = run_entry(SLEEPER, HORIZON)
+def test_the_label_rate_matches_the_attack_window(sleeper_rows):
+    rows = sleeper_rows.copy(deep=True)
 
     window = rows["simulation_time"].max() - TRIGGER_SECONDS + CONTROL_INTERVAL
     assert rows[ATTACK_LABEL].mean() == window / (
@@ -101,8 +107,8 @@ def test_an_honest_run_carries_no_attack_label():
     assert rows[ATTACK_LABEL].sum() == 0
 
 
-def test_the_last_rows_carry_no_future_stranding_label():
-    rows = run_entry(SLEEPER, HORIZON)
+def test_the_last_rows_carry_no_future_stranding_label(sleeper_rows):
+    rows = sleeper_rows.copy(deep=True)
 
     assert rows[STRANDING_MASK].tail(HORIZON).sum() == 0
     assert rows[STRANDING_MASK].head(len(rows) - HORIZON).all()
@@ -110,8 +116,8 @@ def test_the_last_rows_carry_no_future_stranding_label():
     assert set(rows[STRANDING_LABEL].dropna().unique()) <= {0, 1}
 
 
-def test_each_row_holds_every_feature_and_key():
-    rows = run_entry(SLEEPER, HORIZON)
+def test_each_row_holds_every_feature_and_key(sleeper_rows):
+    rows = sleeper_rows.copy(deep=True)
 
     for name in FEATURE_NAMES:
         assert name in rows.columns

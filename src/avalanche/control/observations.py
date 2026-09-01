@@ -26,7 +26,6 @@ from avalanche.control.types import (
     build_monitor_proposal,
     freeze_evidence,
     public_policy_identity,
-    sanitize_trace_window,
     thaw_evidence,
 )
 from avalanche.scenarios.sensors import route_sensor_policy_identity
@@ -62,9 +61,10 @@ def copy_observation(value: Any) -> Any:
 def build_controller_observation(
     sim: MountainSim,
     history: TraceWindow = (),
+    static: StaticPublicEvidence | None = None,
 ) -> ControllerObservation:
     """Return one strict operational envelope for a controller."""
-    evidence = build_operational_evidence(sim, history)
+    evidence = build_operational_evidence(sim, history, static)
     return ControllerObservation(
         schema_version=OBSERVATION_SCHEMA_VERSION,
         information_profile="controller",
@@ -75,6 +75,7 @@ def build_controller_observation(
 def build_operational_evidence(
     sim: MountainSim,
     history: TraceWindow = (),
+    static: StaticPublicEvidence | None = None,
 ) -> OperationalEvidence:
     """Build one exact operational allowlist from a delivered packet."""
     route_packet = sim.route_sensor_packet
@@ -102,13 +103,13 @@ def build_operational_evidence(
         schema_version=OBSERVATION_SCHEMA_VERSION,
         simulation_time=sim.simulation_time,
         packet=packet,
-        static=build_static_public_evidence(sim),
+        static=build_static_public_evidence(sim) if static is None else static,
         audits=tuple(measurement.operational() for measurement in sim.delivered_audits),
         events=events,
         reported_stranding=tuple(
             replace(report) for report in route_packet.reported_stranding
         ),
-        executed_actions=sanitize_trace_window(history),
+        executed_actions=history,
     )
 
 

@@ -49,6 +49,9 @@ packages = ["src/avalanche"]
 # Two test directories can hold one file name with this import mode.
 addopts = "--import-mode=importlib"
 consider_namespace_packages = true
+markers = [
+    "performance: enforce a local simulator or configuration runtime limit",
+]
 
 [[tool.mypy.overrides]]
 module = [
