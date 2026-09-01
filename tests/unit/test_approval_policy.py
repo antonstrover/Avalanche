@@ -50,7 +50,6 @@ def adjudicate(choice: ApprovalChoice):
     env.reset(seed=2)
     boundary.reset(2)
     action = neutral_action(env.topology)
-    action["route_weights"][0, 0] = 0.5
     proposal = ActionProposal(
         controller_id="test",
         simulation_time=0.0,

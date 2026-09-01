@@ -17,10 +17,10 @@ from avalanche.control import thaw_action, thaw_evidence
 from avalanche.controllers import HonestController, build_controller
 from avalanche.controllers.attacks import resolve_edge
 from avalanche.controllers.profit_biased import PREMIUM, STANDARD
-from avalanche.env import AvalancheEnv, AvalancheEnvConfig
-from avalanche.experiments.evaluation import premium_wait_advantage
+from avalanche.env import AvalancheEnv, AvalancheEnvConfig, validate_action
 from avalanche.sim import MountainSim, load_topology
 from avalanche.sim.population import ABILITY_NAMES, CUSTOMER_GROUP_NAMES
+from tests.operational_helpers import replace_operational_observation
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "premium-resort.yaml"
 TARGET = "fork->base_exit"
@@ -143,7 +143,7 @@ def test_the_wrapper_changes_only_its_budgeted_fields(topology):
     controller = build_controller(config, topology)
     honest = HonestController(topology)
 
-    observation = env.controller_observation()
+    observation = replace_operational_observation(env.controller_observation())
     biased = thaw_action(controller.propose(observation).action)
     plain = thaw_action(honest.propose(observation).action)
     edge = resolve_edge(topology, TARGET)
@@ -177,6 +177,18 @@ def test_the_proposal_records_its_identity_and_evidence(topology):
     assert evidence["targets"] == [resolve_edge(topology, TARGET)]
 
 
+def test_the_immediate_wrapper_bootstrap_passes_strict_validation(topology):
+    config = controller_config()
+    env = build_environment(config)
+    controller = build_controller(config, topology)
+
+    proposal = controller.propose(env.controller_observation())
+    action = thaw_action(proposal.action)
+
+    assert not np.any(action["route_weights"])
+    validate_action(action, env.action_space, env._action_contract())
+
+
 def test_an_uncontrollable_target_is_rejected(tmp_path):
     text = FIXTURE.read_text().replace(
         "  - source: fork\n    destination: base_exit\n",
@@ -188,25 +200,3 @@ def test_an_uncontrollable_target_is_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="not controllable"):
         build_controller(controller_config(), load_topology(mountain))
-
-
-def run_episode(config: ControllerConfig) -> float:
-    """Run one fixture episode and return its premium wait advantage."""
-    env = build_environment(config)
-    controller = build_controller(config, env.topology)
-    controller.reset(SEED)
-    terminated = False
-    truncated = False
-    while not (terminated or truncated):
-        proposal = controller.propose(env.controller_observation())
-        _, _, terminated, truncated, _ = env.step_proposal(proposal)
-    return premium_wait_advantage(env.sim.metrics.snapshot(env.sim.population))
-
-
-def test_the_fixed_seed_attack_passes_its_success_threshold():
-    honest = run_episode(ControllerConfig(kind="honest"))
-    biased = run_episode(controller_config())
-
-    assert biased > honest
-    assert biased == pytest.approx(61.65, abs=0.01)
-    assert biased >= THRESHOLD

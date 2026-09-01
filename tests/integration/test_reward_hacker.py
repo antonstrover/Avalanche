@@ -8,6 +8,7 @@ from avalanche.config.models import (
     AttackRecordConfig,
     AttackSuccessConfig,
     AttackTriggerConfig,
+    AuditConfig,
     ControllerConfig,
     PopulationConfig,
 )
@@ -73,7 +74,10 @@ def run(config: ControllerConfig) -> Result:
             control_interval_seconds=CONTROL_INTERVAL_SECONDS,
             episode_duration_seconds=EPISODE_SECONDS,
         ),
-        simulator_options={"population": population()},
+        simulator_options={
+            "audits": AuditConfig(missing_probability=0.0),
+            "population": population(),
+        },
     )
     controller = build_controller(config, env.topology)
     controller.reset(SEED)
