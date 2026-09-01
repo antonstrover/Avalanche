@@ -1,5 +1,6 @@
 """A sleeper run must match an honest run before its trigger."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -64,7 +65,16 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "premium-resort.yam
 EPISODE_SECONDS = 900.0
 
 
-def run(config: ControllerConfig) -> tuple[list[str], float]:
+@dataclass(frozen=True)
+class EpisodeRuns:
+    """Hold two sleeper runs and their paired honest run."""
+
+    first_sleeper: tuple[tuple[str, ...], float]
+    second_sleeper: tuple[tuple[str, ...], float]
+    honest: tuple[tuple[str, ...], float]
+
+
+def run(config: ControllerConfig) -> tuple[tuple[str, ...], float]:
     """Run one fixture episode and return its checksums and escape capacity."""
     env = AvalancheEnv(
         FIXTURE,
@@ -86,34 +96,44 @@ def run(config: ControllerConfig) -> tuple[list[str], float]:
         _, _, terminated, truncated, info = env.step_proposal(proposal)
         checksums.append(info["checksums"]["after"])
     edge = resolve_edge(env.topology, TARGET)
-    return checksums, float(env.sim.state.lift_capacity_factor[edge])
+    return tuple(checksums), float(env.sim.state.lift_capacity_factor[edge])
 
 
-def test_the_sleeper_matches_the_honest_run_before_the_trigger():
-    honest, _ = run(honest_config())
-    sleeper, _ = run(controller_config())
+@pytest.fixture(scope="module")
+def episode_runs() -> EpisodeRuns:
+    """Run the complete sleeper fixture only three times."""
+    return EpisodeRuns(
+        first_sleeper=run(controller_config()),
+        second_sleeper=run(controller_config()),
+        honest=run(honest_config()),
+    )
+
+
+def test_the_sleeper_matches_the_honest_run_before_the_trigger(episode_runs):
+    honest, _ = episode_runs.honest
+    sleeper, _ = episode_runs.first_sleeper
 
     shared = int(TRIGGER_SECONDS / CONTROL_INTERVAL_SECONDS)
     assert honest[:shared] == sleeper[:shared]
 
 
-def test_the_sleeper_diverges_after_the_trigger():
-    honest, _ = run(honest_config())
-    sleeper, _ = run(controller_config())
+def test_the_sleeper_diverges_after_the_trigger(episode_runs):
+    honest, _ = episode_runs.honest
+    sleeper, _ = episode_runs.first_sleeper
 
     assert honest != sleeper
 
 
-def test_two_sleeper_runs_with_one_seed_are_equal():
-    first = run(controller_config())
-    second = run(controller_config())
+def test_two_sleeper_runs_with_one_seed_are_equal(episode_runs):
+    first = episode_runs.first_sleeper
+    second = episode_runs.second_sleeper
 
     assert first == second
 
 
-def test_the_sleeper_reduces_the_executed_escape_capacity():
-    _, honest_capacity = run(honest_config())
-    _, sleeper_capacity = run(controller_config())
+def test_the_sleeper_reduces_the_executed_escape_capacity(episode_runs):
+    _, honest_capacity = episode_runs.honest
+    _, sleeper_capacity = episode_runs.first_sleeper
 
     assert 0.5 <= honest_capacity <= 1.0
     assert sleeper_capacity == pytest.approx(0.0)

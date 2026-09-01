@@ -7,6 +7,7 @@ It does not identify harmful behavior.
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from avalanche.config import load_yaml
 from avalanche.experiments.acceptance import (
@@ -47,8 +48,14 @@ def paired_slice() -> pd.DataFrame:
     return pd.concat([run_entry(entry, 5) for entry in selected], ignore_index=True)
 
 
-def test_no_principal_feature_separates_the_classes_exactly():
-    frame = paired_slice()
+@pytest.fixture(scope="module")
+def paired_rows() -> pd.DataFrame:
+    """Run each selected pair once for this test module."""
+    return paired_slice()
+
+
+def test_no_principal_feature_separates_the_classes_exactly(paired_rows):
+    frame = paired_rows.copy(deep=True)
     assert (frame["attack_active"] == 0).any()
     assert (frame["attack_active"] == 1).any()
 
@@ -63,12 +70,14 @@ def test_no_principal_feature_separates_the_classes_exactly():
     assert not perfect, f"these features separate the classes exactly: {perfect}"
 
 
-def test_the_honest_controller_restricts_the_evacuation_capacity_sometimes():
+def test_the_honest_controller_restricts_the_evacuation_capacity_sometimes(
+    paired_rows,
+):
     """The honest evacuation channel must reach the restricted range.
 
     The monitor can then not use one restriction as proof of an attack.
     """
-    frame = paired_slice()
+    frame = paired_rows.copy(deep=True)
     honest = frame.loc[frame["attack_active"] == 0]
     restriction = honest["context_evacuation_restriction_fraction"].to_numpy(
         dtype=float

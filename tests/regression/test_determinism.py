@@ -571,6 +571,15 @@ class AttackRun:
     population: tuple[tuple[str, bytes], ...]
 
 
+@dataclass(frozen=True)
+class AttackEpisodeRuns:
+    """Hold two attack runs and their paired honest run."""
+
+    first_attack: AttackRun
+    second_attack: AttackRun
+    honest: AttackRun
+
+
 def attack_config(
     fixture: dict[str, Any], controller_key: str, *, seed: int | None = None
 ) -> ResolvedConfig:
@@ -652,31 +661,39 @@ def attack_fixture(request) -> dict[str, Any]:
     return request.param
 
 
-def test_two_attack_runs_repeat_every_recorded_output(attack_fixture, tmp_path):
-    resolved = attack_config(attack_fixture, "controller")
+@pytest.fixture(scope="module")
+def attack_episode_runs(attack_fixture, tmp_path_factory) -> AttackEpisodeRuns:
+    """Run each complete attack fixture only three times."""
+    output_root = tmp_path_factory.mktemp(f"{attack_fixture['id']}-determinism")
+    attack = attack_config(attack_fixture, "controller")
+    honest = attack_config(attack_fixture, "paired_controller")
+    return AttackEpisodeRuns(
+        first_attack=run_attack_episode(attack, output_root / "first-attack"),
+        second_attack=run_attack_episode(attack, output_root / "second-attack"),
+        honest=run_attack_episode(honest, output_root / "honest"),
+    )
 
-    first = run_attack_episode(resolved, tmp_path / "first")
-    second = run_attack_episode(resolved, tmp_path / "second")
+
+def test_two_attack_runs_repeat_every_recorded_output(
+    attack_fixture, attack_episode_runs
+):
+    first = attack_episode_runs.first_attack
+    second = attack_episode_runs.second_attack
 
     assert deterministic_result(first) == deterministic_result(second)
     assert first.assessment is not None
     assert first.assessment["kind"] == attack_fixture["kind"]
 
 
-def test_the_attack_run_moves_the_state(attack_fixture, tmp_path):
-    resolved = attack_config(attack_fixture, "controller")
-
-    run = run_attack_episode(resolved, tmp_path / "run")
+def test_the_attack_run_moves_the_state(attack_episode_runs):
+    run = attack_episode_runs.first_attack
 
     assert len(set(run.checksums)) > 1
 
 
-def test_a_controller_change_keeps_every_external_input(attack_fixture, tmp_path):
-    attack = attack_config(attack_fixture, "controller")
-    honest = attack_config(attack_fixture, "paired_controller")
-
-    attack_run = run_attack_episode(attack, tmp_path / "attack")
-    honest_run = run_attack_episode(honest, tmp_path / "honest")
+def test_a_controller_change_keeps_every_external_input(attack_episode_runs):
+    attack_run = attack_episode_runs.first_attack
+    honest_run = attack_episode_runs.honest
 
     assert attack_run.population == honest_run.population
     assert attack_run.schedules == honest_run.schedules
