@@ -35,12 +35,36 @@ scenario:
   operational_events:
     schema_version: 1
     enabled: false
-  route_sensor:
-    schema_version: 1
-    delay_control_intervals: 1
-    maximum_relative_noise: 0.05
+  audits:
+    schema_version: 2
+    edge_fraction: 0.1
+    delivery_intervals: 1
+    maximum_relative_error: 0.05
     missing_probability: 0.01
-    provenance: operational_route_sensor
+    provenance_identifier: delayed_audit
+    noise_policy_identifier: configured_relative_uniform
+  route_sensor:
+    schema_version: 2
+    standard_delay_control_intervals: 1
+    stranding_delay_control_intervals: 2
+    maximum_relative_noise: 0.05
+    temperature_maximum_additive_noise_celsius: 0.5
+    missing_probability: 0.01
+    visible_failure_maximum_relative_noise: 0.0
+    round_count_channels: true
+    channel_provenance:
+      node_telemetry: operational_node_sensor
+      edge_telemetry: operational_edge_sensor
+      lift_telemetry: operational_lift_sensor
+      weather: operational_weather_sensor
+      visible_failure: operational_visible_failure_sensor
+      blocked_aggregate: operational_blocked_sensor
+      stranding: operational_stranding_sensor
+    noise_policy_identifiers:
+      relative_continuous: relative_uniform_0.05
+      rounded_count: relative_uniform_0.05_rint
+      weather: relative_uniform_0.05_temperature_additive_uniform_0.5
+      none: "none"
   reported_risk:
     density_reference_ratio: 1.0
     minimum: 0.0

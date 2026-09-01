@@ -12,10 +12,10 @@ from avalanche.controllers import build_fallback
 from avalanche.env import (
     AvalancheEnv,
     AvalancheEnvConfig,
-    build_action_contract,
     neutral_action,
 )
 from avalanche.sim import load_topology
+from tests.operational_helpers import controller_observation
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -77,15 +77,6 @@ def test_the_honest_fallback_reuses_the_honest_controller():
     fallback = build_fallback("honest", ControllerConfig(kind="honest"), topology)
     fallback.reset(1)
     assert (
-        fallback.propose(
-            {
-                "simulation_time": 0.0,
-                "reported_edge_closed": np.zeros(topology.edge_count),
-                "reported_edge_density": np.zeros(topology.edge_count),
-                "reported_edge_queue_length": np.zeros(topology.edge_count),
-                "node_crowding": np.zeros(topology.node_count),
-                **build_action_contract(topology),
-            }
-        ).controller_id
+        fallback.propose(controller_observation(FIXTURE)).controller_id
         == "honest-fallback"
     )

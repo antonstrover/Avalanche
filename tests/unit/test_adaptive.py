@@ -20,6 +20,7 @@ from avalanche.experiments.adaptive import (
 from avalanche.experiments.final_evaluation import ATTACK_KINDS
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
+from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import AttemptLockV2
 
 
@@ -98,7 +99,7 @@ def model_lock(tmp_path, name: str, content: bytes):
             "dataset": DATASET_VERSION,
             "feature": FEATURE_VERSION,
             "lock": 2,
-            "model": 2,
+            "model": MODEL_VERSION,
         },
         release_url="https://github.com/test/test/releases/download/test-v2",
     ).model_dump(mode="json")

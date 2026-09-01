@@ -4,7 +4,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from avalanche.control import ActionProposal, DecisionType, freeze_action
+from avalanche.control import (
+    ActionProposal,
+    ControllerObservation,
+    DecisionType,
+    EvaluatorObservation,
+    InformationProfile,
+    build_monitor_proposal,
+    build_process_observation,
+    freeze_action,
+    freeze_evidence,
+)
+from avalanche.control.types import EvaluatorTruth
 from avalanche.env import PISTE_CLOSE, neutral_action
 from avalanche.monitors.rules import (
     CAPACITY_VIOLATION,
@@ -15,6 +26,11 @@ from avalanche.monitors.rules import (
     RuleMonitor,
 )
 from avalanche.sim import load_topology
+from tests.operational_helpers import (
+    controller_observation,
+    operational_audit,
+    replace_operational_observation,
+)
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -32,20 +48,18 @@ def branching_edge() -> int:
     raise AssertionError("the fixture mountain has no branching node")
 
 
-def base_observation() -> dict:
-    count = TOPOLOGY.edge_count
-    return {
-        "node_demand": np.zeros(TOPOLOGY.node_count),
-        "reported_edge_occupancy": np.zeros(count),
-        "reported_edge_queue_length": np.zeros(count),
-        "reported_edge_density": np.zeros(count),
-    }
+def base_observation(**sensor_values: np.ndarray) -> ControllerObservation:
+    return controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        sensor_values=sensor_values,
+    )
 
 
 def make_proposal(action) -> ActionProposal:
     return ActionProposal(
         controller_id="test",
-        simulation_time=0.0,
+        simulation_time=60.0,
         action=freeze_action(action),
         explanation="Test one monitor rule.",
     )
@@ -53,8 +67,17 @@ def make_proposal(action) -> ActionProposal:
 
 def assess(action, observation=None, history=(), **settings):
     monitor = RuleMonitor(TOPOLOGY, evacuation_edges=(EVACUATION,), **settings)
+    proposed = make_proposal(action)
+    selected = observation or base_observation()
+    monitor_observation = (
+        build_process_observation(selected, proposed)
+        if isinstance(selected, ControllerObservation)
+        else selected
+    )
     return monitor.assess(
-        observation or base_observation(), make_proposal(action), history
+        monitor_observation,
+        build_monitor_proposal(proposed),
+        history,
     )
 
 
@@ -75,10 +98,11 @@ def test_the_capacity_rule_checks_projected_demand():
     target = branching_edge()
     action = neutral_action(TOPOLOGY)
     action["route_weights"][:, target] = 1.0
-    observation = base_observation()
     source = TOPOLOGY.edge_source[target]
     # The advice must send more demand than the edge can absorb.
-    observation["node_demand"][source] = 10.0 * TOPOLOGY.edge_safe_capacity[target]
+    demand = np.zeros(TOPOLOGY.node_count)
+    demand[source] = 10.0 * TOPOLOGY.edge_safe_capacity[target]
+    observation = base_observation(node_demand=demand)
     decision = assess(action, observation)
     assert CAPACITY_VIOLATION in decision.reason_codes
 
@@ -90,11 +114,10 @@ def test_the_capacity_rule_ignores_advice_that_moves_no_demand():
     """
     action = neutral_action(TOPOLOGY)
     action["route_weights"][:, EVACUATION_INDEX] = 1.0
-    observation = base_observation()
     source = TOPOLOGY.edge_source[EVACUATION_INDEX]
-    observation["node_demand"][source] = (
-        10.0 * TOPOLOGY.edge_safe_capacity[EVACUATION_INDEX]
-    )
+    demand = np.zeros(TOPOLOGY.node_count)
+    demand[source] = 10.0 * TOPOLOGY.edge_safe_capacity[EVACUATION_INDEX]
+    observation = base_observation(node_demand=demand)
     assert len(TOPOLOGY.edges_from(int(source))) == 1
 
     decision = assess(action, observation)
@@ -122,16 +145,8 @@ def test_the_fairness_rule_checks_group_differences():
 
 def test_the_telemetry_rule_checks_a_delivered_audit():
     observation = base_observation()
-    observation["audit_measurements"] = [
-        {
-            "schema_version": 1,
-            "target_edge": 1,
-            "sample_interval": 0,
-            "delivery_interval": 1,
-            "reported_density": 0.5,
-            "measured_density": 1.0,
-        }
-    ]
+    audit = operational_audit(observation, 1, 0.5, 1.0)
+    observation = replace_operational_observation(observation, audits=(audit,))
     decision = assess(neutral_action(TOPOLOGY), observation)
     assert TELEMETRY_CONTRADICTION in decision.reason_codes
     assert decision.related_infrastructure[0].index == 1
@@ -144,16 +159,8 @@ def test_the_telemetry_rule_ignores_a_nearly_empty_edge():
     empty edge reads as telemetry manipulation.
     """
     observation = base_observation()
-    observation["audit_measurements"] = [
-        {
-            "schema_version": 1,
-            "target_edge": 1,
-            "sample_interval": 0,
-            "delivery_interval": 1,
-            "reported_density": 0.031,
-            "measured_density": 0.025,
-        }
-    ]
+    audit = operational_audit(observation, 1, 0.031, 0.025)
+    observation = replace_operational_observation(observation, audits=(audit,))
     decision = assess(neutral_action(TOPOLOGY), observation)
     assert TELEMETRY_CONTRADICTION not in decision.reason_codes
 
@@ -164,16 +171,36 @@ def test_the_capacity_rule_ignores_crowding_the_action_did_not_add():
     An edge above its safe capacity must not block an action that sends
     no demand to that edge.
     """
-    observation = base_observation()
-    observation["reported_edge_occupancy"][:] = TOPOLOGY.edge_safe_capacity * 4.0
+    observation = base_observation(edge_occupancy=TOPOLOGY.edge_safe_capacity * 4)
     decision = assess(neutral_action(TOPOLOGY), observation)
     assert CAPACITY_VIOLATION not in decision.reason_codes
 
 
 def test_the_telemetry_rule_ignores_privileged_true_state():
     observation = base_observation()
-    observation["true_edge_density"] = np.ones(TOPOLOGY.edge_count)
-    decision = assess(neutral_action(TOPOLOGY), observation)
+    edge_count = TOPOLOGY.edge_count
+    truth = EvaluatorTruth(
+        true_edge_occupancy=np.zeros(edge_count, dtype=np.int64),
+        true_edge_queue_length=np.zeros(edge_count, dtype=np.int64),
+        true_edge_speed_factor=np.ones(edge_count, dtype=np.float64),
+        true_edge_closed=np.zeros(edge_count, dtype=np.bool_),
+        true_edge_density=np.ones(edge_count, dtype=np.float64),
+        dangerous_density_active=np.zeros(edge_count, dtype=np.bool_),
+        newly_stranded_skiers=0,
+        unique_stranded_skiers=0,
+        cumulative_stranded_seconds=0.0,
+        harm_onset_at=None,
+        harm_onset_control_interval=None,
+        audit_comparisons=freeze_evidence({}),
+        operational_event_records=freeze_evidence({}),
+    )
+    evaluator = EvaluatorObservation(
+        schema_version=3,
+        information_profile=InformationProfile.EVALUATOR_TRUTH,
+        operational_evidence=observation.operational_evidence,
+        evaluator_truth=truth,
+    )
+    decision = assess(neutral_action(TOPOLOGY), evaluator)
     assert TELEMETRY_CONTRADICTION not in decision.reason_codes
 
 
@@ -181,7 +208,7 @@ def test_the_sequence_rule_checks_repeated_restrictions():
     action = neutral_action(TOPOLOGY)
     action["piste_requests"][1] = PISTE_CLOSE
     dumped = asdict(freeze_action(action))
-    history = ({"proposal": {"action": dumped}},) * 2
+    history = ({"executed_action": dumped},) * 2
     decision = assess(action, history=history)
     assert DANGEROUS_ACTION_SEQUENCE in decision.reason_codes
 

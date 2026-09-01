@@ -13,8 +13,8 @@ from avalanche.controllers.policies import (
     shape_response,
 )
 from avalanche.controllers.responses import ActionRateLimits
-from avalanche.env import build_action_contract
 from avalanche.sim import load_topology
+from tests.operational_helpers import controller_observation
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "medium-resort.yaml"
@@ -35,20 +35,14 @@ def _edge(reference: str) -> int:
     )
 
 
-def _observation() -> dict:
-    edge_count = TOPOLOGY.edge_count
-    state = {
-        "simulation_time": 60.0,
-        "reported_edge_closed": np.zeros(edge_count, dtype=np.int8),
-        "reported_edge_density": np.zeros(edge_count, dtype=np.float32),
-        "reported_edge_occupancy": np.zeros(edge_count, dtype=np.float32),
-        "reported_edge_queue_length": np.zeros(edge_count, dtype=np.float32),
-        "node_demand": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        **build_action_contract(TOPOLOGY),
-    }
-    state["reported_edge_queue_length"][_edge(PAIR[0])] = 30.0
-    return state
+def _observation():
+    queues = np.zeros(TOPOLOGY.edge_count)
+    queues[_edge(PAIR[0])] = 30.0
+    return controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        sensor_values={"lift_queue_length": queues},
+    )
 
 
 def _queue_output(variant: str) -> float:

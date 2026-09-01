@@ -15,7 +15,7 @@ import yaml
 
 from avalanche.config import ConfigurationResolver
 from avalanche.config.models import ControllerConfig
-from avalanche.control import InformationProfile
+from avalanche.control import OBSERVATION_SCHEMA_VERSION, InformationProfile
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     DATASET_VERSION,
@@ -37,6 +37,7 @@ from avalanche.monitors.dataset import (
 )
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.observability import NullMetricEmitter
+from avalanche.scenarios import AUDIT_SCHEMA_VERSION, ROUTE_SENSOR_SCHEMA_VERSION
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "configs" / "experiments" / "monitor-training.yaml"
@@ -122,6 +123,24 @@ def test_each_row_holds_every_feature_and_key():
     assert "unique_stranded_skiers" not in rows.columns
     assert (rows["dataset_version"] == DATASET_VERSION).all()
     assert (rows["feature_version"] == FEATURE_VERSION).all()
+    assert (
+        rows["operational_evidence_schema_version"] == OBSERVATION_SCHEMA_VERSION
+    ).all()
+    assert (rows["control_interval_seconds"] == CONTROL_INTERVAL).all()
+    assert rows["sensor_packet_identity"].str.len().eq(64).all()
+    assert rows["sensor_policy_identity"].str.len().eq(64).all()
+    assert rows["audit_policy_identity"].str.len().eq(64).all()
+    assert rows["audit_policy"].map(json.loads).map(bool).all()
+    sensor_provenance = rows["sensor_provenance"].map(json.loads)
+    assert sensor_provenance.map(bool).all()
+    for record in sensor_provenance.iloc[0].values():
+        assert isinstance(record["category"], str)
+        assert record["missing"]
+        assert all(isinstance(value, bool) for value in record["missing"])
+        assert "values" not in record
+    assert rows["audit_provenance"].map(json.loads).map(type).eq(list).all()
+    assert rows["public_event_provenance"].map(json.loads).map(type).eq(list).all()
+    assert rows["stranding_provenance"].map(json.loads).map(type).eq(list).all()
     assert (rows["policy_version"] == 3).all()
     assert (rows["information_profile"] == "principal").all()
     assert rows["resolved_config_checksum"].str.len().eq(64).all()
@@ -140,7 +159,7 @@ def test_the_matrix_expands_to_one_entry_for_each_run():
     assert len(identities) == len(entries)
 
 
-def test_the_version_five_manifest_requires_a_stranding_horizon():
+def test_the_current_manifest_requires_a_stranding_horizon():
     manifest = deepcopy(yaml.safe_load(MANIFEST.read_text()))
     manifest.pop("stranding_horizon_intervals")
     manifest["harm_horizon_intervals"] = HORIZON
@@ -180,6 +199,9 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     assert summary["feature_version"] == FEATURE_VERSION
     assert summary["information_profile"] == "principal"
     assert summary["dataset_version"] == DATASET_VERSION
+    assert summary["observation_version"] == OBSERVATION_SCHEMA_VERSION
+    assert summary["audit_version"] == AUDIT_SCHEMA_VERSION
+    assert summary["route_sensor_version"] == ROUTE_SENSOR_SCHEMA_VERSION
     assert summary["policy_version"] == 3
     assert summary["checksums"]["dataset_sha256"]
     assert len(summary["code_revision"]) == 40

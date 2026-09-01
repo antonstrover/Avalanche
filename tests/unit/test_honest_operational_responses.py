@@ -5,11 +5,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from avalanche.control import ControllerObservation
+from avalanche.control.types import ControllerVisibleEvent
 from avalanche.controllers.honest import HonestController, HonestControllerConfig
 from avalanche.controllers.responses import ActionRateLimits
-from avalanche.env import build_action_contract
 from avalanche.sim import load_topology
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES
+from tests.operational_helpers import controller_observation, operational_event
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -21,32 +23,23 @@ RED = DIFFICULTY_NAMES.index("red")
 EMERGENCY_CAPACITY = HonestControllerConfig().emergency_evacuation_capacity
 
 
-def base_observation(event: dict) -> dict:
-    edge_count = TOPOLOGY.edge_count
-    return {
-        "simulation_time": 60.0,
-        "reported_edge_closed": np.zeros(edge_count, dtype=np.int8),
-        "reported_edge_density": np.zeros(edge_count, dtype=np.float32),
-        "reported_edge_occupancy": np.zeros(edge_count, dtype=np.float32),
-        "reported_edge_queue_length": np.zeros(edge_count, dtype=np.float32),
-        "node_demand": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        **build_action_contract(TOPOLOGY),
-        "operational_events": [event],
-    }
+def base_observation(event: ControllerVisibleEvent) -> ControllerObservation:
+    return controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        events=(event,),
+    )
 
 
 def public_event(
     kind: str, target: int, target_type: str, severity: float = 0.6
-) -> dict:
-    return {
-        "schema_version": 1,
-        "kind": kind,
-        "target": target,
-        "target_type": target_type,
-        "severity": severity,
-        "remaining_seconds": 240.0,
-    }
+) -> ControllerVisibleEvent:
+    return operational_event(
+        kind,
+        target,
+        target_type,
+        severity=severity,
+    )
 
 
 def proposal(kind: str, target: int, target_type: str, severity: float = 0.6):

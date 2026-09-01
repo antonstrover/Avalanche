@@ -6,6 +6,8 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from avalanche.config import ResolvedConfig
+from avalanche.control import OBSERVATION_SCHEMA_VERSION
+from avalanche.control.types import OPERATIONAL_SENSOR_SPECS
 from avalanche.env import build_resolved_environment
 from avalanche.experiments import run_episode
 from avalanche.experiments.final_evaluation import attack_detection_metrics
@@ -192,14 +194,31 @@ def test_decision_events_keep_each_control_interval(tmp_path):
     assert len(evaluator) == len(proposals)
     proposal_payload = dict(proposals[0]["payload"])
     proposal_payload.pop("decision_id")
-    assert evaluator[0]["payload"]["proposal"] == proposal_payload
-    assert "true_edge_density" in evaluator[0]["payload"]
-    assert evaluator[0]["payload"]["observation_schema_version"] == 2
-    assert evaluator[0]["payload"]["information_profile"] == "evaluator"
-    assert "true_harm_count" not in evaluator[0]["payload"]
-    assert "unique_stranded_skiers" in evaluator[0]["payload"]
-    assert "cumulative_stranded_seconds" in evaluator[0]["payload"]
-    evidence = evaluator[0]["payload"]["proposal"]["evidence"]
+    payload = evaluator[0]["payload"]
+    assert payload["proposal"] == proposal_payload
+    assert payload["schema_version"] == OBSERVATION_SCHEMA_VERSION
+    assert payload["information_profile"] == "evaluator_truth"
+    truth = payload["evaluator_truth"]
+    assert "true_edge_density" in truth
+    assert "true_harm_count" not in truth
+    assert "unique_stranded_skiers" in truth
+    assert "cumulative_stranded_seconds" in truth
+    operational = payload["operational_evidence"]
+    assert operational["schema_version"] == OBSERVATION_SCHEMA_VERSION
+    packet = operational["packet"]
+    assert len(packet["packet_identity"]) == 64
+    assert len(packet["policy_identity"]) == 64
+    sensors = {sensor["name"]: sensor for sensor in packet["sensors"]}
+    assert set(sensors) == set(OPERATIONAL_SENSOR_SPECS)
+    for name, spec in OPERATIONAL_SENSOR_SPECS.items():
+        sensor = sensors[name]
+        assert sensor["provenance_id"] == spec.provenance_id
+        assert sensor["noise_policy_id"] == spec.noise_policy_id
+        assert sensor["delay_intervals"] == spec.delay_intervals
+        assert "sample_time" in sensor
+        assert "report_time" in sensor
+        assert "missing" in sensor
+    evidence = payload["proposal"]["evidence"]
     assert evidence["policy_version"] == 3
     assert evidence["responses"]
     for index in range(2):
@@ -251,7 +270,7 @@ def test_a_sleeper_trace_aligns_attack_labels_and_decisions(tmp_path):
     assert result["attack_detection_delay_intervals"] == 0
     assert (
         result["cumulative_stranded_seconds_before_detection_or_censoring"]
-        == evaluators[1]["payload"]["cumulative_stranded_seconds"]
+        == evaluators[1]["payload"]["evaluator_truth"]["cumulative_stranded_seconds"]
     )
     assert {
         event["payload"]["decision_id"]

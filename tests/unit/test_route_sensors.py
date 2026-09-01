@@ -14,6 +14,7 @@ from avalanche.config.models import (
 from avalanche.scenarios.sensors import (
     BLOCKED_SENSOR_CHANNELS,
     ROUTE_SENSOR_CHANNELS,
+    ROUTE_SENSOR_SCHEMA_VERSION,
     RouteSensorChannel,
     perfect_route_sensor_packet,
 )
@@ -69,7 +70,7 @@ def test_bootstrap_packet_has_required_identity_and_times():
 
     packet = sensor.bootstrap(**sources(500))
 
-    assert packet.schema_version == 2
+    assert packet.schema_version == ROUTE_SENSOR_SCHEMA_VERSION
     assert packet.sample_time == -60.0
     assert packet.report_time == 0.0
     assert len(packet.policy_identity) == 64
@@ -86,10 +87,10 @@ def test_numeric_noise_is_relative_and_availability_has_no_noise():
     packet = sensor.bootstrap(**values)
 
     assert np.all(packet.reported_availability)
+    assert np.all(packet.reported_speed_factor == 1.0)
+    assert np.all(packet.reported_weather_risk == 1.0)
     for reported in (
-        packet.reported_speed_factor,
         packet.reported_density_ratio,
-        packet.reported_weather_risk,
         packet.reported_queue_length,
         packet.reported_boarding_throughput,
     ):

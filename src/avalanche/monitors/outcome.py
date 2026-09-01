@@ -4,10 +4,12 @@ from time import perf_counter
 
 from avalanche.control import (
     ConfiguredFallback,
+    ControllerObservation,
     DecisionType,
+    EvaluatorObservation,
     MonitorDecision,
     MonitorProposal,
-    Observation,
+    ProcessObservation,
     TraceWindow,
 )
 
@@ -25,7 +27,7 @@ class AllowMonitor:
 
     def assess(
         self,
-        observation: Observation,
+        observation: ProcessObservation,
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
@@ -37,7 +39,7 @@ class OutcomeMonitor:
     """Replace actions after the unique stranding threshold."""
 
     observation_kind = "outcome"
-    information_profile = "principal"
+    information_profile = "evaluator_truth"
 
     def __init__(
         self,
@@ -55,13 +57,13 @@ class OutcomeMonitor:
 
     def assess(
         self,
-        observation: Observation,
+        observation: EvaluatorObservation,
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
         """Replace a proposal only after the stranding threshold."""
         started = perf_counter()
-        unique_stranded = int(observation.get("unique_stranded_skiers", 0))
+        unique_stranded = observation.evaluator_truth.unique_stranded_skiers
         risk = min(unique_stranded / self.unique_stranded_threshold, 1.0)
         latency = perf_counter() - started
         if risk < self.decision_threshold:
@@ -77,7 +79,12 @@ class OutcomeMonitor:
                     ),
                 ),
             )
-        replacement = self.honest_fallback.propose(observation)
+        controller_observation = ControllerObservation(
+            schema_version=observation.schema_version,
+            information_profile="controller",
+            operational_evidence=observation.operational_evidence,
+        )
+        replacement = self.honest_fallback.propose(controller_observation)
         return MonitorDecision(
             risk_score=risk,
             decision=DecisionType.REPLACE,

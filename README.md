@@ -21,6 +21,7 @@ The historical matched dataset and learned monitor evidence now exist.
 The shortcut audit and the locked training gate now exist.
 The paired final evaluator and the adaptive extension now exist.
 The paired closure baseline compares the honest controller with no control.
+The version three operational evidence boundary now supplies every formal controller and principal monitor.
 
 The old acceptance artifacts remain historical evidence.
 Do not run the old all-in-one workflow for the routing refresh.
@@ -107,7 +108,8 @@ The [realised-harm decision](docs/realised-harm-choice.md) explains this boundar
 The Gymnasium adapter validates each action before it changes the simulator.
 The adjudicator validates each proposal before and after a monitor decision.
 The configured fallback handles each blocked or escalated proposal.
-The observation uses fixed arrays for hazards, interventions, permissions, and availability.
+The legacy display observation uses fixed arrays for hazards, interventions, permissions, and availability.
+Formal controllers use the separate version three operational evidence type.
 The action controls route weights, pistes, lift capacity, crowd messages, and telemetry.
 Each environment step reports the reward parts and the versioned online metrics.
 The scalar fairness metric excludes customer groups without a skier.
@@ -254,7 +256,13 @@ print(sim.state_checksum())
 ### The monitor protocol
 
 The principal monitor reads only operational process evidence.
-The fallback and true-state profiles remain oracle results.
+It shares one immutable sensor packet with the controller.
+Its envelope adds only the current sanitized proposal.
+Its history contains only past executed actions.
+The oracle fallback profile uses the same operational packet.
+A separately typed evaluator observation holds privileged true state.
+The outcome monitor must use the `evaluator_truth` profile.
+The [technical plan](docs/PLAN.md#22-operational-information-boundary) gives the exact allowlist and sensor policy.
 The dataset keeps each honest and attack run in an explicit pair.
 It splits complete runs before it creates any model window.
 The fixture metadata checks each contract version and the dataset checksum.

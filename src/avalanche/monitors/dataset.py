@@ -30,17 +30,25 @@ from avalanche.config import (
     load_yaml,
     run_id,
 )
-from avalanche.config.models import ControllerConfig
+from avalanche.config.models import AuditConfig, ControllerConfig, SensorPolicyConfig
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import (
+    OBSERVATION_SCHEMA_VERSION,
     EngineeringErrorCode,
+    EvaluatorObservation,
     InformationProfile,
     Monitor,
     MonitorDecision,
     MonitorProposal,
-    Observation,
+    ProcessObservation,
     ProposalEngineeringError,
     TraceWindow,
+    thaw_evidence,
+)
+from avalanche.control.types import (
+    OPERATIONAL_SENSOR_SPECS,
+    VISIBLE_FAILURE_CAPACITY,
+    public_policy_identity,
 )
 from avalanche.controllers.attacks import is_active
 from avalanche.controllers.factory import (
@@ -58,12 +66,13 @@ from avalanche.monitors.features import (
 from avalanche.monitors.outcome import AllowMonitor
 from avalanche.monitors.rules import RuleMonitor
 from avalanche.observability import MetricEmitter, MetricEvent
+from avalanche.scenarios import AUDIT_SCHEMA_VERSION, ROUTE_SENSOR_SCHEMA_VERSION
 from avalanche.traces import BufferedParquetWriter, ParquetWriteProgress
 
 ATTACK_LABEL = "attack_active"
 STRANDING_LABEL = "stranding_in_horizon"
 STRANDING_MASK = "stranding_label_known"
-DATASET_VERSION = 5
+DATASET_VERSION = 6
 LEGACY_DATASET_FIXTURE_VERSION = 4
 LEGACY_DATASET_FEATURE_VERSION = 2
 OBSOLETE_FORMAL_DATASET_FIELDS = frozenset(
@@ -80,6 +89,79 @@ DATASET_CHECKSUM_NAMES = (
     "manifest_sha256",
     "summary_sha256",
 )
+SENSOR_PROVENANCE_FIELDS = frozenset(
+    {
+        "category",
+        "missing",
+        "provenance_id",
+        "noise_policy_id",
+        "sample_time",
+        "report_time",
+        "delay_intervals",
+    }
+)
+AUDIT_PROVENANCE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "target_edge",
+        "sample_interval",
+        "delivery_interval",
+        "sample_time",
+        "report_time",
+        "missing",
+        "provenance_id",
+        "noise_policy_id",
+        "delay_intervals",
+    }
+)
+EVENT_PROVENANCE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "target",
+        "target_type",
+        "sample_time",
+        "report_time",
+        "provenance_id",
+    }
+)
+STRANDING_PROVENANCE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "location_kind",
+        "topology_id",
+        "missing",
+        "sample_time",
+        "report_time",
+        "provenance_id",
+        "noise_policy_id",
+        "delay_intervals",
+    }
+)
+PUBLIC_EVENT_KINDS = frozenset(
+    {
+        "capacity_restriction",
+        "evacuation_drill",
+        "route_obstruction",
+        "difficult_piste_training",
+        "crowd_surge",
+        "telemetry_repair",
+        "weather_safety",
+    }
+)
+PUBLIC_EVENT_TARGET_TYPES = {
+    "capacity_restriction": "lift",
+    "evacuation_drill": "lift",
+    "route_obstruction": "piste",
+    "difficult_piste_training": "piste",
+    "crowd_surge": "node",
+    "telemetry_repair": "edge",
+    "weather_safety": "piste",
+}
+PUBLIC_EVENT_PROVENANCE_ID = "controller_visible_operational_event"
+STRANDING_PROVENANCE_ID = "operational_stranding_sensor"
+STRANDING_NOISE_POLICY_ID = "relative_uniform_0.05_rint"
+STRANDING_DELAY_INTERVALS = 2
 KEY_COLUMNS = (
     "run_id",
     "scenario_family",
@@ -162,7 +244,7 @@ class RecordingMonitor:
 
     def assess(
         self,
-        observation: Observation,
+        observation: ProcessObservation | EvaluatorObservation,
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
@@ -179,6 +261,82 @@ class RecordingMonitor:
             values = self.extractor.vector(observation, proposal, history)
         row: dict[str, Any] = dict(
             zip(self.extractor.feature_names, values.tolist(), strict=True)
+        )
+        evidence = observation.operational_evidence
+        row.update(
+            {
+                "operational_evidence_schema_version": evidence.schema_version,
+                "control_interval_seconds": (evidence.packet.control_interval_seconds),
+                "sensor_packet_identity": evidence.packet_identity,
+                "sensor_policy_identity": evidence.packet.policy_identity,
+                "audit_policy_identity": evidence.static.audit_policy_identity,
+                "audit_policy": _canonical_json(
+                    thaw_evidence(evidence.static.audit_policy)
+                ),
+                "sensor_provenance": json.dumps(
+                    {
+                        sensor.name: {
+                            "category": sensor.category.value,
+                            "missing": sensor.missing.tolist(),
+                            "provenance_id": sensor.provenance_id,
+                            "noise_policy_id": sensor.noise_policy_id,
+                            "sample_time": sensor.sample_time,
+                            "report_time": sensor.report_time,
+                            "delay_intervals": sensor.delay_intervals,
+                        }
+                        for sensor in evidence.packet.sensors
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "audit_provenance": _canonical_json(
+                    [
+                        {
+                            "schema_version": audit.schema_version,
+                            "target_edge": audit.target_edge,
+                            "sample_interval": audit.sample_interval,
+                            "delivery_interval": audit.delivery_interval,
+                            "sample_time": audit.sample_time,
+                            "report_time": audit.report_time,
+                            "missing": audit.missing,
+                            "provenance_id": audit.provenance_id,
+                            "noise_policy_id": audit.noise_policy_id,
+                            "delay_intervals": audit.delay_intervals,
+                        }
+                        for audit in evidence.audits
+                    ]
+                ),
+                "public_event_provenance": _canonical_json(
+                    [
+                        {
+                            "schema_version": event.schema_version,
+                            "kind": event.kind,
+                            "target": event.target,
+                            "target_type": event.target_type,
+                            "sample_time": event.sample_time,
+                            "report_time": event.report_time,
+                            "provenance_id": event.provenance_id,
+                        }
+                        for event in evidence.events
+                    ]
+                ),
+                "stranding_provenance": _canonical_json(
+                    [
+                        {
+                            "schema_version": report.schema_version,
+                            "location_kind": report.location_kind,
+                            "topology_id": report.topology_id,
+                            "missing": report.missing,
+                            "sample_time": report.sample_time,
+                            "report_time": report.report_time,
+                            "provenance_id": report.provenance_id,
+                            "noise_policy_id": report.noise_policy_id,
+                            "delay_intervals": report.delay_intervals,
+                        }
+                        for report in evidence.reported_stranding
+                    ]
+                ),
+            }
         )
         self.rows.append(row)
         if self.emitter is not None and (
@@ -264,6 +422,17 @@ def require_current_formal_dataset_rows(
         STRANDING_MASK,
         "dataset_version",
         "feature_version",
+        "operational_evidence_schema_version",
+        "control_interval_seconds",
+        "simulation_time",
+        "sensor_packet_identity",
+        "sensor_policy_identity",
+        "audit_policy_identity",
+        "audit_policy",
+        "sensor_provenance",
+        "audit_provenance",
+        "public_event_provenance",
+        "stranding_provenance",
     }
     if not required <= set(frame):
         raise ValueError(f"the {name} rows miss current dataset fields")
@@ -273,6 +442,356 @@ def require_current_formal_dataset_rows(
         raise ValueError(f"the {name} rows have an invalid dataset version")
     if set(frame["feature_version"]) != {FEATURE_VERSION}:
         raise ValueError(f"the {name} rows have an invalid feature version")
+    if set(frame["operational_evidence_schema_version"]) != {
+        OBSERVATION_SCHEMA_VERSION
+    }:
+        raise ValueError(
+            f"the {name} rows have an invalid operational evidence version"
+        )
+    _require_operational_provenance(frame, name)
+
+
+def _require_operational_provenance(frame: pd.DataFrame, name: str) -> None:
+    """Reject invalid operational provenance."""
+    for column in (
+        "sensor_packet_identity",
+        "sensor_policy_identity",
+        "audit_policy_identity",
+    ):
+        if not frame[column].map(_is_sha256).all():
+            raise ValueError(f"the {name} rows have an invalid {column}")
+    expected_sensor_policy = public_policy_identity(
+        SensorPolicyConfig().model_dump(mode="json")
+    )
+    if set(frame["sensor_policy_identity"]) != {expected_sensor_policy}:
+        raise ValueError(f"the {name} rows have an invalid sensor policy identity")
+    rows = zip(
+        frame["sensor_provenance"],
+        frame["control_interval_seconds"],
+        frame["simulation_time"],
+        strict=True,
+    )
+    for serialized, interval, simulation_time in rows:
+        if not _valid_row_time(interval, simulation_time):
+            raise ValueError(f"the {name} rows have invalid sensor timestamps")
+        provenance = _load_canonical_json(serialized, name, "sensor provenance")
+        if not isinstance(provenance, dict) or set(provenance) != set(
+            OPERATIONAL_SENSOR_SPECS
+        ):
+            raise ValueError(f"the {name} rows have invalid sensor provenance")
+        timestamps: set[tuple[float, float]] = set()
+        mask_lengths = {
+            "weather": 4,
+            "failure": VISIBLE_FAILURE_CAPACITY,
+        }
+        for sensor_name, spec in OPERATIONAL_SENSOR_SPECS.items():
+            record = provenance[sensor_name]
+            if not isinstance(record, dict) or set(record) != SENSOR_PROVENANCE_FIELDS:
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            if record["category"] != spec.category.value:
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            missing = record["missing"]
+            if (
+                not isinstance(missing, list)
+                or not missing
+                or any(type(value) is not bool for value in missing)
+            ):
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            expected_length = mask_lengths.setdefault(spec.shape_kind, len(missing))
+            if len(missing) != expected_length:
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            if record["provenance_id"] != spec.provenance_id:
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            if record["noise_policy_id"] != spec.noise_policy_id:
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            if (
+                not _is_nonnegative_integer(record["delay_intervals"])
+                or record["delay_intervals"] != spec.delay_intervals
+            ):
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            if not _valid_timestamp_pair(record):
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            if not _valid_interval_delay(record, interval, spec.delay_intervals):
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            if record["report_time"] > simulation_time:
+                raise ValueError(f"the {name} rows have invalid sensor provenance")
+            timestamps.add((record["sample_time"], record["report_time"]))
+        if len(timestamps) != 1:
+            raise ValueError(f"the {name} rows have invalid sensor provenance")
+    _require_audit_provenance(frame, name)
+    _require_event_provenance(frame, name)
+    _require_stranding_provenance(frame, name)
+
+
+def _require_audit_provenance(frame: pd.DataFrame, name: str) -> None:
+    """Reject audit records that disagree with their public policy."""
+    columns = zip(
+        frame["audit_policy_identity"],
+        frame["audit_policy"],
+        frame["audit_provenance"],
+        frame["control_interval_seconds"],
+        frame["simulation_time"],
+        strict=True,
+    )
+    for (
+        identity,
+        serialized_policy,
+        serialized_records,
+        interval,
+        simulation_time,
+    ) in columns:
+        policy = _load_canonical_json(serialized_policy, name, "audit policy")
+        if not isinstance(policy, dict) or set(policy) != set(AuditConfig.model_fields):
+            raise ValueError(f"the {name} rows have an invalid audit policy")
+        try:
+            config = AuditConfig.model_validate(policy, strict=True)
+        except ValueError as error:
+            raise ValueError(f"the {name} rows have an invalid audit policy") from error
+        if config.model_dump(mode="json") != policy:
+            raise ValueError(f"the {name} rows have an invalid audit policy")
+        if identity != public_policy_identity(policy):
+            raise ValueError(f"the {name} rows have an invalid audit policy identity")
+        records = _load_canonical_json(
+            serialized_records,
+            name,
+            "audit provenance",
+        )
+        if not isinstance(records, list):
+            raise ValueError(f"the {name} rows have invalid audit provenance")
+        for record in records:
+            if not _valid_audit_record(record, config, interval, simulation_time):
+                raise ValueError(f"the {name} rows have invalid audit provenance")
+
+
+def _valid_audit_record(
+    record: Any,
+    config: AuditConfig,
+    control_interval_seconds: Any,
+    simulation_time: Any,
+) -> bool:
+    """Return whether one audit provenance record matches its policy."""
+    if not isinstance(record, dict) or set(record) != AUDIT_PROVENANCE_FIELDS:
+        return False
+    integer_fields = (
+        record["target_edge"],
+        record["sample_interval"],
+        record["delivery_interval"],
+        record["delay_intervals"],
+    )
+    if any(not _is_nonnegative_integer(value) for value in integer_fields):
+        return False
+    if (
+        not _is_nonnegative_integer(record["schema_version"])
+        or record["schema_version"] != AUDIT_SCHEMA_VERSION
+    ):
+        return False
+    if not isinstance(record["missing"], bool):
+        return False
+    if not _valid_timestamp_pair(record):
+        return False
+    delay = record["delay_intervals"]
+    if record["delivery_interval"] - record["sample_interval"] != delay:
+        return False
+    if not np.isclose(
+        record["sample_time"],
+        record["sample_interval"] * control_interval_seconds,
+        rtol=0.0,
+        atol=1e-9,
+    ):
+        return False
+    if not np.isclose(
+        record["report_time"],
+        record["delivery_interval"] * control_interval_seconds,
+        rtol=0.0,
+        atol=1e-9,
+    ):
+        return False
+    if record["report_time"] > simulation_time:
+        return False
+    return (
+        delay == config.delivery_intervals
+        and record["provenance_id"] == config.provenance_identifier
+        and record["noise_policy_id"] == config.noise_policy_identifier
+    )
+
+
+def _require_event_provenance(frame: pd.DataFrame, name: str) -> None:
+    """Reject invalid public event provenance."""
+    rows = zip(
+        frame["public_event_provenance"],
+        frame["simulation_time"],
+        strict=True,
+    )
+    for serialized, simulation_time in rows:
+        records = _load_canonical_json(serialized, name, "public event provenance")
+        if not isinstance(records, list):
+            raise ValueError(f"the {name} rows have invalid public event provenance")
+        for record in records:
+            if not _valid_event_record(record, simulation_time):
+                raise ValueError(
+                    f"the {name} rows have invalid public event provenance"
+                )
+
+
+def _valid_event_record(record: Any, simulation_time: Any) -> bool:
+    """Return whether one public event provenance record is valid."""
+    if not isinstance(record, dict) or set(record) != EVENT_PROVENANCE_FIELDS:
+        return False
+    if not _is_nonnegative_integer(record["schema_version"]):
+        return False
+    if record["schema_version"] != 1:
+        return False
+    if record["kind"] not in PUBLIC_EVENT_KINDS:
+        return False
+    if record["target_type"] != PUBLIC_EVENT_TARGET_TYPES[record["kind"]]:
+        return False
+    if not _is_nonnegative_integer(record["target"]):
+        return False
+    if record["provenance_id"] != PUBLIC_EVENT_PROVENANCE_ID:
+        return False
+    return _valid_timestamp_pair(record, simultaneous=True) and (
+        0.0 <= record["report_time"] <= simulation_time
+    )
+
+
+def _require_stranding_provenance(frame: pd.DataFrame, name: str) -> None:
+    """Reject invalid delayed stranding provenance."""
+    rows = zip(
+        frame["stranding_provenance"],
+        frame["control_interval_seconds"],
+        frame["simulation_time"],
+        strict=True,
+    )
+    for serialized, interval, simulation_time in rows:
+        records = _load_canonical_json(serialized, name, "stranding provenance")
+        if not isinstance(records, list):
+            raise ValueError(f"the {name} rows have invalid stranding provenance")
+        for record in records:
+            if not _valid_stranding_record(record, interval, simulation_time):
+                raise ValueError(f"the {name} rows have invalid stranding provenance")
+
+
+def _valid_stranding_record(
+    record: Any,
+    control_interval_seconds: Any,
+    simulation_time: Any,
+) -> bool:
+    """Return whether one stranding provenance record is valid."""
+    if not isinstance(record, dict) or set(record) != STRANDING_PROVENANCE_FIELDS:
+        return False
+    if not _is_nonnegative_integer(record["schema_version"]):
+        return False
+    if record["schema_version"] != 1:
+        return False
+    if record["location_kind"] not in {"node", "piste", "lift", "queue"}:
+        return False
+    if not isinstance(record["topology_id"], str) or not record["topology_id"]:
+        return False
+    if not isinstance(record["missing"], bool):
+        return False
+    if record["provenance_id"] != STRANDING_PROVENANCE_ID:
+        return False
+    if record["noise_policy_id"] != STRANDING_NOISE_POLICY_ID:
+        return False
+    if not _is_nonnegative_integer(record["delay_intervals"]):
+        return False
+    if record["delay_intervals"] != STRANDING_DELAY_INTERVALS:
+        return False
+    return (
+        _valid_timestamp_pair(record)
+        and _valid_interval_delay(
+            record,
+            control_interval_seconds,
+            STRANDING_DELAY_INTERVALS,
+        )
+        and 0.0 <= record["sample_time"]
+        and record["report_time"] <= simulation_time
+    )
+
+
+def _load_canonical_json(serialized: Any, name: str, label: str) -> Any:
+    """Load one strict canonical JSON value."""
+    if not isinstance(serialized, str):
+        raise ValueError(f"the {name} rows have invalid {label}")
+    try:
+        value = json.loads(serialized)
+        canonical = _canonical_json(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"the {name} rows have invalid {label}") from error
+    if canonical != serialized:
+        raise ValueError(f"the {name} rows have unstable {label}")
+    return value
+
+
+def _canonical_json(value: Any) -> str:
+    """Return one canonical JSON encoding."""
+    return json.dumps(
+        value,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _valid_timestamp_pair(
+    record: Mapping[str, Any],
+    *,
+    simultaneous: bool = False,
+) -> bool:
+    """Return whether one timestamp pair is finite and ordered."""
+    sample = record["sample_time"]
+    report = record["report_time"]
+    if not _is_finite_number(sample) or not _is_finite_number(report):
+        return False
+    if simultaneous:
+        return report == sample
+    return report >= sample
+
+
+def _valid_row_time(control_interval_seconds: Any, simulation_time: Any) -> bool:
+    """Return whether one row has valid operational times."""
+    return (
+        _is_finite_number(control_interval_seconds)
+        and control_interval_seconds > 0.0
+        and _is_finite_number(simulation_time)
+        and simulation_time >= 0.0
+    )
+
+
+def _valid_interval_delay(
+    record: Mapping[str, Any],
+    control_interval_seconds: Any,
+    delay_intervals: int,
+) -> bool:
+    """Return whether one report uses its declared interval delay."""
+    if not _is_finite_number(control_interval_seconds):
+        return False
+    expected = control_interval_seconds * delay_intervals
+    actual = record["report_time"] - record["sample_time"]
+    return bool(np.isclose(actual, expected, rtol=0.0, atol=1e-9))
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Return whether one value is a finite non-Boolean number."""
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, int | float | np.integer | np.floating)
+        and bool(np.isfinite(value))
+    )
+
+
+def _is_nonnegative_integer(value: Any) -> bool:
+    """Return whether one value is a nonnegative integer."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_sha256(value: Any) -> bool:
+    """Return whether one value is a lowercase SHA-256 digest."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def select_labelled_rows(
@@ -363,7 +882,11 @@ def _run_resolved_entry(
     controller = build_controller(resolved.controller, env.topology)
     rows: list[dict[str, Any]] = []
     extractor = FeatureExtractor(
-        build_fallback("honest", reference_controller(resolved), env.topology),
+        (
+            build_fallback("honest", reference_controller(resolved), env.topology)
+            if profile is InformationProfile.ORACLE_FALLBACK
+            else None
+        ),
         RuleMonitor(
             env.topology,
             evacuation_edges=resolved.controller.evacuation_edges,
@@ -395,7 +918,9 @@ def _run_resolved_entry(
             proposal = controller.propose(env.controller_observation())
             evaluator = env.evaluator_observation(proposal)
             simulation_times.append(float(proposal.simulation_time))
-            evaluator_unique_stranded.append(float(evaluator["unique_stranded_skiers"]))
+            evaluator_unique_stranded.append(
+                float(evaluator.evaluator_truth.unique_stranded_skiers)
+            )
             attack_active.append(
                 int(
                     resolved.controller.attack is not None
@@ -1364,9 +1889,10 @@ def _write_manifest_summary(
         "feature_names": list(feature_names_for(information_profile)),
         "feature_version": FEATURE_VERSION,
         "policy_version": HONEST_POLICY_VERSION,
-        "observation_version": 1,
+        "observation_version": OBSERVATION_SCHEMA_VERSION,
         "proposal_version": 1,
-        "audit_version": 1,
+        "audit_version": AUDIT_SCHEMA_VERSION,
+        "route_sensor_version": ROUTE_SENSOR_SCHEMA_VERSION,
         "information_profile": information_profile.value,
         "row_count": int(len(frame)),
         "run_count": len(entries),
@@ -1436,6 +1962,9 @@ def load_dataset_fixture(
         "feature_version": FEATURE_VERSION,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
+        "observation_version": OBSERVATION_SCHEMA_VERSION,
+        "audit_version": AUDIT_SCHEMA_VERSION,
+        "route_sensor_version": ROUTE_SENSOR_SCHEMA_VERSION,
     }
     if any(metadata.get(name) != value for name, value in expected.items()):
         raise ValueError(recovery)
@@ -1444,12 +1973,11 @@ def load_dataset_fixture(
     frame = pd.read_parquet(dataset_path)
     if int(metadata.get("row_count", -1)) != len(frame):
         raise ValueError(recovery)
-    required = {STRANDING_LABEL, STRANDING_MASK, "dataset_version", "feature_version"}
-    if not required <= set(frame) or OBSOLETE_FORMAL_DATASET_FIELDS & set(frame):
-        raise ValueError(recovery)
-    if set(frame["dataset_version"]) != {DATASET_VERSION}:
-        raise ValueError(recovery)
-    if set(frame["feature_version"]) != {FEATURE_VERSION}:
+    try:
+        require_current_formal_dataset_rows(frame, name="fixture")
+    except ValueError as error:
+        raise ValueError(recovery) from error
+    if OBSOLETE_FORMAL_DATASET_FIELDS & set(frame):
         raise ValueError(recovery)
     return frame
 
@@ -1469,7 +1997,6 @@ def load_nonformal_legacy_dataset_v4_fixture(
         "dataset_version": LEGACY_DATASET_FIXTURE_VERSION,
         "feature_version": LEGACY_DATASET_FEATURE_VERSION,
         "honest_policy_version": HONEST_POLICY_VERSION,
-        "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
     }
     if any(metadata.get(name) != value for name, value in expected.items()):
         raise ValueError(recovery)
@@ -1477,6 +2004,15 @@ def load_nonformal_legacy_dataset_v4_fixture(
         raise ValueError(recovery)
     frame = pd.read_parquet(dataset_path)
     if int(metadata.get("row_count", -1)) != len(frame):
+        raise ValueError(recovery)
+    feature_names = metadata.get("feature_names")
+    if (
+        not isinstance(feature_names, list)
+        or not feature_names
+        or not all(isinstance(name, str) and name for name in feature_names)
+        or len(set(feature_names)) != len(feature_names)
+        or not set(feature_names) <= set(frame)
+    ):
         raise ValueError(recovery)
     return frame
 
@@ -1499,6 +2035,9 @@ def validate_generated_dataset(
         "information_profile": profile.value,
         "feature_names": expected_features,
         "code_revision": _code_revision(),
+        "observation_version": OBSERVATION_SCHEMA_VERSION,
+        "audit_version": AUDIT_SCHEMA_VERSION,
+        "route_sensor_version": ROUTE_SENSOR_SCHEMA_VERSION,
     }
     for name, value in expected.items():
         if summary.get(name) != value or manifest.get(name) != value:
@@ -1507,10 +2046,7 @@ def validate_generated_dataset(
         raise ValueError("the generated dataset has an invalid row count")
     if frame.empty:
         raise ValueError("the generated dataset must contain rows")
-    if set(frame["dataset_version"]) != {DATASET_VERSION}:
-        raise ValueError("the generated rows have an invalid dataset version")
-    if set(frame["feature_version"]) != {FEATURE_VERSION}:
-        raise ValueError("the generated rows have an invalid feature version")
+    require_current_formal_dataset_rows(frame, name="generated")
     if set(frame["information_profile"]) != {profile.value}:
         raise ValueError("the generated rows have an invalid information profile")
     required_labels = {ATTACK_LABEL, STRANDING_LABEL, STRANDING_MASK}
@@ -1588,6 +2124,9 @@ def _write_fixture_metadata(
         "feature_version": FEATURE_VERSION,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(information_profile)),
+        "observation_version": OBSERVATION_SCHEMA_VERSION,
+        "audit_version": AUDIT_SCHEMA_VERSION,
+        "route_sensor_version": ROUTE_SENSOR_SCHEMA_VERSION,
         "code_revision": _code_revision(),
         "generation_configuration": str(relative_source),
         "seeds": sorted({entry.seed for entry in entries}),

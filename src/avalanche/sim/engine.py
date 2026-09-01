@@ -44,7 +44,11 @@ from avalanche.scenarios.operational_events import (
     OperationalEventSchedule,
     resolve_operational_event_schedule,
 )
-from avalanche.scenarios.sensors import RouteSensorChannel, RouteSensorPacket
+from avalanche.scenarios.sensors import (
+    FAILURE_SENSOR_CAPACITY,
+    RouteSensorChannel,
+    RouteSensorPacket,
+)
 from avalanche.scenarios.weather import (
     Weather,
     WeatherSchedule,
@@ -96,6 +100,7 @@ STREAM_NAMES = (
     "sensor",
     "route_tie",
     "blocked_sensor",
+    "stranding_sensor",
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
@@ -157,6 +162,7 @@ class MountainSim:
         self.last_movement_transitions = MovementTransitions(
             np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
         )
+        self._stranding_interval_counts: dict[tuple[str, str], int] = {}
 
     def reset(
         self, seed: int, options: dict[str, Any] | None = None
@@ -223,7 +229,11 @@ class MountainSim:
         if not isinstance(audits, AuditConfig):
             audits = AuditConfig.model_validate(audits)
         self.audit_config = audits
-        self.audit_channel = AuditChannel(audits, self.streams["audit"])
+        self.audit_channel = AuditChannel(
+            audits,
+            self.streams["audit"],
+            self.control_interval_seconds,
+        )
         self.delivered_audits = ()
         operational_events = options.get("operational_events", {})
         self.operational_event_schedule = resolve_operational_event_schedule(
@@ -260,6 +270,7 @@ class MountainSim:
         self.last_movement_transitions = MovementTransitions(
             np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
         )
+        self._stranding_interval_counts = {}
         self._update_weather()
         self._update_failures()
         self._update_operational_events()
@@ -288,6 +299,7 @@ class MountainSim:
             self.control_interval_seconds,
             self.streams["sensor"],
             self.streams["blocked_sensor"],
+            self.streams["stranding_sensor"],
         )
         self.route_sensor_packet = self.route_sensor_channel.bootstrap(
             **self._route_sensor_sources()
@@ -406,6 +418,7 @@ class MountainSim:
             ),
         )
         self.last_movement_transitions = transitions
+        self._record_stranding(newly_stranded)
         # 8. Calculate the occupancy, the speeds, and the hazards.
         update_congestion(pop, self.topology, self.state)
         self.hazard_events.extend(
@@ -445,6 +458,7 @@ class MountainSim:
                 self.simulation_time,
                 **self._route_sensor_sources(),
             )
+            self._stranding_interval_counts = {}
         self._update_operational_events()
         return transitions
 
@@ -453,10 +467,14 @@ class MountainSim:
         ratio = simulation_time / self.control_interval_seconds
         return abs(ratio - round(ratio)) <= self.time_epsilon_seconds
 
-    def _route_sensor_sources(self) -> dict[str, np.ndarray]:
+    def _route_sensor_sources(self) -> dict[str, Any]:
         """Return the current reported sources for route sampling."""
         assert self.topology is not None
-        closed = self.state.closed | self.state.weather_closed
+        visible_failure_closed = np.zeros(self.topology.edge_count, dtype=np.bool_)
+        for event in self.active_failures:
+            if event.controller_visible and event.kind != FailureKind.LATE_TELEMETRY:
+                visible_failure_closed[event.target] = True
+        closed = self.state.closed | self.state.weather_closed | visible_failure_closed
         for event in self.active_failures:
             if not event.controller_visible:
                 continue
@@ -479,16 +497,99 @@ class MountainSim:
             self.population.location_index[onboard],
             minlength=self.topology.edge_count,
         ).astype(np.float64)
+        speed = self.state.reported_speed_factor.copy()
+        for event in self.active_failures:
+            if event.controller_visible or event.kind != FailureKind.LIFT_STOPPAGE:
+                continue
+            speed[event.target] = np.clip(
+                self.state.congestion_speed_factor[event.target]
+                * self.state.weather_speed_factor[event.target],
+                self.routing_config.minimum_reported_speed_factor,
+                1.0,
+            )
+        pending = self.population.location_kind == LocationKind.PENDING
+        at_node = self.population.location_kind == LocationKind.NODE
+        demand_locations = self.population.location_index[pending | at_node]
+        node_demand = np.bincount(
+            demand_locations,
+            minlength=self.topology.node_count,
+        ).astype("<i8")
+        node_crowding = np.bincount(
+            self.population.location_index[at_node],
+            minlength=self.topology.node_count,
+        ).astype("<i8")
+        lift_code = 1
+        lift_occupancy = np.where(
+            self.topology.edge_type == lift_code,
+            self.state.reported_occupancy,
+            0,
+        ).astype("<i8")
+        failure_kind = np.zeros(FAILURE_SENSOR_CAPACITY, dtype="<i2")
+        failure_target = np.zeros(FAILURE_SENSOR_CAPACITY, dtype="<i4")
+        failure_present = np.zeros(FAILURE_SENSOR_CAPACITY, dtype=np.bool_)
+        visible = tuple(
+            event for event in self.active_failures if event.controller_visible
+        )[:FAILURE_SENSOR_CAPACITY]
+        failure_names = tuple(FailureKind)
+        for index, event in enumerate(visible):
+            failure_kind[index] = failure_names.index(event.kind) + 1
+            failure_target[index] = event.target
+            failure_present[index] = True
         return {
             "availability": ~closed,
-            "speed_factor": self.state.reported_speed_factor,
+            "speed_factor": speed,
             "density_ratio": self.state.reported_density_ratio,
             "weather_risk": self.state.weather_risk,
             "queue_length": self.state.reported_queue_length,
             "boarding_throughput": throughput,
             "queued_no_route_count": queued_no_route_count,
             "onboard_blocked_count": onboard_blocked_count,
+            "node_demand": node_demand,
+            "node_crowding": node_crowding,
+            "edge_occupancy": self.state.reported_occupancy.astype("<i8"),
+            "lift_occupancy": lift_occupancy,
+            "weather": self.weather.as_array().astype("<f8"),
+            "visible_failure_kind": failure_kind,
+            "visible_failure_target": failure_target,
+            "visible_failure_present": failure_present,
+            "stranding_locations": tuple(
+                (kind, topology_id, count)
+                for (kind, topology_id), count in sorted(
+                    self._stranding_interval_counts.items()
+                )
+            ),
         }
+
+    def _record_stranding(self, skier_indices: np.ndarray) -> None:
+        """Group new stranding by its public topology location."""
+        if skier_indices.size == 0:
+            return
+        assert self.topology is not None
+        for skier in skier_indices:
+            location_kind = LocationKind(int(self.population.location_kind[skier]))
+            location_index = int(self.population.location_index[skier])
+            if location_kind == LocationKind.NODE:
+                kind = location_kind.name.lower()
+                topology_id = self.topology.node_ids[location_index]
+            elif location_kind in {
+                LocationKind.PISTE,
+                LocationKind.LIFT,
+                LocationKind.QUEUE,
+            }:
+                kind = location_kind.name.lower()
+                source = self.topology.node_ids[
+                    int(self.topology.edge_source[location_index])
+                ]
+                destination = self.topology.node_ids[
+                    int(self.topology.edge_destination[location_index])
+                ]
+                topology_id = f"{source}->{destination}"
+            else:
+                continue
+            key = (kind, topology_id)
+            self._stranding_interval_counts[key] = (
+                self._stranding_interval_counts.get(key, 0) + 1
+            )
 
     def _update_weather(self) -> None:
         """Apply the current scheduled weather to the simulator state."""
@@ -696,7 +797,13 @@ class MountainSim:
             _digest_array(digest, f"population.{name}", array)
         for name, array in self.state.checksum_fields():
             _digest_array(digest, f"state.{name}", array)
-        for stream_name in ("choice", "sensor", "route_tie", "blocked_sensor"):
+        for stream_name in (
+            "choice",
+            "sensor",
+            "route_tie",
+            "blocked_sensor",
+            "stranding_sensor",
+        ):
             stream = self.streams.get(stream_name)
             if stream is None:
                 continue
@@ -716,6 +823,19 @@ class MountainSim:
         if self.route_sensor_channel is not None:
             for index, packet in enumerate(self.route_sensor_channel.pending):
                 _digest_route_packet(digest, f"route_sensor.pending.{index}", packet)
+            for index, report in enumerate(self.route_sensor_channel.pending_stranding):
+                _digest_stranding_report(
+                    digest,
+                    f"route_sensor.pending_stranding.{index}",
+                    report,
+                )
+        for index, ((kind, topology_id), count) in enumerate(
+            sorted(self._stranding_interval_counts.items())
+        ):
+            prefix = f"stranding_interval.{index}"
+            _digest_bytes(digest, f"{prefix}.kind", kind.encode())
+            _digest_bytes(digest, f"{prefix}.topology_id", topology_id.encode())
+            _digest_array(digest, f"{prefix}.count", np.array(count, "<i8"))
         return digest.hexdigest()
 
 
@@ -743,6 +863,43 @@ def _digest_route_packet(digest: Any, prefix: str, packet: RouteSensorPacket) ->
         "onboard_blocked_count_missing",
     ):
         _digest_array(digest, f"{prefix}.{name}", getattr(packet, name))
+    if packet.operational_packet is not None:
+        operational = packet.operational_packet
+        _digest_bytes(
+            digest,
+            f"{prefix}.operational.packet_identity",
+            operational.packet_identity.encode(),
+        )
+        for sensor in operational.sensors:
+            sensor_prefix = f"{prefix}.operational.{sensor.name}"
+            _digest_array(digest, f"{sensor_prefix}.values", sensor.values)
+            _digest_array(digest, f"{sensor_prefix}.missing", sensor.missing)
+            _digest_array(
+                digest,
+                f"{sensor_prefix}.sample_time",
+                np.array(sensor.sample_time, "<f8"),
+            )
+            _digest_array(
+                digest,
+                f"{sensor_prefix}.report_time",
+                np.array(sensor.report_time, "<f8"),
+            )
+    for index, report in enumerate(packet.reported_stranding):
+        _digest_stranding_report(
+            digest,
+            f"{prefix}.reported_stranding.{index}",
+            report,
+        )
+
+
+def _digest_stranding_report(digest: Any, prefix: str, report: Any) -> None:
+    """Add one complete reported stranding aggregate to a digest."""
+    _digest_bytes(digest, f"{prefix}.location_kind", report.location_kind.encode())
+    _digest_bytes(digest, f"{prefix}.topology_id", report.topology_id.encode())
+    _digest_array(digest, f"{prefix}.count", np.array(report.count, "<i8"))
+    _digest_array(digest, f"{prefix}.missing", np.array(report.missing, "|b1"))
+    _digest_array(digest, f"{prefix}.sample_time", np.array(report.sample_time, "<f8"))
+    _digest_array(digest, f"{prefix}.report_time", np.array(report.report_time, "<f8"))
 
 
 def _digest_array(digest: Any, name: str, values: np.ndarray) -> None:

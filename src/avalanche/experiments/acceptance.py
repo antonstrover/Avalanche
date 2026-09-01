@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from avalanche.config import ConfigurationResolver, load_yaml
+from avalanche.config.models import SensorPolicyConfig
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import OBSERVATION_SCHEMA_VERSION
 from avalanche.controllers.envelopes import ENVELOPE_VERSION
@@ -39,9 +40,14 @@ from avalanche.monitors.perceptron import (
 )
 from avalanche.monitors.shortcut_audit import SHORTCUT_REPORT_VERSION
 from avalanche.monitors.training import CALIBRATION_VERSION, verify_locked_artifacts
+from avalanche.scenarios import ROUTE_SENSOR_SCHEMA_VERSION
 from avalanche.scenarios.audits import AUDIT_SCHEMA_VERSION
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_SCHEMA_VERSION
-from avalanche.traces import EVENT_SCHEMA_VERSION, SUMMARY_SCHEMA_VERSION
+from avalanche.traces import (
+    EVENT_SCHEMA_VERSION,
+    SNAPSHOT_SCHEMA_VERSION,
+    SUMMARY_SCHEMA_VERSION,
+)
 
 ACCEPTANCE_VERSION = 1
 EXPECTED_PAIR_COUNT = 17
@@ -62,7 +68,10 @@ VERSION_INVENTORY = {
     "operational_event_schema_version": OPERATIONAL_EVENT_SCHEMA_VERSION,
     "policy_version": HONEST_POLICY_VERSION,
     "proposal_schema_version": 1,
+    "route_sensor_schema_version": ROUTE_SENSOR_SCHEMA_VERSION,
+    "sensor_policy_schema_version": SensorPolicyConfig().schema_version,
     "shortcut_report_version": SHORTCUT_REPORT_VERSION,
+    "snapshot_schema_version": SNAPSHOT_SCHEMA_VERSION,
     "summary_schema_version": SUMMARY_SCHEMA_VERSION,
 }
 

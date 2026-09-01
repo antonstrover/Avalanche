@@ -11,8 +11,7 @@ import pandas as pd
 import torch
 
 from avalanche.control import InformationProfile
-from avalanche.monitors.features import feature_names_for
-from avalanche.monitors.perceptron import MODEL_VERSION, TrainingConfig, save_model
+from avalanche.monitors.perceptron import TrainingConfig, save_model
 from avalanche.monitors.splits import split_declared_runs
 from avalanche.monitors.training import (
     FALSE_ALARM_BUDGET,
@@ -27,6 +26,7 @@ SEED = 20260825
 EPOCHS = 60
 HISTORICAL_DATASET_VERSION = 4
 HISTORICAL_FEATURE_VERSION = 2
+HISTORICAL_MODEL_VERSION = 2
 
 
 def load_nonformal_legacy_dataset_v4(dataset_path: Path) -> pd.DataFrame:
@@ -44,11 +44,16 @@ def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
     frame = load_nonformal_legacy_dataset_v4(dataset_path)
     parts = split_declared_runs(frame)
     profile = InformationProfile.PRINCIPAL
-    names = feature_names_for(profile)
+    names = _historical_feature_names(dataset_path, frame)
     config = TrainingConfig(seed=SEED, epochs=EPOCHS)
     validation_windows = build_run_windows(parts["validation"], names)
     validation_rows = _window_rows(parts["validation"], validation_windows)
-    perceptron = train_perceptron(parts["train"], parts["validation"], config)
+    perceptron = train_perceptron(
+        parts["train"],
+        parts["validation"],
+        config,
+        feature_names=names,
+    )
     perceptron_calibration = calibrate_and_gate(
         perceptron.logits(validation_rows.loc[:, list(names)].to_numpy()),
         validation_rows,
@@ -77,6 +82,8 @@ def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
         model_filename = f"{attempt_name}-model.pt"
         model_path = attempt_dir / model_filename
         if "perceptron" in attempt_name:
+            model.metadata["feature_version"] = HISTORICAL_FEATURE_VERSION
+            model.metadata["model_version"] = HISTORICAL_MODEL_VERSION
             save_model(model, model_path)
             model_kind = "perceptron"
         else:
@@ -97,7 +104,7 @@ def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
         "false_alarm_budget": FALSE_ALARM_BUDGET,
         "feature_names": list(names),
         "feature_version": HISTORICAL_FEATURE_VERSION,
-        "model_version": MODEL_VERSION,
+        "model_version": HISTORICAL_MODEL_VERSION,
         "seed": SEED,
         "sleeper_recall_gate": SLEEPER_RECALL_GATE,
         "split_manifest": {
@@ -105,6 +112,27 @@ def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
             for split, values in sorted(parts.items())
         },
     }
+
+
+def _historical_feature_names(
+    dataset_path: Path,
+    frame: pd.DataFrame,
+) -> tuple[str, ...]:
+    """Read the feature order declared beside the historical fixture."""
+    metadata_path = dataset_path.with_suffix(".metadata.json")
+    try:
+        metadata = json.loads(metadata_path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("the historical feature metadata is invalid") from error
+    values = metadata.get("feature_names")
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(isinstance(name, str) and name in frame for name in values)
+        or len(set(values)) != len(values)
+    ):
+        raise ValueError("the historical feature metadata is invalid")
+    return tuple(values)
 
 
 def _save_gru(model, path: Path) -> None:

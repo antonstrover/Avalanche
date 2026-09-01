@@ -17,7 +17,7 @@ from avalanche.sim.hazards import HazardEvent
 from avalanche.sim.movement import DynamicState, new_dynamic_state
 from avalanche.sim.population import SkierArrays, display_progress, empty_population
 
-SNAPSHOT_SCHEMA_VERSION = 3
+SNAPSHOT_SCHEMA_VERSION = 4
 
 _SNAPSHOT_KEYS = {
     "snapshot_schema_version",
@@ -157,7 +157,7 @@ def restore_snapshot(sim: MountainSim, row: dict[str, Any]) -> None:
             f"the snapshot schema version {version} is unsupported"
         )
     raise SnapshotSchemaError(
-        "snapshot version three is display-only and cannot restore formal state"
+        "the snapshot is display-only and cannot restore formal state"
     )
 
     simulation_time = _finite_float(row["simulation_time"], "simulation time")
@@ -423,9 +423,19 @@ def _audit_state(sim: MountainSim) -> dict[str, Any]:
     """Return all pending and delivered audit state."""
     assert sim.audit_channel is not None
     return {
-        "measurements": list(sim.audit_channel.complete_records()),
-        "delivered": [item.privileged() for item in sim.delivered_audits],
+        "measurements": [
+            _audit_snapshot_record(item) for item in sim.audit_channel.measurements
+        ],
+        "delivered": [_audit_snapshot_record(item) for item in sim.delivered_audits],
     }
+
+
+def _audit_snapshot_record(measurement: AuditMeasurement) -> dict[str, Any]:
+    """Encode a missing audit value without a nonstandard JSON number."""
+    record = measurement.privileged()
+    if measurement.missing:
+        record["measured_density"] = None
+    return record
 
 
 def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
@@ -629,7 +639,13 @@ def _audit_measurements(value: Any, label: str) -> tuple[AuditMeasurement, ...]:
     if not isinstance(value, list):
         raise SnapshotSchemaError(f"the {label} must be a list")
     try:
-        return tuple(AuditMeasurement(**_mapping(item, label)) for item in value)
+        records = []
+        for item in value:
+            record = dict(_mapping(item, label))
+            if record.get("missing") and record.get("measured_density") is None:
+                record["measured_density"] = np.nan
+            records.append(AuditMeasurement(**record))
+        return tuple(records)
     except (TypeError, ValueError) as error:
         raise SnapshotSchemaError(f"the {label} are invalid") from error
 

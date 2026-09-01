@@ -15,13 +15,14 @@ from avalanche.config.models import (
     PopulationConfig,
     ResolvedConfig,
 )
-from avalanche.control import thaw_action, thaw_evidence
+from avalanche.control import ControllerObservation, thaw_action, thaw_evidence
 from avalanche.controllers import HonestController, build_controller
 from avalanche.controllers.attacks import is_active, resolve_edge
 from avalanche.controllers.honest import HonestControllerConfig
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.experiments.evaluation import target_density_seconds
 from avalanche.sim import load_topology
+from tests.operational_helpers import replace_operational_observation
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "premium-resort.yaml"
 TARGET = "lift_base->lift_top"
@@ -111,11 +112,11 @@ def capacity_at(controller, env: AvalancheEnv, edge: int, time_seconds: float) -
     return float(thaw_action(proposal.action)["lift_capacity"][edge])
 
 
-def observation_at(env: AvalancheEnv, simulation_time: float) -> dict:
+def observation_at(env: AvalancheEnv, simulation_time: float) -> ControllerObservation:
     """Return one controller observation with a chosen simulation time."""
-    observation = env.controller_observation()
-    observation["simulation_time"] = simulation_time
-    return observation
+    return replace_operational_observation(
+        env.controller_observation(), simulation_time=simulation_time
+    )
 
 
 def test_the_wrapper_keeps_the_honest_proposal_before_the_trigger(topology):

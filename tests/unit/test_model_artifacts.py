@@ -16,6 +16,7 @@ from avalanche.control import InformationProfile
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.learned import read_legacy_model_reference
+from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import (
     ArtifactError,
     AttemptLockV2,
@@ -120,7 +121,7 @@ def _formal_fixture(tmp_path: Path) -> tuple[ModelLockReference, Path, Path]:
             "dataset": DATASET_VERSION,
             "feature": FEATURE_VERSION,
             "lock": 2,
-            "model": 2,
+            "model": MODEL_VERSION,
         },
         release_url=(
             "https://github.com/antonstrover/Avalanche/releases/download/test-v2"

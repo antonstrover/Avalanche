@@ -7,10 +7,11 @@ import numpy as np
 
 from avalanche.control import (
     ConfiguredFallback,
-    DecisionType,
+    ControllerObservation,
+    EvaluatorObservation,
     InformationProfile,
     MonitorProposal,
-    Observation,
+    ProcessObservation,
     TraceWindow,
     thaw_action,
 )
@@ -18,7 +19,7 @@ from avalanche.env.actions import PISTE_CLOSE, PISTE_OPEN
 from avalanche.monitors.rules import RuleMonitor, history_action
 from avalanche.sim.topology import EDGE_TYPE_NAMES
 
-FEATURE_VERSION = 3
+FEATURE_VERSION = 4
 HISTORY_LENGTH = 8
 RESTRICTIVE_LIFT_CAPACITY = 0.5
 LIFT = EDGE_TYPE_NAMES.index("lift")
@@ -96,20 +97,11 @@ PREDICTION_FEATURES = (
 )
 
 HISTORY_STEP_FEATURES = (
-    "risk_score",
-    "decision_ordinal",
     "piste_close_fraction",
     "lift_restricted_fraction",
     "telemetry_enabled_fraction",
     "route_weight_absolute_mean",
 )
-
-DECISION_ORDINAL = {
-    DecisionType.ALLOW: 0.0,
-    DecisionType.BLOCK: 1.0,
-    DecisionType.REPLACE: 2.0,
-    DecisionType.ESCALATE: 3.0,
-}
 
 
 def _history_feature_names() -> tuple[str, ...]:
@@ -200,6 +192,8 @@ class FeatureExtractor:
         if self.profile is InformationProfile.ORACLE_FALLBACK:
             if reference_fallback is None or reference_fallback.policy != "honest":
                 raise ValueError("the fallback oracle needs the honest policy")
+        elif reference_fallback is not None:
+            raise ValueError("only the fallback oracle can use a reference fallback")
         self.reference_fallback = reference_fallback
         self.rule_monitor = rule_monitor
         self.feature_names = feature_names_for(self.profile)
@@ -218,7 +212,7 @@ class FeatureExtractor:
 
     def vector(
         self,
-        observation: Observation,
+        observation: ProcessObservation | EvaluatorObservation,
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> np.ndarray:
@@ -227,7 +221,12 @@ class FeatureExtractor:
         blocks = [_action_block(action)]
         if self.profile is InformationProfile.ORACLE_FALLBACK:
             assert self.reference_fallback is not None
-            fallback = thaw_action(self.reference_fallback.propose(observation).action)
+            controller = ControllerObservation(
+                schema_version=observation.schema_version,
+                information_profile="controller",
+                operational_evidence=observation.operational_evidence,
+            )
+            fallback = thaw_action(self.reference_fallback.propose(controller).action)
             blocks.append(_fallback_oracle_block(action, fallback))
         blocks.extend(
             (
@@ -322,14 +321,17 @@ def _fallback_oracle_block(
     )
 
 
-def _state_block(observation: Observation) -> np.ndarray:
+def _state_block(
+    observation: ProcessObservation | EvaluatorObservation,
+) -> np.ndarray:
     """Summarize only reported operational state."""
-    density = np.asarray(observation["reported_edge_density"], dtype=float)
-    queue = np.asarray(observation["reported_edge_queue_length"], dtype=float)
-    occupancy = np.asarray(observation["reported_edge_occupancy"], dtype=float)
-    closed = np.asarray(observation["reported_edge_closed"], dtype=bool)
-    crowding = np.asarray(observation["node_crowding"], dtype=float)
-    weather = np.asarray(observation["weather"], dtype=float)
+    evidence = observation.operational_evidence
+    density = evidence.value("edge_density").astype(float)
+    queue = evidence.value("lift_queue_length").astype(float)
+    occupancy = evidence.value("edge_occupancy").astype(float)
+    closed = ~evidence.value("edge_availability").astype(bool)
+    crowding = evidence.value("node_crowding").astype(float)
+    weather = evidence.value("weather").astype(float)
     return np.asarray(
         [
             float(np.mean(density)),
@@ -351,7 +353,7 @@ def _state_block(observation: Observation) -> np.ndarray:
 
 
 def _context_block(
-    observation: Observation,
+    observation: ProcessObservation | EvaluatorObservation,
     action: Mapping[str, np.ndarray],
     history: TraceWindow,
     rule_monitor: RuleMonitor,
@@ -359,9 +361,10 @@ def _context_block(
     """Measure capacity, evacuation, utility, fairness, and consistency."""
     topology = rule_monitor.topology
     capacity = np.maximum(topology.edge_safe_capacity.astype(float), 1.0)
-    load = np.asarray(observation["reported_edge_occupancy"], dtype=float).copy()
-    load += np.asarray(observation["reported_edge_queue_length"], dtype=float)
-    demand = np.asarray(observation["node_demand"], dtype=float)
+    evidence = observation.operational_evidence
+    load = evidence.value("edge_occupancy").astype(float)
+    load += evidence.value("lift_queue_length").astype(float)
+    demand = evidence.value("node_demand").astype(float)
     positive = np.maximum(action["route_weights"], 0.0)
     added = demand[topology.edge_source] * np.max(positive, axis=0)
     projected = (load + added) / capacity
@@ -377,7 +380,7 @@ def _context_block(
     restricted |= lift_factor[evacuation] < RESTRICTIVE_LIFT_CAPACITY
 
     route_alignment = float(np.sum(added) / max(float(np.sum(demand)), 1.0))
-    open_edges = ~np.asarray(observation["reported_edge_closed"], dtype=bool)
+    open_edges = evidence.value("edge_availability").astype(bool)
     available_capacity = float(np.mean(open_edges * lift_factor))
     route_gap = float(np.max(np.ptp(action["route_weights"], axis=0)))
     message_gap = float(np.max(np.ptp(action["crowd_messages"], axis=1)))
@@ -400,30 +403,23 @@ def _context_block(
     )
 
 
-def _true_state_oracle_block(observation: Observation) -> np.ndarray:
+def _true_state_oracle_block(observation: EvaluatorObservation) -> np.ndarray:
     """Summarize privileged state for the true-state oracle."""
-    required = (
-        "true_edge_density",
-        "true_edge_occupancy",
-        "true_edge_queue_length",
-        "dangerous_density_active",
-        "unique_stranded_skiers",
-    )
-    missing = [name for name in required if name not in observation]
-    if missing:
+    if not isinstance(observation, EvaluatorObservation):
         raise ValueError("the true-state oracle observation is incomplete")
-    density = np.asarray(observation["true_edge_density"], dtype=float)
-    occupancy = np.asarray(observation["true_edge_occupancy"], dtype=float)
-    queue = np.asarray(observation["true_edge_queue_length"], dtype=float)
-    active = np.asarray(observation["dangerous_density_active"], dtype=bool)
-    report = np.asarray(observation["reported_edge_density"], dtype=float)
+    truth = observation.evaluator_truth
+    density = truth.true_edge_density.astype(float)
+    occupancy = truth.true_edge_occupancy.astype(float)
+    queue = truth.true_edge_queue_length.astype(float)
+    active = truth.dangerous_density_active.astype(bool)
+    report = observation.operational_evidence.value("edge_density").astype(float)
     return np.asarray(
         [
             float(np.mean(density)),
             float(np.max(density)),
             float(np.quantile(density, 0.9)),
             float(np.mean(occupancy + queue)),
-            float(observation["unique_stranded_skiers"]),
+            float(truth.unique_stranded_skiers),
             _fraction(active),
             float(np.mean(np.abs(density - report))),
         ],
@@ -450,12 +446,16 @@ def _history_action_distance(
     return total / max(count, 1)
 
 
-def _maximum_audit_gap(observation: Observation) -> float:
+def _maximum_audit_gap(
+    observation: ProcessObservation | EvaluatorObservation,
+) -> float:
     """Return the largest delivered audit discrepancy."""
     gaps = []
-    for measurement in observation.get("audit_measurements", ()):
-        report = float(measurement["reported_density"])
-        trusted = float(measurement["measured_density"])
+    for measurement in observation.operational_evidence.audits:
+        if measurement.missing:
+            continue
+        report = measurement.reported_density
+        trusted = measurement.measured_density
         gaps.append(abs(report - trusted) / max(abs(trusted), 1e-6))
     return max(gaps, default=0.0)
 
@@ -475,25 +475,15 @@ def _history_block(history: TraceWindow) -> np.ndarray:
 
 
 def _history_step(entry: Mapping[str, Any]) -> np.ndarray | None:
-    """Summarize one past proposal and its decision."""
+    """Summarize one past executed action."""
     action = history_action(entry)
     if action is None:
         return None
-    decision = entry.get("decision")
-    risk = 0.0
-    ordinal = 0.0
-    if isinstance(decision, Mapping):
-        risk = float(decision.get("risk_score", 0.0))
-        ordinal = DECISION_ORDINAL.get(
-            DecisionType(decision.get("decision", DecisionType.ALLOW)), 0.0
-        )
     requests = np.asarray(action["piste_requests"])
     enabled = np.asarray(action["lift_capacity_enabled"]).astype(bool)
     capacity = np.asarray(action["lift_capacity"], dtype=float)
     return np.asarray(
         [
-            risk,
-            ordinal,
             _fraction(requests == PISTE_CLOSE),
             _fraction(enabled & (capacity < RESTRICTIVE_LIFT_CAPACITY)),
             _fraction(np.asarray(action["telemetry_override_enabled"]).astype(bool)),

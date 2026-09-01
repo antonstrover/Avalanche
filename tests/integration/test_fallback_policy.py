@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from avalanche.config import ConfigurationResolver
@@ -10,7 +11,7 @@ from avalanche.control import (
     DecisionType,
     InfrastructureReference,
     MonitorDecision,
-    build_monitor_observation,
+    build_process_observation,
     freeze_action,
     thaw_action,
 )
@@ -67,7 +68,8 @@ def configured_env() -> AvalancheEnv:
 
 def make_proposal(env: AvalancheEnv, value: float) -> ActionProposal:
     action = neutral_action(env.topology)
-    action["route_weights"][0, 0] = value
+    node = int(np.flatnonzero(env.topology.node_controllable)[0])
+    action["crowd_messages"][node, 0] = value
     return ActionProposal(
         controller_id="unsafe",
         simulation_time=env.sim.simulation_time,
@@ -100,36 +102,47 @@ def test_each_fallback_policy_supports_each_controller_kind(policy, controller_p
     assert fallback.policy == policy
 
 
-def monitor_observation(env):
-    observation = env._observation()
-    observation["simulation_time"] = env.sim.simulation_time
-    return build_monitor_observation(observation, env.sim)
+def monitor_observations(env, proposed):
+    """Return matching controller and process envelopes."""
+    controller = env.controller_observation()
+    return controller, build_process_observation(controller, proposed)
 
 
 def test_block_uses_the_honest_fallback():
     env = configured_env()
     rejected = make_proposal(env, 1.0)
+    controller, process = monitor_observations(env, rejected)
     result = make_adjudicator(env, BlockMonitor(), "honest").adjudicate(
-        monitor_observation(env), rejected, simulation_time=env.sim.simulation_time
+        process,
+        rejected,
+        simulation_time=env.sim.simulation_time,
+        fallback_observation=controller,
     )
 
     assert result.executed_action.controller_id == "honest-fallback"
     assert result.executed_action.action != rejected.action
-    assert rejected.action.route_weights[0][0] == 1.0
+    assert np.max(np.asarray(rejected.action.crowd_messages)) == 1.0
 
 
 def test_last_safe_reuses_the_previous_execution():
     env = configured_env()
     boundary = make_adjudicator(env, AllowMonitor(), "last_safe")
     first = make_proposal(env, 0.5)
+    controller, process = monitor_observations(env, first)
     allowed = boundary.adjudicate(
-        monitor_observation(env), first, simulation_time=env.sim.simulation_time
+        process,
+        first,
+        simulation_time=env.sim.simulation_time,
+        fallback_observation=controller,
     )
     boundary.monitor = BlockMonitor()
+    second = make_proposal(env, 1.0)
+    controller, process = monitor_observations(env, second)
     blocked = boundary.adjudicate(
-        monitor_observation(env),
-        make_proposal(env, 1.0),
+        process,
+        second,
         simulation_time=env.sim.simulation_time,
+        fallback_observation=controller,
     )
 
     assert blocked.executed_action.action == allowed.executed_action.action
@@ -138,10 +151,13 @@ def test_last_safe_reuses_the_previous_execution():
 
 def test_last_safe_starts_with_the_honest_fallback():
     env = configured_env()
+    proposed = make_proposal(env, -1.0)
+    controller, process = monitor_observations(env, proposed)
     result = make_adjudicator(env, BlockMonitor(), "last_safe").adjudicate(
-        monitor_observation(env),
-        make_proposal(env, -1.0),
+        process,
+        proposed,
         simulation_time=env.sim.simulation_time,
+        fallback_observation=controller,
     )
 
     assert result.executed_action.controller_id == "honest-fallback"

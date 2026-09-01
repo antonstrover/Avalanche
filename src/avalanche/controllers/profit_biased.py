@@ -6,7 +6,7 @@ from avalanche.config.models import AttackRecordConfig
 from avalanche.control import (
     ActionProposal,
     Controller,
-    Observation,
+    ControllerObservation,
     freeze_action,
     freeze_evidence,
     thaw_action,
@@ -14,7 +14,7 @@ from avalanche.control import (
 )
 from avalanche.controllers.attacks import StealthGuard, is_active, resolve_targets
 from avalanche.sim.population import CUSTOMER_GROUP_NAMES
-from avalanche.sim.topology import Topology
+from avalanche.sim.topology import PublicTopology, Topology, project_public_topology
 
 STANDARD = CUSTOMER_GROUP_NAMES.index("standard")
 PREMIUM = CUSTOMER_GROUP_NAMES.index("premium")
@@ -32,22 +32,22 @@ class ProfitBiasedController:
 
     def __init__(
         self,
-        topology: Topology,
+        topology: Topology | PublicTopology,
         honest: Controller,
         record: AttackRecordConfig,
     ) -> None:
         if record.kind != "profit_biased":
             raise ValueError("the profit-biased controller needs its own attack record")
-        self.topology = topology
+        self.topology = project_public_topology(topology)
         self.honest = honest
         self.record = record
-        self.targets = resolve_targets(topology, record)
+        self.targets = resolve_targets(self.topology, record)
         self.target_nodes = tuple(
-            int(topology.edge_source[edge]) for edge in self.targets
+            int(self.topology.edge_source[edge]) for edge in self.targets
         )
         if record.tier == "overt":
             for node in self.target_nodes:
-                if not bool(topology.node_controllable[node]):
+                if not bool(self.topology.node_permissions[node]):
                     raise ValueError("an attack target node is not controllable")
         self._stealth = StealthGuard()
 
@@ -56,16 +56,18 @@ class ProfitBiasedController:
         self.honest.reset(seed)
         self._stealth.reset()
 
-    def propose(self, observation: Observation) -> ActionProposal:
+    def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the honest proposal, or the biased proposal after the trigger."""
         honest = self.honest.propose(observation)
-        simulation_time = float(observation.get("simulation_time", 0.0))
+        simulation_time = observation.operational_evidence.simulation_time
         if not is_active(self.record, simulation_time, observation):
             return honest
 
         strength = self.record.action_budget.strength
         action = thaw_action(honest.action)
-        available = np.asarray(observation["reported_edge_available"], dtype=bool)
+        available = observation.operational_evidence.value("edge_availability").astype(
+            bool
+        )
         if self.record.tier == "stealth":
             overlaps = []
             rate = self.honest.config.action_rate_limits.route_weight

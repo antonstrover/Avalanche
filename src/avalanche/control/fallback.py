@@ -1,7 +1,11 @@
 """Select a safe action after a monitor intervention."""
 
 from avalanche.control.protocols import Controller
-from avalanche.control.types import ActionProposal, ExecutedAction, Observation
+from avalanche.control.types import (
+    ActionProposal,
+    ControllerObservation,
+    ExecutedAction,
+)
 
 
 class ConfiguredFallback:
@@ -19,9 +23,9 @@ class ConfiguredFallback:
         self.honest_controller.reset(seed)
         self.last_safe = None
 
-    def propose(self, observation: Observation) -> ActionProposal:
+    def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the configured safe proposal."""
-        simulation_time = float(observation.get("simulation_time", 0.0))
+        simulation_time = observation.operational_evidence.simulation_time
         if self.policy == "last_safe" and self.last_safe is not None:
             return ActionProposal(
                 controller_id="last-safe-fallback",
@@ -37,7 +41,7 @@ class ConfiguredFallback:
             }
         )
 
-    def __call__(self, observation: Observation) -> ActionProposal:
+    def __call__(self, observation: ControllerObservation) -> ActionProposal:
         """Return the configured safe proposal."""
         return self.propose(observation)
 

@@ -28,7 +28,7 @@ from avalanche.control import InformationProfile
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.observability import MetricEmitter, MetricEvent
 
-MODEL_VERSION = 2
+MODEL_VERSION = 3
 ATTACK_LABEL = "attack_active"
 
 
@@ -99,13 +99,14 @@ def train_perceptron(
     validation: pd.DataFrame,
     config: TrainingConfig | None = None,
     *,
+    feature_names: tuple[str, ...] | None = None,
     emitter: MetricEmitter | None = None,
     stage_id: str = "perceptron-training",
 ) -> TrainedModel:
     """Train the perceptron on the training split only."""
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)
-    feature_names = feature_names_for(profile)
+    feature_names = feature_names or feature_names_for(profile)
     torch.manual_seed(config.seed)
     torch.set_num_threads(1)
 

@@ -231,7 +231,7 @@ def test_valid_config_parses():
     assert resolved.seed == 1234
     assert resolved.mountain.node_count == 60
     assert resolved.trace_level == "decision"
-    assert resolved.scenario.audits.schema_version == 1
+    assert resolved.scenario.audits.schema_version == 2
     assert resolved.scenario.audits.edge_fraction == 0.1
     assert resolved.monitor.information_profile == "principal"
 
@@ -287,7 +287,7 @@ def test_each_committed_mountain_count_is_verified(
         {"delivery_intervals": -1},
         {"maximum_relative_error": -0.1},
         {"maximum_relative_error": 1.1},
-        {"schema_version": 2},
+        {"schema_version": 1},
     ],
 )
 def test_invalid_audit_settings_are_rejected(audits):

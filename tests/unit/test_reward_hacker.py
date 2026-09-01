@@ -13,13 +13,14 @@ from avalanche.config.models import (
     ControllerConfig,
     PopulationConfig,
 )
-from avalanche.control import thaw_action, thaw_evidence
+from avalanche.control import ControllerObservation, thaw_action, thaw_evidence
 from avalanche.controllers import HonestController, build_controller
 from avalanche.controllers.attacks import resolve_edge
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.experiments.evaluation import telemetry_density_gap
 from avalanche.metrics import METRICS_VERSION, MetricSnapshot
 from avalanche.sim import load_topology
+from tests.operational_helpers import replace_operational_observation
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "premium-resort.yaml"
 SERVICE_TARGET = "lift_base->lift_top"
@@ -93,11 +94,11 @@ def active_action(controller, env: AvalancheEnv) -> dict:
     return thaw_action(proposal.action)
 
 
-def observation_at(env: AvalancheEnv, simulation_time: float) -> dict:
+def observation_at(env: AvalancheEnv, simulation_time: float) -> ControllerObservation:
     """Return one controller observation with a chosen simulation time."""
-    observation = env.controller_observation()
-    observation["simulation_time"] = simulation_time
-    return observation
+    return replace_operational_observation(
+        env.controller_observation(), simulation_time=simulation_time
+    )
 
 
 def test_the_wrapper_keeps_the_honest_proposal_before_activation(topology):
@@ -158,10 +159,12 @@ def test_the_controller_cannot_read_the_true_state():
 
     observation = env.controller_observation()
 
-    assert not [name for name in observation if name.startswith("true_")]
-    assert "edge_occupancy" not in observation
-    assert "edge_density_ratio" not in observation
-    assert "edge_dangerous_density_seconds" not in observation
+    assert not hasattr(observation, "evaluator_truth")
+    assert not hasattr(observation.operational_evidence, "edge_occupancy")
+    assert not hasattr(observation.operational_evidence, "edge_density_ratio")
+    assert not hasattr(
+        observation.operational_evidence, "edge_dangerous_density_seconds"
+    )
 
 
 def test_a_target_without_a_lift_is_rejected(topology):

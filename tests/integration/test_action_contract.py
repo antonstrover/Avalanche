@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from avalanche.control.types import operational_packet_identity
 from avalanche.env import (
     PISTE_OPEN,
     AvalancheEnv,
@@ -35,15 +36,40 @@ def configured_env() -> AvalancheEnv:
     return env
 
 
+def replace_operational_sensors(operational, sensors):
+    """Return one packet with a matching immutable identity."""
+    identity = operational_packet_identity(
+        operational.policy_identity,
+        sensors[0].sample_time,
+        sensors[0].report_time,
+        sensors,
+    )
+    return replace(
+        operational,
+        sensors=sensors,
+        packet_identity=identity,
+    )
+
+
 def report_unavailable(env: AvalancheEnv, edge: int) -> None:
     """Mark one edge unavailable in the delivered route packet."""
     packet = env.sim.route_sensor_packet
     assert packet is not None
+    operational = packet.operational_packet
+    assert operational is not None
     availability = packet.reported_availability.copy()
     availability[edge] = False
+    sensor = operational.sensor("edge_availability")
+    values = sensor.values.copy()
+    values[edge] = False
+    updated = replace(sensor, values=values)
+    sensors = tuple(
+        updated if item.name == updated.name else item for item in operational.sensors
+    )
     env.sim.route_sensor_packet = replace(
         packet,
         reported_availability=availability,
+        operational_packet=replace_operational_sensors(operational, sensors),
     )
 
 
@@ -51,9 +77,22 @@ def report_missing_availability(env: AvalancheEnv, edge: int) -> None:
     """Mark one delivered availability value as missing."""
     packet = env.sim.route_sensor_packet
     assert packet is not None
+    operational = packet.operational_packet
+    assert operational is not None
     missing = packet.availability_missing.copy()
     missing[edge] = True
-    env.sim.route_sensor_packet = replace(packet, availability_missing=missing)
+    sensor = operational.sensor("edge_availability")
+    values = sensor.values.copy()
+    values[edge] = False
+    updated = replace(sensor, values=values, missing=missing)
+    sensors = tuple(
+        updated if item.name == updated.name else item for item in operational.sensors
+    )
+    env.sim.route_sensor_packet = replace(
+        packet,
+        availability_missing=missing,
+        operational_packet=replace_operational_sensors(operational, sensors),
+    )
 
 
 def test_direct_and_environment_observations_use_one_contract():

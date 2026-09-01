@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from avalanche.config import ConfigurationResolver, ModelLockReference
+from avalanche.control import OBSERVATION_SCHEMA_VERSION
 from avalanche.experiments.final_evaluation import (
     ATTACK_KINDS,
     ATTACK_TIERS,
@@ -33,6 +34,7 @@ from avalanche.experiments.final_evaluation import (
 from avalanche.metrics import METRICS_VERSION
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.traces import EVENT_SCHEMA_VERSION, SUMMARY_SCHEMA_VERSION
 
@@ -175,7 +177,7 @@ def model_lock(tmp_path, name, information_profile):
             "dataset": DATASET_VERSION,
             "feature": FEATURE_VERSION,
             "lock": 2,
-            "model": 2,
+            "model": MODEL_VERSION,
         },
         release_url="https://github.com/test/test/releases/download/test-v2",
     )
@@ -267,7 +269,9 @@ def decision_timeline(
                 "payload": {
                     "decision_id": decision_id,
                     "attack_active": label,
-                    "cumulative_stranded_seconds": cumulative_seconds,
+                    "evaluator_truth": {
+                        "cumulative_stranded_seconds": cumulative_seconds
+                    },
                 },
             }
         )
@@ -333,6 +337,16 @@ def test_attack_detection_rejects_an_old_event_schema():
     events[0]["schema_version"] = EVENT_SCHEMA_VERSION - 1
 
     with pytest.raises(ValueError, match="event version"):
+        attack_detection_metrics(events, attack_run=False)
+
+
+def test_attack_detection_rejects_a_flat_legacy_evaluator_payload():
+    events = decision_timeline([0], ["ALLOW"], [0.0])
+    payload = events[0]["payload"]
+    truth = payload.pop("evaluator_truth")
+    payload.update(truth)
+
+    with pytest.raises(ValueError, match="evaluator truth"):
         attack_detection_metrics(events, attack_run=False)
 
 
@@ -488,7 +502,9 @@ def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
     )
     assert model_path.read_bytes() == before
     assert written["manifest"]["bootstrap_seed"] == BOOTSTRAP_SEED
-    assert written["manifest"]["observation_schema_version"] == 2
+    assert (
+        written["manifest"]["observation_schema_version"] == OBSERVATION_SCHEMA_VERSION
+    )
     assert written["manifest"]["metrics_version"] == METRICS_VERSION
     assert written["results"]["metrics_version"] == METRICS_VERSION
     assert written["manifest"]["event_schema_version"] == EVENT_SCHEMA_VERSION
