@@ -14,7 +14,7 @@ from avalanche.metrics import METRICS_VERSION, MetricSnapshot
 from avalanche.sim.engine import MountainSim
 from avalanche.traces.snapshots import encode_snapshot
 
-EVENT_SCHEMA_VERSION = 3
+EVENT_SCHEMA_VERSION = 4
 SUMMARY_SCHEMA_VERSION = 1
 
 

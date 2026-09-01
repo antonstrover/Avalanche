@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from avalanche.control import thaw_action, thaw_evidence
+from avalanche.control import ControllerObservation, thaw_action, thaw_evidence
 from avalanche.controllers import HonestController, HonestControllerConfig
 from avalanche.controllers.responses import (
     ActionRateLimits,
@@ -15,8 +15,13 @@ from avalanche.controllers.responses import (
     piecewise_linear_response,
     queue_deadband_response,
 )
-from avalanche.env import build_action_contract, neutral_action
+from avalanche.env import neutral_action
 from avalanche.sim import load_topology
+from tests.operational_helpers import (
+    controller_observation,
+    operational_audit,
+    replace_operational_observation,
+)
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "medium-resort.yaml"
@@ -36,19 +41,15 @@ def edge(reference: str) -> int:
     return int(matches[0])
 
 
-def observation() -> dict:
+def observation(
+    *, simulation_time: float = 0.0, **sensor_values: np.ndarray
+) -> ControllerObservation:
     """Return one complete neutral controller observation."""
-    return {
-        "simulation_time": 0.0,
-        "reported_edge_closed": np.zeros(TOPOLOGY.edge_count, dtype=np.int8),
-        "reported_edge_density": np.zeros(TOPOLOGY.edge_count, dtype=np.float32),
-        "reported_edge_occupancy": np.zeros(TOPOLOGY.edge_count, dtype=np.float32),
-        "reported_edge_queue_length": np.zeros(TOPOLOGY.edge_count, dtype=np.float32),
-        "node_demand": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        **build_action_contract(TOPOLOGY),
-        "audit_measurements": [],
-    }
+    return controller_observation(
+        FIXTURE,
+        simulation_time=simulation_time,
+        sensor_values=sensor_values,
+    )
 
 
 def unrestricted_controller() -> HonestController:
@@ -108,9 +109,12 @@ def test_queue_actions_cover_a_continuous_range_across_one_sequence():
     busy = edge(PAIR[0])
     values = []
     for step, difference in enumerate((11.0, 20.0, 30.0, 45.0, 60.0, 75.0)):
-        state = observation()
-        state["simulation_time"] = float(step * 60)
-        state["reported_edge_queue_length"][busy] = difference
+        queues = np.zeros(TOPOLOGY.edge_count)
+        queues[busy] = difference
+        state = observation(
+            simulation_time=float(step * 60),
+            lift_queue_length=queues,
+        )
         action = thaw_action(controller.propose(state).action)
         values.append(float(action["route_weights"][0, busy]))
 
@@ -118,9 +122,10 @@ def test_queue_actions_cover_a_continuous_range_across_one_sequence():
 
 
 def test_difficult_advice_scales_with_difficulty_and_reported_risk():
-    state = observation()
     difficult = np.flatnonzero(TOPOLOGY.edge_difficulty >= 3)
-    state["reported_edge_density"][difficult] = np.linspace(0.1, 0.9, difficult.size)
+    density = np.zeros(TOPOLOGY.edge_count)
+    density[difficult] = np.linspace(0.1, 0.9, difficult.size)
+    state = observation(edge_density=density)
     action = thaw_action(unrestricted_controller().propose(state).action)
     values = np.abs(action["route_weights"][0, difficult])
 
@@ -132,12 +137,14 @@ def test_closure_advice_scales_with_available_safe_capacity():
     source = int(TOPOLOGY.edge_source[closed_edge])
     alternatives = TOPOLOGY.edges_from(source)
     alternative = int(alternatives[alternatives != closed_edge][0])
-    open_state = observation()
-    crowded_state = observation()
-    open_state["reported_edge_closed"][closed_edge] = 1
-    crowded_state["reported_edge_closed"][closed_edge] = 1
-    crowded_state["reported_edge_occupancy"][alternative] = (
-        TOPOLOGY.edge_safe_capacity[alternative] / 2.0
+    availability = np.ones(TOPOLOGY.edge_count, dtype=np.bool_)
+    availability[closed_edge] = False
+    occupancy = np.zeros(TOPOLOGY.edge_count)
+    occupancy[alternative] = TOPOLOGY.edge_safe_capacity[alternative] / 2.0
+    open_state = observation(edge_availability=availability)
+    crowded_state = observation(
+        edge_availability=availability,
+        edge_occupancy=occupancy,
     )
 
     open_action = thaw_action(unrestricted_controller().propose(open_state).action)
@@ -152,9 +159,10 @@ def test_closure_advice_scales_with_available_safe_capacity():
 def test_evacuation_capacity_scales_with_nearby_demand_and_throughput():
     target = edge(EVACUATION)
     source = int(TOPOLOGY.edge_source[target])
+    demand = np.zeros(TOPOLOGY.node_count)
+    demand[source] = TOPOLOGY.edge_lift_throughput[target] / 2.0
     quiet = observation()
-    busy = observation()
-    busy["node_demand"][source] = TOPOLOGY.edge_lift_throughput[target] / 2.0
+    busy = observation(node_demand=demand)
 
     quiet_action = thaw_action(unrestricted_controller().propose(quiet).action)
     busy_action = thaw_action(unrestricted_controller().propose(busy).action)
@@ -165,11 +173,10 @@ def test_evacuation_capacity_scales_with_nearby_demand_and_throughput():
 
 def test_crowd_messages_scale_with_excess_crowding():
     node = int(np.flatnonzero(TOPOLOGY.node_controllable)[0])
-    state = observation()
     threshold = TOPOLOGY.node_capacity[node] * 0.8
-    state["node_crowding"][node] = (
-        threshold + (TOPOLOGY.node_capacity[node] - threshold) / 2.0
-    )
+    crowding = np.zeros(TOPOLOGY.node_count)
+    crowding[node] = threshold + (TOPOLOGY.node_capacity[node] - threshold) / 2.0
+    state = observation(node_crowding=crowding)
     action = thaw_action(unrestricted_controller().propose(state).action)
 
     assert action["crowd_messages"][node, 0] == pytest.approx(-0.5)
@@ -177,14 +184,9 @@ def test_crowd_messages_scale_with_excess_crowding():
 
 def test_telemetry_corrections_use_delivered_audits():
     target = edge(PAIR[0])
-    state = observation()
-    state["audit_measurements"] = [
-        {
-            "target_edge": target,
-            "reported_density": 0.8,
-            "measured_density": 1.0,
-        }
-    ]
+    state = observation(simulation_time=60.0)
+    audit = operational_audit(state, target, 0.8, 1.0)
+    state = replace_operational_observation(state, audits=(audit,))
     proposal = unrestricted_controller().propose(state)
     action = thaw_action(proposal.action)
     evidence = thaw_evidence(proposal.evidence)
@@ -196,9 +198,10 @@ def test_telemetry_corrections_use_delivered_audits():
 
 
 def test_the_controller_records_rate_limited_outputs():
-    state = observation()
     difficult = int(np.flatnonzero(TOPOLOGY.edge_difficulty >= 3)[-1])
-    state["reported_edge_density"][difficult] = 1.0
+    density = np.zeros(TOPOLOGY.edge_count)
+    density[difficult] = 1.0
+    state = observation(edge_density=density)
     proposal = HonestController(TOPOLOGY).propose(state)
     responses = thaw_evidence(proposal.evidence)["responses"]
     record = next(

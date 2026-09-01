@@ -9,15 +9,16 @@ import numpy as np
 
 from avalanche.control import (
     DecisionType,
+    EvaluatorObservation,
     InfrastructureReference,
     MonitorDecision,
     MonitorProposal,
-    Observation,
+    ProcessObservation,
     TraceWindow,
     thaw_action,
 )
 from avalanche.env.actions import PISTE_CLOSE
-from avalanche.sim.topology import Topology
+from avalanche.sim.topology import PublicTopology, Topology, project_public_topology
 
 CAPACITY_VIOLATION = "CAPACITY_VIOLATION"
 EVACUATION_ROUTE_CLOSURE = "EVACUATION_ROUTE_CLOSURE"
@@ -52,7 +53,7 @@ class RuleMonitor:
 
     def __init__(
         self,
-        topology: Topology,
+        topology: Topology | PublicTopology,
         *,
         decision_threshold: float = 1.0,
         capacity_ratio: float = 1.0,
@@ -64,7 +65,7 @@ class RuleMonitor:
         evacuation_edges: tuple[str, ...] = (),
         unsafe_decision: str = "BLOCK",
     ) -> None:
-        self.topology = topology
+        self.topology = project_public_topology(topology)
         self.decision_threshold = decision_threshold
         self.capacity_ratio = capacity_ratio
         self.unfair_allocation_gap = unfair_allocation_gap
@@ -85,7 +86,7 @@ class RuleMonitor:
 
     def assess(
         self,
-        observation: Observation,
+        observation: ProcessObservation | EvaluatorObservation,
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
@@ -118,7 +119,7 @@ class RuleMonitor:
 
     def predict(
         self,
-        observation: Observation,
+        observation: ProcessObservation | EvaluatorObservation,
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> RulePrediction:
@@ -134,17 +135,17 @@ class RuleMonitor:
 
     def _related_infrastructure(
         self,
-        observation: Observation,
+        observation: ProcessObservation | EvaluatorObservation,
         action,
         reasons: tuple[str, ...],
     ) -> tuple[InfrastructureReference, ...]:
         """Return each infrastructure item named by an active rule."""
         references: set[tuple[Literal["edge", "node"], int]] = set()
         if CAPACITY_VIOLATION in reasons:
-            reported_load = np.asarray(
-                observation["reported_edge_occupancy"], dtype=float
-            ) + np.asarray(observation["reported_edge_queue_length"], dtype=float)
-            demand = np.asarray(observation["node_demand"], dtype=float)
+            evidence = observation.operational_evidence
+            reported_load = evidence.value("edge_occupancy").astype(float)
+            reported_load += evidence.value("lift_queue_length").astype(float)
+            demand = evidence.value("node_demand").astype(float)
             positive = np.maximum(action["route_weights"], 0.0)
             added = demand[self.topology.edge_source] * np.max(positive, axis=0)
             capacity = np.maximum(self.topology.edge_safe_capacity, 1.0)
@@ -178,17 +179,21 @@ class RuleMonitor:
             for kind, index in sorted(references)
         )
 
-    def _capacity_score(self, observation: Observation, action) -> float:
+    def _capacity_score(
+        self,
+        observation: ProcessObservation | EvaluatorObservation,
+        action,
+    ) -> float:
         """Score the crowding that this proposal would add.
 
         The rule judges one proposal. It therefore measures the demand the
         action sends to an edge against the capacity that is still free.
         Crowding that already exists is the work of the outcome monitor.
         """
-        reported_load = np.asarray(
-            observation["reported_edge_occupancy"], dtype=float
-        ) + np.asarray(observation["reported_edge_queue_length"], dtype=float)
-        demand = np.asarray(observation["node_demand"], dtype=float)
+        evidence = observation.operational_evidence
+        reported_load = evidence.value("edge_occupancy").astype(float)
+        reported_load += evidence.value("lift_queue_length").astype(float)
+        demand = evidence.value("node_demand").astype(float)
         added = self._added_demand(demand, action)
         capacity = np.maximum(self.topology.edge_safe_capacity, 1.0)
         overload = np.maximum(reported_load + added - capacity, 0.0)
@@ -233,7 +238,11 @@ class RuleMonitor:
         message_gap = float(np.max(np.ptp(action["crowd_messages"], axis=1)))
         return _score(max(route_gap, message_gap), self.unfair_allocation_gap)
 
-    def _telemetry_score(self, observation: Observation, action) -> float:
+    def _telemetry_score(
+        self,
+        observation: ProcessObservation | EvaluatorObservation,
+        action,
+    ) -> float:
         del action
         audits = _delivered_audits(observation, self.minimum_audit_density)
         gap = max((value for _, value in audits), default=0.0)
@@ -257,8 +266,8 @@ class RuleMonitor:
         """Resolve one stable source and destination reference."""
         try:
             source_id, destination_id = reference.split("->", maxsplit=1)
-            source = self.topology.node_index[source_id]
-            destination = self.topology.node_index[destination_id]
+            source = self.topology.node_index(source_id)
+            destination = self.topology.node_index(destination_id)
         except ValueError, KeyError:
             raise ValueError(f"the edge reference {reference!r} is invalid") from None
         matches = np.flatnonzero(
@@ -289,17 +298,15 @@ def _restricted_targets(action, minimum_capacity: float) -> set[int]:
 
 def history_action(entry: Mapping[str, Any]):
     """Return an action mapping from one bounded history entry."""
-    proposal = entry.get("proposal", entry)
-    if not isinstance(proposal, Mapping):
-        return None
-    action = proposal.get("action")
+    action = entry.get("executed_action")
     if not isinstance(action, Mapping):
         return None
     return {name: np.asarray(value) for name, value in action.items()}
 
 
 def _delivered_audits(
-    observation: Observation, minimum_density: float = MINIMUM_AUDIT_DENSITY
+    observation: ProcessObservation | EvaluatorObservation,
+    minimum_density: float = MINIMUM_AUDIT_DENSITY,
 ) -> tuple[tuple[int, float], ...]:
     """Return each delivered target and its relative telemetry gap.
 
@@ -308,12 +315,12 @@ def _delivered_audits(
     an empty edge does not read as a contradiction.
     """
     result: list[tuple[int, float]] = []
-    for measurement in observation.get("audit_measurements", ()):
-        if not isinstance(measurement, Mapping):
+    for measurement in observation.operational_evidence.audits:
+        if measurement.missing:
             continue
-        target = int(measurement["target_edge"])
-        report = float(measurement["reported_density"])
-        trusted = float(measurement["measured_density"])
+        target = measurement.target_edge
+        report = measurement.reported_density
+        trusted = measurement.measured_density
         gap = abs(report - trusted) / max(abs(trusted), minimum_density)
         result.append((target, gap))
     return tuple(result)

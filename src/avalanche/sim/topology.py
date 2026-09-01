@@ -7,6 +7,7 @@ The simulator then uses only the arrays in `Topology`.
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from numbers import Integral
 from pathlib import Path
 from types import MappingProxyType
 
@@ -130,6 +131,225 @@ def immutable_array(values: np.ndarray, dtype: str) -> np.ndarray:
     normalized = np.ascontiguousarray(values, dtype=declared)
     buffer = normalized.tobytes(order="C")
     return np.frombuffer(buffer, dtype=declared).reshape(normalized.shape)
+
+
+@dataclass(frozen=True)
+class PublicTopology:
+    """Hold only the public topology fields used by restricted consumers."""
+
+    schema_version: int
+    topology_name: str
+    topology_identity: str
+    node_ids: tuple[str, ...]
+    edge_ids: tuple[str, ...]
+    node_x: np.ndarray
+    node_y: np.ndarray
+    node_elevation: np.ndarray
+    node_type: np.ndarray
+    node_safe_capacity: np.ndarray
+    edge_source: np.ndarray
+    edge_destination: np.ndarray
+    edge_type: np.ndarray
+    edge_difficulty: np.ndarray
+    edge_length: np.ndarray
+    edge_nominal_travel_time: np.ndarray
+    edge_safe_capacity: np.ndarray
+    edge_lift_throughput: np.ndarray
+    edge_offsets: np.ndarray
+    outgoing_edges: np.ndarray
+    piste_permissions: np.ndarray
+    lift_permissions: np.ndarray
+    node_permissions: np.ndarray
+
+    def __post_init__(self) -> None:
+        """Reject malformed public topology fields and freeze each array."""
+        if not isinstance(self.schema_version, Integral) or isinstance(
+            self.schema_version, (bool, np.bool_)
+        ):
+            raise TypeError("the public topology schema must be an integer")
+        if self.schema_version != 1:
+            raise ValueError("the public topology schema is invalid")
+        if not isinstance(self.topology_name, str) or not self.topology_name:
+            raise ValueError("the public topology name must not be empty")
+        if (
+            not isinstance(self.topology_identity, str)
+            or len(self.topology_identity) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.topology_identity
+            )
+        ):
+            raise ValueError("the public topology identity must be a SHA-256 digest")
+        identifiers = (self.node_ids, self.edge_ids)
+        if any(
+            not isinstance(values, tuple)
+            or any(not isinstance(value, str) or not value for value in values)
+            for values in identifiers
+        ):
+            raise TypeError("the public topology identifiers must be text tuples")
+        if not self.node_ids:
+            raise ValueError("the public topology needs at least one node")
+        if len(set(self.node_ids)) != len(self.node_ids):
+            raise ValueError("each public node identifier must be unique")
+        if len(set(self.edge_ids)) != len(self.edge_ids):
+            raise ValueError("each public edge identifier must be unique")
+        node_count = len(self.node_ids)
+        edge_count = len(self.edge_ids)
+        specifications = {
+            "node_x": ("<f4", (node_count,)),
+            "node_y": ("<f4", (node_count,)),
+            "node_elevation": ("<f4", (node_count,)),
+            "node_type": ("|i1", (node_count,)),
+            "node_safe_capacity": ("<i4", (node_count,)),
+            "edge_source": ("<i4", (edge_count,)),
+            "edge_destination": ("<i4", (edge_count,)),
+            "edge_type": ("|i1", (edge_count,)),
+            "edge_difficulty": ("|i1", (edge_count,)),
+            "edge_length": ("<f4", (edge_count,)),
+            "edge_nominal_travel_time": ("<f4", (edge_count,)),
+            "edge_safe_capacity": ("<i4", (edge_count,)),
+            "edge_lift_throughput": ("<f4", (edge_count,)),
+            "edge_offsets": ("<i4", (node_count + 1,)),
+            "outgoing_edges": ("<i4", (edge_count,)),
+            "piste_permissions": ("|b1", (edge_count,)),
+            "lift_permissions": ("|b1", (edge_count,)),
+            "node_permissions": ("|b1", (node_count,)),
+        }
+        for name, (dtype, shape) in specifications.items():
+            values = getattr(self, name)
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"the {name} value must be a NumPy array")
+            if values.dtype != np.dtype(dtype):
+                raise TypeError(f"the {name} dtype must equal {np.dtype(dtype).str}")
+            if values.shape != shape:
+                raise ValueError(f"the {name} shape must equal {shape}")
+            object.__setattr__(self, name, immutable_array(values, dtype))
+        for name in ("node_x", "node_y", "node_elevation"):
+            if not np.all(np.isfinite(getattr(self, name))):
+                raise ValueError(f"the {name} values must be finite")
+        if np.any(self.node_type < 0) or np.any(self.node_type > 4):
+            raise ValueError("a public node type is invalid")
+        if np.any(self.edge_type < 0) or np.any(self.edge_type > 1):
+            raise ValueError("a public edge type is invalid")
+        if np.any(self.edge_difficulty < 0) or np.any(self.edge_difficulty > 4):
+            raise ValueError("a public edge difficulty is invalid")
+        if np.any(self.node_safe_capacity < 0):
+            raise ValueError("a public node capacity must not be negative")
+        for name in (
+            "edge_length",
+            "edge_nominal_travel_time",
+            "edge_safe_capacity",
+            "edge_lift_throughput",
+        ):
+            values = getattr(self, name)
+            if np.any(values < 0) or not np.all(np.isfinite(values)):
+                raise ValueError(f"the {name} values must be finite and nonnegative")
+        if np.any(self.edge_source < 0) or np.any(self.edge_source >= node_count):
+            raise ValueError("a public edge source is outside the topology")
+        if np.any(self.edge_destination < 0) or np.any(
+            self.edge_destination >= node_count
+        ):
+            raise ValueError("a public edge destination is outside the topology")
+        if (
+            self.edge_offsets[0] != 0
+            or self.edge_offsets[-1] != edge_count
+            or np.any(np.diff(self.edge_offsets) < 0)
+        ):
+            raise ValueError("the public edge offsets are invalid")
+        if not np.array_equal(np.sort(self.outgoing_edges), np.arange(edge_count)):
+            raise ValueError("the public outgoing edge mapping is invalid")
+        for node in range(node_count):
+            outgoing = self.edges_from(node)
+            if np.any(self.edge_source[outgoing] != node):
+                raise ValueError("the public outgoing edges must match their source")
+        expected_edge_ids = tuple(
+            f"{self.node_ids[int(source)]}->{self.node_ids[int(destination)]}"
+            for source, destination in zip(
+                self.edge_source,
+                self.edge_destination,
+                strict=True,
+            )
+        )
+        if self.edge_ids != expected_edge_ids:
+            raise ValueError("the public edge identifiers are invalid")
+        piste = EDGE_TYPE_NAMES.index("piste")
+        lift = EDGE_TYPE_NAMES.index("lift")
+        if np.any(self.piste_permissions & (self.edge_type != piste)):
+            raise ValueError("a piste permission must name a public piste")
+        if np.any(self.lift_permissions & (self.edge_type != lift)):
+            raise ValueError("a lift permission must name a public lift")
+
+    @property
+    def node_count(self) -> int:
+        """Return the public node count."""
+        return len(self.node_ids)
+
+    @property
+    def edge_count(self) -> int:
+        """Return the public edge count."""
+        return len(self.edge_ids)
+
+    def node_index(self, identifier: str) -> int:
+        """Resolve one public node identifier."""
+        try:
+            return self.node_ids.index(identifier)
+        except ValueError:
+            raise KeyError(identifier) from None
+
+    def edges_from(self, node: int) -> np.ndarray:
+        """Return the public outgoing edges for one node."""
+        return self.outgoing_edges[
+            self.edge_offsets[node] : self.edge_offsets[node + 1]
+        ]
+
+
+def project_public_topology(topology: Topology | PublicTopology) -> PublicTopology:
+    """Return the exact public topology capability for one consumer."""
+    if type(topology) is PublicTopology:
+        return topology
+    if type(topology) is not Topology:
+        raise TypeError("the topology source type is invalid")
+    edge_ids = tuple(
+        f"{topology.node_ids[int(source)]}->{topology.node_ids[int(destination)]}"
+        for source, destination in zip(
+            topology.edge_source,
+            topology.edge_destination,
+            strict=True,
+        )
+    )
+    piste = EDGE_TYPE_NAMES.index("piste")
+    lift = EDGE_TYPE_NAMES.index("lift")
+    return PublicTopology(
+        schema_version=1,
+        topology_name=topology.name,
+        topology_identity=topology.mountain_sha256,
+        node_ids=topology.node_ids,
+        edge_ids=edge_ids,
+        node_x=topology.node_x,
+        node_y=topology.node_y,
+        node_elevation=topology.node_elevation,
+        node_type=topology.node_type,
+        node_safe_capacity=topology.node_capacity,
+        edge_source=topology.edge_source,
+        edge_destination=topology.edge_destination,
+        edge_type=topology.edge_type,
+        edge_difficulty=topology.edge_difficulty,
+        edge_length=topology.edge_length,
+        edge_nominal_travel_time=topology.edge_nominal_travel_time,
+        edge_safe_capacity=topology.edge_safe_capacity,
+        edge_lift_throughput=topology.edge_lift_throughput,
+        edge_offsets=topology.edge_offsets,
+        outgoing_edges=topology.outgoing_edges,
+        piste_permissions=immutable_array(
+            topology.edge_controllable & (topology.edge_type == piste),
+            "|b1",
+        ),
+        lift_permissions=immutable_array(
+            topology.edge_controllable & (topology.edge_type == lift),
+            "|b1",
+        ),
+        node_permissions=topology.node_controllable,
+    )
 
 
 def load_topology(path: Path) -> Topology:

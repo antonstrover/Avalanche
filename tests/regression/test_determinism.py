@@ -19,11 +19,14 @@ from avalanche.config import (
     load_yaml,
 )
 from avalanche.config.models import PopulationConfig
+from avalanche.controllers.factory import build_fallback
 from avalanche.env import build_resolved_environment, neutral_action
 from avalanche.experiments import run_episode as write_episode
+from avalanche.monitors import build_monitor
 from avalanche.monitors.dataset import DATASET_VERSION
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.perceptron import (
+    MODEL_VERSION,
     TrainedModel,
     TrainingConfig,
     build_network,
@@ -360,7 +363,10 @@ def test_two_seeds_give_different_populations():
     )
 
 
-def resolved_episode_config(seed: int = SEED) -> ResolvedConfig:
+def resolved_episode_config(
+    seed: int = SEED,
+    monitor: str = "configs/monitors/none.yaml",
+) -> ResolvedConfig:
     """Return the exact small configuration for the full episode test."""
     root = Path(tempfile.mkdtemp(prefix="determinism-config-"))
     try:
@@ -369,7 +375,7 @@ def resolved_episode_config(seed: int = SEED) -> ResolvedConfig:
             mountain="configs/mountain/small.yaml",
             scenario="configs/scenarios/default.yaml",
             controller="configs/controllers/small-resort/honest.yaml",
-            monitor="configs/monitors/none.yaml",
+            monitor=monitor,
             changes={
                 "mountain": {"population": {"arrival_window_seconds": 120.0}},
                 "scenario": {
@@ -416,6 +422,30 @@ def resolved_episode_config(seed: int = SEED) -> ResolvedConfig:
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_monitor_kind_change_preserves_the_operational_sensor_packet():
+    """Keep every sensor draw fixed when only the monitor kind changes."""
+    packets = []
+    for monitor in ("configs/monitors/none.yaml", "configs/monitors/outcome.yaml"):
+        resolved = resolved_episode_config(monitor=monitor)
+        env = build_resolved_environment(resolved)
+        env.configure_adjudicator(
+            build_monitor(resolved.monitor, resolved.controller, env.topology),
+            build_fallback(resolved.fallback.policy, resolved.controller, env.topology),
+        )
+        env.reset(seed=resolved.seed)
+        env.step(neutral_action(env.topology))
+        packets.append(env.controller_observation().operational_evidence.packet)
+
+    first, second = packets
+    assert first.packet_identity == second.packet_identity
+    assert tuple(sensor.name for sensor in first.sensors) == tuple(
+        sensor.name for sensor in second.sensors
+    )
+    for left, right in zip(first.sensors, second.sensors, strict=True):
+        np.testing.assert_array_equal(left.values, right.values)
+        np.testing.assert_array_equal(left.missing, right.missing)
 
 
 def run_episode(
@@ -667,7 +697,7 @@ def _always_unsafe_model(path: Path) -> Path:
         feature_deviation=np.ones(len(FEATURE_NAMES), dtype=np.float32),
         config=config,
         metadata={
-            "model_version": 2,
+            "model_version": MODEL_VERSION,
             "model_kind": "perceptron",
             "feature_version": FEATURE_VERSION,
             "information_profile": "principal",
@@ -732,7 +762,7 @@ def _formal_model_reference(
             "dataset": DATASET_VERSION,
             "feature": FEATURE_VERSION,
             "lock": 2,
-            "model": 2,
+            "model": MODEL_VERSION,
         },
         release_url="https://github.com/test/test/releases/download/test-v2",
     )

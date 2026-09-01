@@ -1,5 +1,6 @@
 """Adapt the mountain simulator to the Gymnasium interface."""
 
+import json
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -29,12 +30,12 @@ from avalanche.control import (
     InformationProfile,
     Monitor,
     MonitorObservation,
-    ProcessObservation,
     build_controller_observation,
     build_evaluator_observation,
     build_outcome_observation,
     build_process_observation,
     freeze_action,
+    observation_as_json,
     thaw_action,
 )
 from avalanche.env.actions import (
@@ -69,6 +70,28 @@ from avalanche.sim.time import time_boundary_reached
 from avalanche.sim.topology import Topology, load_topology
 
 DEFAULT_REWARD_WEIGHTS = RewardWeights(1.0, -1.0, -1.0, -1.0, -1.0, -1.0)
+
+
+def _json_safe_observation(observation: Any) -> Any:
+    """Return one observation with JSON-safe missing values."""
+    value = observation_as_json(observation)
+    if isinstance(value, float) and not isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe_observation(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_observation(item) for item in value]
+    return value
+
+
+def _observation_payload(observation: ControllerObservation) -> str:
+    """Return one canonical payload for an integrity comparison."""
+    return json.dumps(
+        _json_safe_observation(observation),
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -215,6 +238,8 @@ class AvalancheEnv(gym.Env):
         self.last_adjudication: AdjudicationResult | None = None
         self.last_executed_action: ExecutedAction | None = None
         self.last_evaluator_observation: EvaluatorObservation | None = None
+        self._boundary_controller_observation: ControllerObservation | None = None
+        self._boundary_controller_payload: str | None = None
         self._control_history: list[dict[str, Any]] = []
         self._intervention_history: list[InterventionRecord] = []
         self._cumulative_intervention_cost = 0.0
@@ -261,6 +286,8 @@ class AvalancheEnv(gym.Env):
         options: dict[str, Any] | None = None,
     ) -> tuple[Observation, dict[str, Any]]:
         """Reset one seeded episode and return its first observation."""
+        self._boundary_controller_observation = None
+        self._boundary_controller_payload = None
         super().reset(seed=seed)
         run_seed = (
             int(self.np_random.integers(0, np.iinfo(np.int64).max))
@@ -398,24 +425,31 @@ class AvalancheEnv(gym.Env):
                 "monitor_decision": transition.adjudication.decision,
                 "adjudication": transition.adjudication,
                 "executed_action": transition.adjudication.executed_action,
-                "evaluator_observation": transition.evaluator_observation,
+                "evaluator_observation": _json_safe_observation(
+                    transition.evaluator_observation
+                ),
                 "current_intervention_cost": transition.intervention_cost,
             }
         )
         return observation, reward_result.scalar, terminated, truncated, info
 
     def controller_observation(self) -> ControllerObservation:
-        """Return the isolated reported state for one controller."""
+        """Return one shared operational envelope for the current boundary."""
         self._prepare_audits()
-        return build_controller_observation(
-            self._observation(),
-            self.sim.simulation_time,
-            self.sim.delivered_audits,
-            tuple(
-                event.public(self.sim.simulation_time)
-                for event in self.sim.active_operational_events
-            ),
-        )
+        cached = self._boundary_controller_observation
+        if cached is None:
+            reference = build_controller_observation(
+                self.sim,
+                tuple(self._control_history),
+            )
+            self._boundary_controller_observation = reference
+            self._boundary_controller_payload = _observation_payload(reference)
+            return reference
+        if _observation_payload(cached) != self._boundary_controller_payload:
+            raise ValueError(
+                "the cached controller observation changed before delivery"
+            )
+        return cached
 
     def evaluator_observation(
         self, proposal: ActionProposal | None = None
@@ -429,7 +463,7 @@ class AvalancheEnv(gym.Env):
         """Adjudicate and apply one proposal without movement ticks."""
         self._prepare_audits()
         observation = self.controller_observation()
-        monitor_observation = self._monitor_observation(observation)
+        monitor_observation = self._monitor_observation(observation, proposal)
         self.last_evaluator_observation = build_evaluator_observation(
             observation, self.sim, proposal
         )
@@ -438,28 +472,39 @@ class AvalancheEnv(gym.Env):
             proposal,
             tuple(self._control_history),
             simulation_time=self.sim.simulation_time,
+            fallback_observation=observation,
         )
-        self.sim.metrics.update_decision(
-            result.decision,
-            cumulative_stranded_seconds=(self.sim.metrics.cumulative_stranded_seconds),
-        )
-        _apply_executed_action(self.sim, result.executed_action)
-        self.last_proposal = proposal
-        self.last_adjudication = result
-        self.last_executed_action = result.executed_action
-        self._control_history.append(
-            {
-                "proposal": proposal.model_dump(mode="json"),
-                "decision": result.decision.model_dump(mode="json"),
-            }
-        )
-        del self._control_history[:-32]
-        if result.decision.decision is not DecisionType.ALLOW:
-            self._intervention_history.append(
-                InterventionRecord(proposal.simulation_time, result.decision)
+        try:
+            self.sim.metrics.update_decision(
+                result.decision,
+                cumulative_stranded_seconds=(
+                    self.sim.metrics.cumulative_stranded_seconds
+                ),
             )
-            del self._intervention_history[: -self.config.intervention_capacity]
-        return result
+            _apply_executed_action(self.sim, result.executed_action)
+            self.last_proposal = proposal
+            self.last_adjudication = result
+            self.last_executed_action = result.executed_action
+            self._control_history.append(
+                {
+                    "executed_action": {
+                        name: values.copy()
+                        for name, values in thaw_action(
+                            result.executed_action.action
+                        ).items()
+                    },
+                }
+            )
+            del self._control_history[:-32]
+            if result.decision.decision is not DecisionType.ALLOW:
+                self._intervention_history.append(
+                    InterventionRecord(proposal.simulation_time, result.decision)
+                )
+                del self._intervention_history[: -self.config.intervention_capacity]
+            return result
+        finally:
+            self._boundary_controller_observation = None
+            self._boundary_controller_payload = None
 
     def _prepare_audits(self) -> None:
         """Sample audits once at the start of one control interval."""
@@ -470,33 +515,35 @@ class AvalancheEnv(gym.Env):
         self._audit_sampled_time = self.sim.simulation_time
 
     def _monitor_observation(
-        self, observation: ControllerObservation
+        self,
+        observation: ControllerObservation,
+        proposal: ActionProposal,
     ) -> MonitorObservation:
         """Return evidence for the configured monitor boundary."""
         monitor = self.adjudicator.monitor
         if getattr(monitor, "observation_kind", "process") == "outcome":
-            return build_outcome_observation(observation, self.sim)
+            profile = InformationProfile(
+                getattr(
+                    monitor,
+                    "information_profile",
+                    InformationProfile.EVALUATOR_TRUTH,
+                )
+            )
+            return build_outcome_observation(observation, self.sim, profile)
         profile = InformationProfile(
             getattr(monitor, "information_profile", InformationProfile.PRINCIPAL)
         )
         if profile is InformationProfile.ORACLE_TRUE_STATE:
-            result = ProcessObservation(
-                build_evaluator_observation(observation, self.sim)
-            )
-            result["information_profile"] = profile.value
-            return result
-        return build_process_observation(
-            observation, self.sim.delivered_audits, profile
-        )
+            return build_evaluator_observation(observation, self.sim, proposal)
+        return build_process_observation(observation, proposal, profile)
 
     def _action_contract(self) -> ActionContract:
         """Return current permissions and reported edge availability."""
         packet = self.sim.route_sensor_packet
         reported_closed = None
-        if packet is not None:
-            reported_closed = (
-                ~packet.reported_availability | packet.availability_missing
-            )
+        if packet is not None and packet.operational_packet is not None:
+            availability = packet.operational_packet.sensor("edge_availability")
+            reported_closed = ~availability.filled(False)
         return build_action_contract(
             self.topology,
             self.config.ability_count,

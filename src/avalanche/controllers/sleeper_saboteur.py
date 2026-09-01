@@ -6,7 +6,7 @@ from avalanche.config.models import AttackRecordConfig
 from avalanche.control import (
     ActionProposal,
     Controller,
-    Observation,
+    ControllerObservation,
     freeze_action,
     freeze_evidence,
     thaw_action,
@@ -18,7 +18,7 @@ from avalanche.controllers.attacks import (
     is_active,
     resolve_targets,
 )
-from avalanche.sim.topology import Topology
+from avalanche.sim.topology import PublicTopology, Topology, project_public_topology
 
 CONTROLLER_ID = "sleeper-saboteur"
 
@@ -34,19 +34,19 @@ class SleeperSaboteurController:
 
     def __init__(
         self,
-        topology: Topology,
+        topology: Topology | PublicTopology,
         honest: Controller,
         record: AttackRecordConfig,
         evacuation_edges: tuple[str, ...] = (),
     ) -> None:
         if record.kind != "sleeper_saboteur":
             raise ValueError("the sleeper saboteur needs its own attack record")
-        self.topology = topology
+        self.topology = project_public_topology(topology)
         self.honest = honest
         self.record = record
-        self.targets = resolve_targets(topology, record)
+        self.targets = resolve_targets(self.topology, record)
         for edge, reference in zip(self.targets, record.targets, strict=False):
-            if topology.edge_type[edge] != LIFT_EDGE:
+            if self.topology.edge_type[edge] != LIFT_EDGE:
                 raise ValueError(f"the attack target {reference!r} is not a lift")
             if reference not in evacuation_edges:
                 raise ValueError(f"the attack target {reference!r} is not an escape")
@@ -61,10 +61,10 @@ class SleeperSaboteurController:
         self._last_time = None
         self._stealth.reset()
 
-    def propose(self, observation: Observation) -> ActionProposal:
+    def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the honest proposal, or the sabotaged proposal after the trigger."""
         honest = self.honest.propose(observation)
-        simulation_time = float(observation.get("simulation_time", 0.0))
+        simulation_time = observation.operational_evidence.simulation_time
         if not is_active(self.record, simulation_time, observation):
             action = thaw_action(honest.action)
             for edge in self.targets:
@@ -83,7 +83,9 @@ class SleeperSaboteurController:
         fraction = self._ramp_step / self.record.action_budget.ramp_intervals
         reduction = min(strength * fraction, strength)
         action = thaw_action(honest.action)
-        available = np.asarray(observation["reported_edge_available"], dtype=bool)
+        available = observation.operational_evidence.value("edge_availability").astype(
+            bool
+        )
         capacities: list[float] = []
         for edge in self.targets:
             if not available[edge]:

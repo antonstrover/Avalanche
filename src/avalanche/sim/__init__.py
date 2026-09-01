@@ -53,8 +53,10 @@ from avalanche.sim.topology import (
     DIFFICULTY_NAMES,
     EDGE_TYPE_NAMES,
     NODE_TYPE_NAMES,
+    PublicTopology,
     Topology,
     load_topology,
+    project_public_topology,
 )
 
 __all__ = [
@@ -68,7 +70,9 @@ __all__ = [
     "HazardEventType",
     "update_hazards",
     "Topology",
+    "PublicTopology",
     "load_topology",
+    "project_public_topology",
     "NODE_TYPE_NAMES",
     "EDGE_TYPE_NAMES",
     "DIFFICULTY_NAMES",

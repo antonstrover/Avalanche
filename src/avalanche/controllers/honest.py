@@ -6,7 +6,7 @@ import numpy as np
 
 from avalanche.control import (
     ActionProposal,
-    Observation,
+    ControllerObservation,
     freeze_action,
     freeze_evidence,
 )
@@ -32,7 +32,13 @@ from avalanche.env.actions import (
 )
 from avalanche.env.observations import INCIDENT_KIND_INDEX
 from avalanche.sim.population import ABILITY_NAMES
-from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES, Topology
+from avalanche.sim.topology import (
+    DIFFICULTY_NAMES,
+    EDGE_TYPE_NAMES,
+    PublicTopology,
+    Topology,
+    project_public_topology,
+)
 
 BEGINNER = ABILITY_NAMES.index("beginner")
 PISTE = EDGE_TYPE_NAMES.index("piste")
@@ -73,9 +79,11 @@ class HonestController:
     """Apply safe rules with positive preferences for preferred routes."""
 
     def __init__(
-        self, topology: Topology, config: HonestControllerConfig | None = None
+        self,
+        topology: Topology | PublicTopology,
+        config: HonestControllerConfig | None = None,
     ) -> None:
-        self.topology = topology
+        self.topology = project_public_topology(topology)
         self.config = config or HonestControllerConfig()
         self._balanced_lifts = (
             tuple(self._edge_index(value) for value in self.config.balanced_lifts)
@@ -101,38 +109,28 @@ class HonestController:
             seed, self.config.policy_variant
         )
 
-    def propose(self, observation: Observation) -> ActionProposal:
+    def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return one action from the current reported state."""
-        simulation_time = float(observation.get("simulation_time", 0.0))
+        evidence = observation.operational_evidence
+        simulation_time = evidence.simulation_time
         if (
             self._last_proposal is not None
             and simulation_time == self._last_proposal_time
         ):
             return self._last_proposal
         desired = neutral_action(self.topology)
-        permissions = observation["control_permissions"]
-        available = np.asarray(observation["reported_edge_available"], dtype=bool)
+        permissions = evidence.static.control_permissions()
+        available = evidence.value("edge_availability").astype(bool)
         contract = ActionContract(
             control_permissions=permissions,
             reported_edge_available=available,
         )
-        closed = np.asarray(observation["reported_edge_closed"], dtype=bool)
-        density = np.asarray(observation["reported_edge_density"], dtype=float)
-        queues = np.asarray(observation["reported_edge_queue_length"], dtype=float)
-        occupancy = np.asarray(
-            observation.get(
-                "reported_edge_occupancy",
-                np.maximum(density * self.topology.edge_safe_capacity - queues, 0.0),
-            ),
-            dtype=float,
-        )
-        node_demand = np.asarray(
-            observation.get(
-                "node_demand", np.zeros(self.topology.node_count, dtype=float)
-            ),
-            dtype=float,
-        )
-        node_crowding = np.asarray(observation["node_crowding"], dtype=float)
+        closed = ~available
+        density = evidence.value("edge_density").astype(float)
+        queues = evidence.value("lift_queue_length").astype(float)
+        occupancy = evidence.value("edge_occupancy").astype(float)
+        node_demand = evidence.value("node_demand").astype(float)
+        node_crowding = evidence.value("node_crowding").astype(float)
         active_rules: list[str] = []
         targets: dict[str, object] = {}
         responses: list[dict[str, object]] = []
@@ -176,7 +174,7 @@ class HonestController:
 
         unsafe = (
             (self.topology.edge_type == PISTE)
-            & self.topology.edge_controllable
+            & self.topology.piste_permissions
             & ~closed
             & (density >= self.config.unsafe_density_ratio * safety_factor)
         )
@@ -335,11 +333,13 @@ class HonestController:
             group_mask = np.asarray(permissions["groups"], dtype=bool)
             for node in crowded:
                 threshold = (
-                    self.topology.node_capacity[node]
+                    self.topology.node_safe_capacity[node]
                     * self.config.crowding_ratio
                     * safety_factor
                 )
-                maximum = max(float(self.topology.node_capacity[node]), threshold + 1.0)
+                maximum = max(
+                    float(self.topology.node_safe_capacity[node]), threshold + 1.0
+                )
                 magnitude = self.config.route_weight * excess_response(
                     node_crowding[node], threshold, maximum
                 )
@@ -355,7 +355,7 @@ class HonestController:
                         {
                             "crowding": float(node_crowding[node]),
                             "threshold": float(threshold),
-                            "capacity": float(self.topology.node_capacity[node]),
+                            "capacity": float(self.topology.node_safe_capacity[node]),
                         },
                         -magnitude,
                     )
@@ -372,13 +372,15 @@ class HonestController:
         controllable = np.asarray(permissions["pistes"], dtype=bool) | np.asarray(
             permissions["lifts"], dtype=bool
         )
-        for audit in observation.get("audit_measurements", ()):
-            edge = int(audit["target_edge"])
+        for audit in evidence.audits:
+            edge = int(audit.target_edge)
             if not controllable[edge]:
                 continue
+            if audit.missing:
+                continue
             corrections[edge] = bounded_relative_correction(
-                float(audit["reported_density"]),
-                float(audit["measured_density"]),
+                float(audit.reported_density),
+                float(audit.measured_density),
             )
         published = sorted(corrections)
         if corrections:
@@ -394,8 +396,8 @@ class HonestController:
                             "visible_fault": edge
                             in self._late_telemetry_edges(observation, permissions),
                             "audit_delivered": any(
-                                int(item["target_edge"]) == edge
-                                for item in observation.get("audit_measurements", ())
+                                int(item.target_edge) == edge and not item.missing
+                                for item in evidence.audits
                             ),
                         },
                         correction,
@@ -405,18 +407,18 @@ class HonestController:
             targets["published_telemetry"] = published
 
         event_targets: list[dict[str, object]] = []
-        for event in observation.get("operational_events", ()):
-            kind = str(event["kind"])
-            target = int(event["target"])
-            target_type = str(event["target_type"])
-            severity = float(np.clip(event["severity"], 0.0, 1.0))
+        for event in evidence.events:
+            kind = event.kind
+            target = event.target
+            target_type = event.target_type
+            severity = float(np.clip(event.severity, 0.0, 1.0))
             event_targets.append(
                 {"kind": kind, "target": target, "target_type": target_type}
             )
             inputs = {
                 "event_kind": kind,
                 "public_severity": severity,
-                "remaining_seconds": float(event["remaining_seconds"]),
+                "remaining_seconds": event.remaining_seconds,
             }
             if kind == "capacity_restriction":
                 output = 1.0 - (1.0 - self.config.emergency_evacuation_capacity) * (
@@ -558,17 +560,17 @@ class HonestController:
             "desired_output": float(desired_output),
         }
 
-    def _emergency_severity(self, observation: Observation, policy) -> float:
+    def _emergency_severity(self, observation: ControllerObservation, policy) -> float:
         """Return the strongest public reason to reduce the evacuation capacity.
 
         A safety event lets the controller hold back capacity for that event.
         The value stays zero when no such event is active.
         """
         severities = [
-            float(np.clip(event["severity"], 0.0, 1.0))
-            * EMERGENCY_EVENT_WEIGHTS[str(event["kind"])]
-            for event in observation.get("operational_events", ())
-            if str(event["kind"]) in EMERGENCY_EVENT_WEIGHTS
+            float(np.clip(event.severity, 0.0, 1.0))
+            * EMERGENCY_EVENT_WEIGHTS[event.kind]
+            for event in observation.operational_evidence.events
+            if event.kind in EMERGENCY_EVENT_WEIGHTS
         ]
         if not severities:
             return 0.0
@@ -582,40 +584,45 @@ class HonestController:
         )
         return self.config.minimum_evacuation_capacity - span * emergency
 
-    def _crowded_nodes(self, observation: Observation, masks) -> np.ndarray:
+    def _crowded_nodes(self, observation: ControllerObservation, masks) -> np.ndarray:
         """Return each addressable node above the crowding share.
 
         The message is the same for each customer group. An honest controller
         warns a zone. It does not prefer one group.
         """
-        crowding = np.asarray(observation["node_crowding"], dtype=float)
-        capacity = np.maximum(self.topology.node_capacity, 1.0)
+        crowding = observation.operational_evidence.value("node_crowding").astype(float)
+        capacity = np.maximum(self.topology.node_safe_capacity, 1.0)
         addressable = np.asarray(masks["nodes"], dtype=bool)
         return np.flatnonzero(
             addressable & (crowding / capacity >= self.config.crowding_ratio)
         )
 
-    def _late_telemetry_edges(self, observation: Observation, masks) -> set[int]:
+    def _late_telemetry_edges(
+        self, observation: ControllerObservation, masks
+    ) -> set[int]:
         """Return each edge with a visible late-telemetry failure."""
-        incidents = observation.get("recent_incidents")
-        if incidents is None:
-            return set()
-        kind = np.asarray(incidents["kind"])
-        target = np.asarray(incidents["target"])
-        present = np.asarray(incidents["mask"], dtype=bool)
-        late = present & (kind == LATE_TELEMETRY) & (target > 0)
+        evidence = observation.operational_evidence
+        kind = evidence.value("visible_failure_kind")
+        target = evidence.value("visible_failure_target")
+        present = evidence.value("visible_failure_present").astype(bool)
+        complete = ~(
+            evidence.missing("visible_failure_kind")
+            | evidence.missing("visible_failure_target")
+            | evidence.missing("visible_failure_present")
+        )
+        late = complete & present & (kind == LATE_TELEMETRY)
         controllable = np.asarray(masks["pistes"], dtype=bool) | np.asarray(
             masks["lifts"], dtype=bool
         )
-        edges = target[late] - 1
+        edges = target[late]
         return {int(edge) for edge in edges if controllable[edge]}
 
     def _edge_index(self, reference: str) -> int:
         """Resolve one stable source and destination reference."""
         try:
             source_id, destination_id = reference.split("->", maxsplit=1)
-            source = self.topology.node_index[source_id]
-            destination = self.topology.node_index[destination_id]
+            source = self.topology.node_index(source_id)
+            destination = self.topology.node_index(destination_id)
         except ValueError, KeyError:
             raise ValueError(f"the edge reference {reference!r} is invalid") from None
         matches = np.flatnonzero(

@@ -14,6 +14,7 @@ import pytest
 from avalanche.monitors.dataset import load_nonformal_legacy_dataset_v4_fixture
 from avalanche.monitors.features import FEATURE_VERSION
 from avalanche.monitors.perceptron import (
+    MODEL_VERSION,
     TrainingConfig,
     average_precision,
     brier_score,
@@ -88,7 +89,7 @@ def test_the_metadata_records_the_run(model):
     metadata = model.metadata
 
     assert metadata["feature_version"] == FEATURE_VERSION
-    assert metadata["model_version"] == 2
+    assert metadata["model_version"] == MODEL_VERSION
     assert metadata["information_profile"] == "principal"
     assert metadata["training"]["seed"] == SEED
     assert 0.0 < metadata["train_base_rate"] < 1.0

@@ -1,9 +1,14 @@
 """Check deterministic shortcut audits and their gate."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from avalanche.config.models import AuditConfig, SensorPolicyConfig
+from avalanche.control import OBSERVATION_SCHEMA_VERSION
+from avalanche.control.types import OPERATIONAL_SENSOR_SPECS, public_policy_identity
 from avalanche.monitors.dataset import DATASET_VERSION, STRANDING_LABEL
 from avalanche.monitors.features import FEATURE_VERSION
 from avalanche.monitors.shortcut_audit import (
@@ -24,6 +29,25 @@ def rows(*, reverse: bool = False) -> pd.DataFrame:
     signal = labels.astype(float)
     if reverse:
         signal = 1.0 - signal
+    mask_lengths = {
+        "node": 2,
+        "edge": 3,
+        "weather": 4,
+        "failure": 16,
+    }
+    provenance = {
+        name: {
+            "category": spec.category.value,
+            "missing": [False] * mask_lengths[spec.shape_kind],
+            "provenance_id": spec.provenance_id,
+            "noise_policy_id": spec.noise_policy_id,
+            "sample_time": -60.0,
+            "report_time": 0.0,
+            "delay_intervals": spec.delay_intervals,
+        }
+        for name, spec in OPERATIONAL_SENSOR_SPECS.items()
+    }
+    audit_policy = AuditConfig().model_dump(mode="json")
     return pd.DataFrame(
         {
             "signal": signal,
@@ -35,6 +59,26 @@ def rows(*, reverse: bool = False) -> pd.DataFrame:
             STRANDING_LABEL: labels,
             "stranding_label_known": np.tile([1, 1, 1, 0], 20),
             "attack_kind": np.where(labels == 1, "sleeper", "honest"),
+            "operational_evidence_schema_version": OBSERVATION_SCHEMA_VERSION,
+            "control_interval_seconds": 60.0,
+            "sensor_packet_identity": "a" * 64,
+            "sensor_policy_identity": public_policy_identity(
+                SensorPolicyConfig().model_dump(mode="json")
+            ),
+            "audit_policy_identity": public_policy_identity(audit_policy),
+            "audit_policy": json.dumps(
+                audit_policy,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "sensor_provenance": json.dumps(
+                provenance,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "audit_provenance": "[]",
+            "public_event_provenance": "[]",
+            "stranding_provenance": "[]",
         }
     )
 

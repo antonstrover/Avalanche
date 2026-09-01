@@ -15,8 +15,6 @@ from pathlib import Path
 
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
-from avalanche.monitors.features import feature_names_for
-from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import (
     CALIBRATION_VERSION,
     FALSE_ALARM_BUDGET,
@@ -198,7 +196,7 @@ def _write_reconstruction(
         attempt_name=attempt_name,
         model_kind=str(attempt["model_kind"]),
         information_profile=InformationProfile.PRINCIPAL.value,
-        feature_names=feature_names_for(InformationProfile.PRINCIPAL),
+        feature_names=tuple(str(name) for name in summary["feature_names"]),
         model_filename=model_filename,
         model_sha256=_checksum(model_path),
         calibration_filename=calibration_filename,
@@ -225,7 +223,7 @@ def _write_reconstruction(
             "dataset": int(summary["dataset_version"]),
             "feature": int(summary["feature_version"]),
             "lock": LOCK_VERSION,
-            "model": MODEL_VERSION,
+            "model": int(summary["model_version"]),
         },
         release_url=release_url,
     )

@@ -10,7 +10,7 @@ from avalanche.control import (
     MonitorDecision,
     MonitorRefusal,
     ProposalEngineeringError,
-    build_monitor_observation,
+    build_process_observation,
     freeze_action,
     thaw_action,
 )
@@ -22,7 +22,7 @@ from avalanche.env import (
     validate_action,
 )
 from avalanche.sim.skier import LocationKind, Status
-from avalanche.sim.topology import Topology
+from avalanche.sim.topology import PublicTopology, Topology
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -152,6 +152,12 @@ def adjudicator(env: AvalancheEnv, monitor) -> Adjudicator:
     )
 
 
+def boundary_observations(env: AvalancheEnv, proposed: ActionProposal):
+    """Return matching controller and process envelopes."""
+    controller = env.controller_observation()
+    return build_process_observation(controller, proposed), controller
+
+
 def test_shared_references_do_not_change_the_simulator():
     env = configured_env()
     observation = env._observation()
@@ -161,11 +167,13 @@ def test_shared_references_do_not_change_the_simulator():
 
     action["route_weights"].fill(1.0)
     observation["reported_edge_occupancy"].fill(99.0)
+    process, controller = boundary_observations(env, proposed)
 
     result = adjudicator(env, AllowMonitor()).adjudicate(
-        build_monitor_observation(env._observation(), env.sim),
+        process,
         proposed,
         simulation_time=env.sim.simulation_time,
+        fallback_observation=controller,
     )
     assert env.sim.state_checksum() == checksum
     assert not np.any(result.executed_action.action.route_weights)
@@ -201,7 +209,7 @@ def test_a_controller_cannot_mutate_the_shared_topology(controller_type):
     assert env.sim.state_checksum() == checksum
 
 
-def test_a_normal_proposal_keeps_the_shared_topology_identity():
+def test_a_normal_proposal_keeps_only_the_public_topology():
     env = configured_env()
     topology = env.topology
     controller = HonestController(topology)
@@ -211,7 +219,10 @@ def test_a_normal_proposal_keeps_the_shared_topology_identity():
 
     controller.propose(env.controller_observation())
 
-    assert controller.topology is topology
+    assert type(controller.topology) is PublicTopology
+    assert controller.topology is not topology
+    assert not hasattr(controller.topology, "edge_critical_density")
+    assert not hasattr(controller.topology, "edge_wind_sensitivity")
     assert env.topology is topology
     assert (
         tuple(
@@ -260,11 +271,14 @@ def test_a_malformed_proposal_does_not_reach_the_monitor():
     action = neutral_action(env.topology)
     action["route_weights"] = np.zeros((1, 1), dtype=np.float32)
 
+    proposed = proposal(env, action)
+    process, controller = boundary_observations(env, proposed)
     with pytest.raises(ProposalEngineeringError) as caught:
         adjudicator(env, monitor).adjudicate(
-            build_monitor_observation(env._observation(), env.sim),
-            proposal(env, action),
+            process,
+            proposed,
             simulation_time=env.sim.simulation_time,
+            fallback_observation=controller,
         )
 
     assert caught.value.code.value == "INVALID_PROPOSAL"
@@ -274,12 +288,15 @@ def test_a_malformed_proposal_does_not_reach_the_monitor():
 def test_an_expected_monitor_refusal_has_safe_details():
     env = configured_env()
     checksum = env.sim.state_checksum()
+    proposed = proposal(env, neutral_action(env.topology))
+    process, controller = boundary_observations(env, proposed)
 
     with pytest.raises(ProposalEngineeringError) as caught:
         adjudicator(env, RefusingMonitor()).adjudicate(
-            build_monitor_observation(env._observation(), env.sim),
-            proposal(env, neutral_action(env.topology)),
+            process,
+            proposed,
             simulation_time=env.sim.simulation_time,
+            fallback_observation=controller,
         )
 
     payload = caught.value.as_dict()
@@ -294,12 +311,15 @@ def test_an_expected_monitor_refusal_has_safe_details():
 def test_an_unexpected_monitor_fault_has_one_bounded_traceback():
     env = configured_env()
     checksum = env.sim.state_checksum()
+    proposed = proposal(env, neutral_action(env.topology))
+    process, controller = boundary_observations(env, proposed)
 
     with pytest.raises(ProposalEngineeringError) as caught:
         adjudicator(env, FaultingMonitor()).adjudicate(
-            build_monitor_observation(env._observation(), env.sim),
-            proposal(env, neutral_action(env.topology)),
+            process,
+            proposed,
             simulation_time=env.sim.simulation_time,
+            fallback_observation=controller,
         )
 
     payload = caught.value.as_dict()

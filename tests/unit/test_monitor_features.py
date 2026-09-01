@@ -15,6 +15,7 @@ from avalanche.control import (
     build_monitor_observation,
     build_monitor_proposal,
     sanitize_trace_window,
+    thaw_action,
 )
 from avalanche.controllers.factory import build_controller, build_fallback
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
@@ -31,6 +32,11 @@ from avalanche.monitors.rules import RuleMonitor
 CONFIGS = Path(__file__).resolve().parents[2] / "configs" / "mountain"
 MOUNTAINS = ("small-resort.yaml", "medium-resort.yaml")
 SEED = 20260825
+FEATURE_PROFILES = (
+    InformationProfile.PRINCIPAL,
+    InformationProfile.ORACLE_FALLBACK,
+    InformationProfile.ORACLE_TRUE_STATE,
+)
 
 POPULATION = PopulationConfig(
     skier_count=200,
@@ -63,21 +69,21 @@ def make_context(
     controller.reset(SEED)
     complete = controller.propose(env.controller_observation())
     proposal = build_monitor_proposal(complete)
-    observation = build_monitor_observation(
-        env.controller_observation(), env.sim, profile
+    observation = build_monitor_observation(env.sim, complete, profile)
+    reference_fallback = (
+        build_fallback("honest", controller_config, env.topology)
+        if profile is InformationProfile.ORACLE_FALLBACK
+        else None
     )
     extractor = FeatureExtractor(
-        build_fallback("honest", controller_config, env.topology),
+        reference_fallback,
         RuleMonitor(env.topology),
         profile,
         feature_blocks,
     )
     extractor.reset(SEED)
     history = tuple(
-        {
-            "proposal": complete.model_dump(mode="json"),
-            "decision": {"risk_score": 0.5, "decision": "ALLOW"},
-        }
+        {"executed_action": thaw_action(complete.action)}
         for _ in range(history_entries)
     )
     return observation, proposal, extractor, sanitize_trace_window(history)
@@ -100,7 +106,7 @@ def test_the_names_match_the_values():
 
 def test_two_mountains_of_a_different_size_give_the_same_shape():
     small_topology_edges, medium_topology_edges = (
-        len(make_context(mountain)[0]["reported_edge_density"])
+        len(make_context(mountain)[0].operational_evidence.value("edge_density"))
         for mountain in MOUNTAINS
     )
     assert small_topology_edges != medium_topology_edges
@@ -129,7 +135,7 @@ def test_a_short_history_pads_and_a_long_history_truncates(entries):
 def test_the_principal_profile_excludes_prohibited_features():
     prohibited = ("identical", "remaining_time", "true_", "harm", "simulation_time")
 
-    assert FEATURE_VERSION == 3
+    assert FEATURE_VERSION == 4
     assert all(part not in name for name in FEATURE_NAMES for part in prohibited)
 
 
@@ -146,7 +152,7 @@ def test_the_fallback_oracle_uses_distances_without_exact_equality():
     assert all("identical" not in name for name in names)
 
 
-@pytest.mark.parametrize("profile", list(InformationProfile))
+@pytest.mark.parametrize("profile", FEATURE_PROFILES)
 def test_each_information_profile_has_one_fixed_schema(profile):
     observation, proposal, extractor, history = make_context(
         "small-resort.yaml", profile=profile

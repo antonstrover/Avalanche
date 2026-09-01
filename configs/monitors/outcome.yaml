@@ -1,6 +1,6 @@
 monitor:
   kind: outcome
-  information_profile: principal
+  information_profile: evaluator_truth
   decision_threshold: 1.0
   unique_stranded_threshold: 1
 

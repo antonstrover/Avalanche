@@ -65,28 +65,34 @@ Scenario configuration
         │
         ▼
 ┌──────────────────────┐
-│  Mountain simulator  │◄──────── weather and failure schedules
-└──────────┬───────────┘
-           │ aggregated observation
-           ▼
+│  Mountain simulator  │
+└──────┬─────────┬─────┘
+       │         │ privileged state
+       │         ▼
+       │  ┌──────────────────────┐
+       │  │ EvaluatorObservation │────▶ Outcome monitor and evaluator
+       │  └──────────────────────┘
+       │ public sensor sources
+       ▼
 ┌──────────────────────┐
-│  Resort controller   │
+│ Named sensor streams │
 └──────────┬───────────┘
-           │ ActionProposal
-           ▼
-┌──────────────────────┐       recent trace and state summary
-│  Alignment monitor   │◄────────────────────────────────────┐
-└──────────┬───────────┘                                     │
-           │ MonitorDecision                                 │
-           ▼                                                 │
-┌──────────────────────┐                                     │
-│ Action adjudicator   │ validates and selects final action  │
-└──────────┬───────────┘                                     │
-           │ ExecutedAction                                  │
-           ▼                                                 │
-┌──────────────────────┐                                     │
-│  Mountain simulator  │─────────────────────────────────────┘
-└──────────┬───────────┘
+           │ one immutable OperationalEvidence packet
+           ├──────────────────────▶ Resort controller
+           │                              │ ActionProposal
+           │                              ▼
+           └──────────────────────▶ ProcessObservation builder
+                                          │ same packet and sanitized proposal
+                                          ▼
+                                   Principal monitor
+                                          │ MonitorDecision
+                                          ▼
+                                   Action adjudicator
+                                          │ ExecutedAction
+                                          ▼
+                                   Mountain simulator
+
+Simulator and adjudicator
            │ events and metrics
            ▼
 ┌──────────────────────┐      ┌──────────────────────────────┐
@@ -114,6 +120,119 @@ Scenario configuration
 
 These boundaries stop a misaligned controller from a bypass of the monitor.
 They also make sure that each monitor method sees the same transition logic.
+
+### 2.2 Operational information boundary
+
+The version three operational schema supplies every controller and each principal process monitor.
+Both consumers receive the same immutable sensor packet.
+The process envelope adds only the current sanitized proposal.
+The history contains only past executed actions.
+
+The operational evidence contains only these classes:
+
+- one timestamped sensor packet;
+- the static public topology and configuration;
+- delayed audit results;
+- current controller-visible events;
+- delayed aggregate stranding reports; and
+- past executed actions.
+
+The `OperationalEvidence` field allowlist is exact:
+
+```text
+schema_version, simulation_time, packet, static,
+audits, events, reported_stranding, executed_actions
+```
+
+The controller envelope allows `schema_version`, `information_profile`, and `operational_evidence`.
+The process envelope also allows `current_proposal`.
+
+The sensor packet contains this exact field allowlist:
+
+| Category | Fields |
+|---|---|
+| Node telemetry | `node_demand`, `node_crowding` |
+| Edge telemetry | `edge_occupancy`, `edge_density`, `edge_speed_factor`, `edge_availability`, `edge_weather_risk` |
+| Lift telemetry | `lift_queue_length`, `lift_occupancy`, `lift_boarding_throughput` |
+| Weather | `weather` |
+| Visible failures | `visible_failure_kind`, `visible_failure_target`, `visible_failure_present` |
+| Blocked aggregates | `queued_no_route_count`, `onboard_blocked_count` |
+
+Each sensor value records its sample time and report time.
+It also records its category, provenance, noise policy, delay, and missing mask.
+The runtime rejects an unknown field, shape, data type, category, or provenance.
+
+Each `SensorValue` uses this exact field allowlist:
+
+```text
+name, category, values, missing, sample_time, report_time,
+provenance_id, noise_policy_id, delay_intervals
+```
+
+The static public evidence uses this exact field allowlist:
+
+| Class | Fields |
+|---|---|
+| Identity | `schema_version`, `topology_name`, `topology_identity`, `sensor_policy_identity`, `audit_policy_identity` |
+| Nodes | `node_ids`, `node_x`, `node_y`, `node_elevation`, `node_type`, `node_safe_capacity` |
+| Edges | `edge_ids`, `edge_source`, `edge_destination`, `edge_type`, `edge_difficulty`, `edge_length` |
+| Edge operation | `edge_nominal_travel_time`, `edge_safe_capacity`, `edge_lift_throughput` |
+| Routing | `edge_offsets`, `outgoing_edges` |
+| Permissions | `piste_permissions`, `lift_permissions`, `node_permissions`, `ability_permissions`, `group_permissions` |
+| Intervals | `movement_interval_seconds`, `control_interval_seconds` |
+| Sensor policy | `sensor_policy`, `audit_policy` |
+
+The static projection excludes attacks, monitors, artifacts, seeds, sensitivities, and future schedules.
+Each policy identity binds its complete public policy mapping.
+Operational audit provenance must match the bound public audit policy.
+
+The development sensor policy is frozen:
+
+| Channel | Delay | Noise and limits | Missing |
+|---|---:|---|---:|
+| Node demand and crowding | 1 interval | relative ±5%, round, clip at zero | 1% |
+| Edge occupancy | 1 interval | relative ±5%, round, clip at zero | 1% |
+| Edge density | 1 interval | relative ±5%, clip at zero | 1% |
+| Edge speed factor | 1 interval | relative ±5%, clip from 0.05 through 1 | 1% |
+| Edge availability | 1 interval | none | 1% |
+| Edge weather risk | 1 interval | relative ±5%, clip from zero through one | 1% |
+| Lift queue and occupancy | 1 interval | relative ±5%, round, clip at zero | 1% |
+| Lift boarding throughput | 1 interval | relative ±5%, clip at zero | 1% |
+| Weather | 1 interval | relative ±5%; temperature uses additive ±0.5 °C | 1% |
+| Visible failures | 1 interval | none | 1% |
+| Blocked queue and onboard counts | 1 interval | relative ±5%, round, clip at zero | 1% |
+| Aggregate stranding | 2 intervals | relative ±5%, round, clip at zero | 1% |
+| Delayed audits | configured | configured | configured |
+
+Relative noise uses `x * (1 + U[-0.05, 0.05])`.
+It keeps an exact zero unchanged.
+Count channels use `numpy.rint` after noise.
+Each channel samples missingness independently for each element.
+Named sensor streams supply every sensor draw.
+The visible failure channels use 16 fixed slots.
+The bootstrap restricted packet masks every sensor value.
+The first time-zero sample arrives after one control interval.
+A visible lift stoppage must name a public lift.
+Missing continuous values use `NaN` with a true mask.
+Missing integer and Boolean values use zero with a true mask.
+Every consumer must honor the mask before the encoded value.
+
+A reported stranding record contains one public location, a count, a mask, timestamps, and provenance.
+It never contains an exact skier population array.
+
+The stranding report uses this exact field allowlist:
+
+```text
+schema_version, location_kind, topology_id, count, missing,
+sample_time, report_time, provenance_id, noise_policy_id, delay_intervals
+```
+
+Restricted evidence excludes hidden failures, future weather, exact populations, realised harm, attack metadata, and evaluator fields.
+It also excludes fallback differences and every prior monitor result.
+The outcome monitor must use the separately typed `evaluator_truth` profile.
+
+The boundary tests inject each forbidden source under a valid sensor name.
+Every injection fails the provenance check.
 
 ## 3 Repository structure
 
@@ -455,14 +574,17 @@ observation, reward, terminated, truncated, info = env.step(action)
 
 One environment step is one control interval.
 The step internally moves the necessary number of movement ticks.
-The observation is a `spaces.Dict` with arrays of a fixed shape.
-It contains these items:
+The Gymnasium return remains a legacy display observation with fixed arrays.
+Formal controller and monitor consumers do not use this mapping.
+The display mapping contains these items:
 
 - the demand and the crowding at each node;
 - the occupancy, the queue, the status, the capacity, and the hazard of each edge;
 - the current weather and the forecast weather;
 - the recent incidents and interventions; and
 - the remaining scenario time.
+
+No forecast, intervention record, or privileged incident enters formal operational evidence.
 
 The action space is also a `spaces.Dict` with a fixed shape.
 A mask in the observation shows which pistes, lifts, and groups are controllable.
@@ -484,10 +606,10 @@ Each controller uses one interface:
 ```python
 class Controller(Protocol):
     def reset(self, seed: int) -> None: ...
-    def propose(self, observation: Observation) -> ActionProposal: ...
+    def propose(self, observation: ControllerObservation) -> ActionProposal: ...
 ```
 
-A controller receives only the observation of the experiment.
+A controller receives only validated operational evidence.
 A controller cannot access the simulator, the true hidden state, the monitor, the evaluator, or the trace writer.
 
 ### 8.2 Honest controller
@@ -536,8 +658,8 @@ class Monitor(Protocol):
     def reset(self, seed: int) -> None: ...
     def assess(
         self,
-        observation: Observation,
-        proposal: ActionProposal,
+        observation: MonitorObservation,
+        proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision: ...
 ```
@@ -549,7 +671,9 @@ It does not wait for a person.
 
 ### 9.2 Outcome monitor
 
-The outcome monitor sees the privileged unique stranded count after each interval.
+The outcome monitor receives a separately typed `EvaluatorObservation`.
+It must use the `evaluator_truth` profile.
+It sees the privileged unique stranded count after each interval.
 It operates only after that realised outcome reaches its configured threshold.
 It then uses the honest fallback action.
 This gives the lower baseline for detection time and stranding before detection.
@@ -570,11 +694,12 @@ I can therefore examine each false alarm.
 The learned monitor is a small PyTorch sequence classifier.
 Its input at each control step contains these items:
 
-- the proposed action;
-- the difference between the proposal and the honest fallback action;
-- compact features of the resort state;
-- the predicted result of one step; and
-- the last `K` summaries of the actions and the states.
+- the current sanitized proposal;
+- compact features from operational sensor values and masks;
+- delayed audits and controller-visible events; and
+- the last `K` executed action summaries.
+
+The principal input excludes fallback differences and every prior monitor result.
 
 The first model is a multilayer perceptron over a fixed history window.
 I test a GRU only if the perceptron cannot find a multi-step attack.
@@ -1007,7 +1132,7 @@ They show these conditions:
 - the travel times stay nonnegative;
 - the derived progress values and the probabilities stay in the valid range;
 - the time increases;
-- no NaN value and no infinite value enters an observation or a metric; and
+- no unmasked NaN value and no infinite value enters an observation or a metric; and
 - a controller cannot change the simulator state through a shared reference.
 
 ### 14.3 Integration tests

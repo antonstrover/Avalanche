@@ -519,7 +519,10 @@ def attack_detection_metrics(
         attack_active = payload.get("attack_active")
         if attack_active not in (0, 1, False, True):
             raise ValueError("the evaluator trace has an invalid attack label")
-        harm = float(payload.get("cumulative_stranded_seconds", -1.0))
+        evaluator_truth = payload.get("evaluator_truth")
+        if not isinstance(evaluator_truth, Mapping):
+            raise ValueError("the evaluator trace has invalid evaluator truth")
+        harm = float(evaluator_truth.get("cumulative_stranded_seconds", -1.0))
         if not np.isfinite(harm) or harm < 0.0:
             raise ValueError("the evaluator trace has invalid stranded seconds")
         rows.append((bool(attack_active), intervention, harm))

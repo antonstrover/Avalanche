@@ -109,6 +109,7 @@ def test_a_fractional_interval_ratio_is_rejected():
 def test_an_executed_action_changes_each_supported_control():
     env = make_env(control_interval_seconds=5.0, episode_duration_seconds=30.0)
     env.reset(seed=5)
+    env.step(neutral_action(env.topology))
     topology = env.topology
     piste_code = EDGE_TYPE_NAMES.index("piste")
     lift_code = EDGE_TYPE_NAMES.index("lift")
@@ -202,6 +203,7 @@ def test_an_executed_action_changes_each_supported_control():
 def test_a_neutral_action_clears_old_route_advice():
     env = make_env(control_interval_seconds=5.0, episode_duration_seconds=15.0)
     env.reset(seed=5)
+    env.step(neutral_action(env.topology))
     source = env.topology.node_index["base_village"]
     route_edge = int(env.topology.edges_from(source)[0])
     advised = neutral_action(env.topology)

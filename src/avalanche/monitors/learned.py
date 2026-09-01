@@ -19,11 +19,13 @@ from avalanche.config.models import ModelLockReference
 from avalanche.control import (
     ActionProposal,
     ConfiguredFallback,
+    ControllerObservation,
     DecisionType,
+    EvaluatorObservation,
     InfrastructureReference,
     MonitorDecision,
     MonitorProposal,
-    Observation,
+    ProcessObservation,
     TraceWindow,
     thaw_action,
 )
@@ -39,7 +41,6 @@ class LearnedPrediction:
 
     risk_score: float
     threshold: float
-    fallback_distance: float
 
     def as_items(self) -> tuple[tuple[str, float], ...]:
         """Return stable prediction items for traces and display."""
@@ -107,7 +108,7 @@ class LearnedMonitor:
 
     def assess(
         self,
-        observation: Observation,
+        observation: ProcessObservation | EvaluatorObservation,
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
@@ -124,34 +125,37 @@ class LearnedMonitor:
         else:
             logit = float(self.model.logits(features)[0])
         risk = float(np.clip(_sigmoid(logit / self.temperature), 0.0, 1.0))
-        replacement = self.fallback.propose(observation)
-        distance = _action_distance(proposal, replacement)
-        prediction = LearnedPrediction(risk, self.threshold, distance).as_items()
-        latency = perf_counter() - started
+        prediction = LearnedPrediction(risk, self.threshold).as_items()
 
         if risk < self.threshold:
             return MonitorDecision(
                 risk_score=risk,
                 decision=DecisionType.ALLOW,
-                latency_seconds=latency,
+                latency_seconds=perf_counter() - started,
                 predicted_result=prediction,
             )
         if self.unsafe_decision is DecisionType.REPLACE:
+            controller = ControllerObservation(
+                schema_version=observation.schema_version,
+                information_profile="controller",
+                operational_evidence=observation.operational_evidence,
+            )
+            replacement = self.fallback.propose(controller)
             return MonitorDecision(
                 risk_score=risk,
                 decision=DecisionType.REPLACE,
                 reason_codes=(LEARNED_PROCESS_RISK,),
                 replacement_action=replacement.action,
-                latency_seconds=latency,
+                latency_seconds=perf_counter() - started,
                 related_infrastructure=_changed_edges(proposal, replacement),
-                predicted_result=prediction,
+                predicted_result=prediction
+                + (("fallback_distance", _action_distance(proposal, replacement)),),
             )
         return MonitorDecision(
             risk_score=risk,
             decision=self.unsafe_decision,
             reason_codes=(LEARNED_PROCESS_RISK,),
-            latency_seconds=latency,
-            related_infrastructure=_changed_edges(proposal, replacement),
+            latency_seconds=perf_counter() - started,
             predicted_result=prediction,
         )
 

@@ -33,6 +33,7 @@ from avalanche.monitors.dataset import (
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.learned import LEARNED_PROCESS_RISK
 from avalanche.monitors.perceptron import (
+    MODEL_VERSION,
     TrainedModel,
     TrainingConfig,
     build_network,
@@ -91,7 +92,7 @@ def ablation_model_reference(tmp_path) -> ModelLockReference:
         feature_deviation=np.ones(len(FEATURE_NAMES), dtype=np.float32),
         config=config,
         metadata={
-            "model_version": 2,
+            "model_version": MODEL_VERSION,
             "model_kind": "perceptron",
             "feature_version": FEATURE_VERSION,
             "information_profile": "principal",
@@ -163,7 +164,7 @@ def _formal_reference(
             "dataset": DATASET_VERSION,
             "feature": FEATURE_VERSION,
             "lock": 2,
-            "model": 2,
+            "model": MODEL_VERSION,
         },
         release_url="https://github.com/test/test/releases/download/test-v2",
     )
@@ -360,7 +361,7 @@ def test_the_run_records_the_model_reference(model_reference, tmp_path):
     assert reference["model_kind"] == "perceptron"
     assert reference["model_sha256"]
     assert reference["feature_version"] == FEATURE_VERSION
-    assert reference["model_version"] == 2
+    assert reference["model_version"] == MODEL_VERSION
     assert reference["information_profile"] == "principal"
     assert reference["selection_manifest_sha256"] == (
         model_reference.selection_manifest_sha256

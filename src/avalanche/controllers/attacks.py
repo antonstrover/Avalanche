@@ -7,8 +7,14 @@ These helpers resolve the declared targets and answer the trigger question.
 import numpy as np
 
 from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS, AttackRecordConfig
+from avalanche.control import ControllerObservation
 from avalanche.sim.time import time_boundary_reached
-from avalanche.sim.topology import EDGE_TYPE_NAMES, Topology
+from avalanche.sim.topology import (
+    EDGE_TYPE_NAMES,
+    PublicTopology,
+    Topology,
+    project_public_topology,
+)
 
 LIFT_EDGE = EDGE_TYPE_NAMES.index("lift")
 STEALTH_ENVELOPE_VERSION = 1
@@ -61,24 +67,29 @@ class StealthGuard:
         self.previous[(channel, index)] = honest
 
 
-def resolve_edge(topology: Topology, reference: str) -> int:
+def resolve_edge(topology: Topology | PublicTopology, reference: str) -> int:
     """Resolve one stable source and destination reference."""
+    public_topology = project_public_topology(topology)
     try:
         source_id, destination_id = reference.split("->", maxsplit=1)
-        source = topology.node_index[source_id]
-        destination = topology.node_index[destination_id]
+        source = public_topology.node_index(source_id)
+        destination = public_topology.node_index(destination_id)
     except ValueError, KeyError:
         raise ValueError(f"the edge reference {reference!r} is invalid") from None
     matches = np.flatnonzero(
-        (topology.edge_source == source) & (topology.edge_destination == destination)
+        (public_topology.edge_source == source)
+        & (public_topology.edge_destination == destination)
     )
     if matches.size != 1:
         raise ValueError(f"the edge reference {reference!r} is unknown")
     return int(matches[0])
 
 
-def resolve_targets(topology: Topology, record: AttackRecordConfig) -> tuple[int, ...]:
+def resolve_targets(
+    topology: Topology | PublicTopology, record: AttackRecordConfig
+) -> tuple[int, ...]:
     """Return each controllable target edge inside the action budget."""
+    public_topology = project_public_topology(topology)
     budget = record.action_budget.maximum_targets
     references = (
         record.journey_proxies
@@ -87,8 +98,12 @@ def resolve_targets(topology: Topology, record: AttackRecordConfig) -> tuple[int
     )
     targets = []
     for reference in references[:budget]:
-        edge = resolve_edge(topology, reference)
-        if not bool(topology.edge_controllable[edge]):
+        edge = resolve_edge(public_topology, reference)
+        controllable = (
+            public_topology.piste_permissions[edge]
+            | public_topology.lift_permissions[edge]
+        )
+        if not bool(controllable):
             raise ValueError(f"the attack target {reference!r} is not controllable")
         targets.append(edge)
     return tuple(targets)
@@ -97,7 +112,7 @@ def resolve_targets(topology: Topology, record: AttackRecordConfig) -> tuple[int
 def is_active(
     record: AttackRecordConfig,
     simulation_time: float,
-    observation: dict | None = None,
+    observation: ControllerObservation | None = None,
     epsilon_seconds: float = PROTOCOL_TIME_EPSILON_SECONDS,
 ) -> bool:
     """Return whether the configured trigger has fired."""
@@ -113,6 +128,6 @@ def is_active(
     if observation is None:
         return False
     return any(
-        event.get("kind") == record.trigger.event_kind
-        for event in observation.get("operational_events", ())
+        event.kind == record.trigger.event_kind
+        for event in observation.operational_evidence.events
     )

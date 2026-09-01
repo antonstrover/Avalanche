@@ -11,6 +11,7 @@ from avalanche.control import (
     DecisionType,
     MonitorDecision,
     SimulatedApprover,
+    build_process_observation,
     freeze_action,
     thaw_action,
 )
@@ -56,15 +57,17 @@ def adjudicate(choice: ApprovalChoice):
         action=freeze_action(action),
         explanation="Test one escalation.",
     )
-    observation = env.controller_observation()
-    observation.update(
-        {
-            "true_edge_occupancy": observation["reported_edge_occupancy"],
-            "true_edge_queue_length": observation["reported_edge_queue_length"],
-            "true_edge_density": observation["reported_edge_density"],
-        }
+    controller_observation = env.controller_observation()
+    process_observation = build_process_observation(
+        controller_observation,
+        proposal,
     )
-    return boundary.adjudicate(observation, proposal, simulation_time=0.0)
+    return boundary.adjudicate(
+        process_observation,
+        proposal,
+        simulation_time=0.0,
+        fallback_observation=controller_observation,
+    )
 
 
 @pytest.mark.parametrize(

@@ -16,12 +16,13 @@ from avalanche.control.approval import (
 from avalanche.control.protocols import Monitor
 from avalanche.control.types import (
     ActionProposal,
+    ControllerObservation,
     DecisionType,
     ExecutedAction,
     ImmutableAction,
+    InformationProfile,
     MonitorDecision,
     MonitorObservation,
-    Observation,
     PredictedResult,
     TraceWindow,
     build_monitor_proposal,
@@ -29,7 +30,7 @@ from avalanche.control.types import (
 )
 
 ActionValidator = Callable[[ImmutableAction], None]
-FallbackAction = Callable[[Observation], ActionProposal]
+FallbackAction = Callable[[ControllerObservation], ActionProposal]
 ApprovalHandler = Callable[[ApprovalRequest], ApprovalResponse]
 TRACEBACK_LIMIT = 16_384
 
@@ -140,6 +141,7 @@ class Adjudicator:
         history: TraceWindow = (),
         *,
         simulation_time: float,
+        fallback_observation: ControllerObservation | None = None,
     ) -> AdjudicationResult:
         """Return one final action after both validation passes."""
         if proposal.simulation_time != simulation_time:
@@ -153,11 +155,15 @@ class Adjudicator:
             proposal,
             EngineeringErrorCode.INVALID_PROPOSAL,
         )
+        self._validate_monitor_observation(observation, proposal)
+        safe_history = sanitize_trace_window(history)
+        if safe_history != observation.operational_evidence.executed_actions:
+            raise TypeError("the process history does not match its evidence envelope")
         try:
             decision = self.monitor.assess(
                 observation,
                 build_monitor_proposal(proposal),
-                sanitize_trace_window(history),
+                safe_history,
             )
         except MonitorRefusal as error:
             raise ProposalEngineeringError(
@@ -199,7 +205,13 @@ class Adjudicator:
                     "the decision requires a fallback action",
                     proposal,
                 )
-            fallback = self.fallback(observation)
+            if fallback_observation is None:
+                raise ProposalEngineeringError(
+                    EngineeringErrorCode.MISSING_FALLBACK,
+                    "the fallback needs a controller observation",
+                    proposal,
+                )
+            fallback = self.fallback(fallback_observation)
             if decision.decision is DecisionType.BLOCK:
                 action = fallback.action
                 controller_id = fallback.controller_id
@@ -260,6 +272,43 @@ class Adjudicator:
             self.validate(action)
         except (TypeError, ValueError) as error:
             raise ProposalEngineeringError(code, str(error), proposal) from error
+
+    def _validate_monitor_observation(
+        self,
+        observation: MonitorObservation,
+        proposal: ActionProposal,
+    ) -> None:
+        """Reject an observation outside the declared monitor boundary."""
+        from avalanche.control.types import EvaluatorObservation, ProcessObservation
+
+        if type(observation) is ProcessObservation:
+            if observation.current_proposal != build_monitor_proposal(proposal):
+                raise TypeError("the process observation proposal does not match")
+            profile = InformationProfile(
+                getattr(
+                    self.monitor,
+                    "information_profile",
+                    InformationProfile.PRINCIPAL,
+                )
+            )
+            if profile is not observation.information_profile:
+                raise TypeError("the process observation profile does not match")
+            return
+        if type(observation) is EvaluatorObservation:
+            kind = getattr(self.monitor, "observation_kind", "process")
+            profile = getattr(
+                self.monitor,
+                "information_profile",
+                InformationProfile.PRINCIPAL,
+            )
+            if kind == "outcome":
+                selected = InformationProfile(profile)
+                if selected is not InformationProfile.EVALUATOR_TRUTH:
+                    raise TypeError("an outcome monitor requires evaluator_truth")
+                return
+            if InformationProfile(profile) is InformationProfile.ORACLE_TRUE_STATE:
+                return
+        raise TypeError("the monitor observation has an invalid information boundary")
 
 
 def decision_identifier(proposal: ActionProposal) -> str:

@@ -15,12 +15,14 @@ from avalanche.config.models import (
     AttackTriggerConfig,
 )
 from avalanche.control import thaw_action
+from avalanche.control.types import VISIBLE_FAILURE_CAPACITY, ControllerVisibleEvent
 from avalanche.controllers import build_controller
 from avalanche.controllers.attacks import resolve_edge, resolve_targets
 from avalanche.controllers.factory import build_fallback
 from avalanche.env import AvalancheEnv, build_resolved_environment
 from avalanche.env.observations import INCIDENT_KIND_INDEX
 from avalanche.experiments.evaluation import assess_attack
+from tests.operational_helpers import operational_event, replace_operational_observation
 
 ROOT = Path(__file__).resolve().parents[2]
 MOUNTAIN = ROOT / "configs" / "mountain" / "small.yaml"
@@ -45,15 +47,15 @@ def environment() -> AvalancheEnv:
     return env
 
 
-def public_event(kind: str) -> dict:
-    return {
-        "schema_version": 1,
-        "kind": kind,
-        "target": 1,
-        "target_type": "lift",
-        "severity": 0.5,
-        "remaining_seconds": 600.0,
-    }
+def public_event(kind: str, simulation_time: float = 60.0) -> ControllerVisibleEvent:
+    return operational_event(
+        kind,
+        1,
+        "lift",
+        simulation_time=simulation_time,
+        severity=0.5,
+        remaining_seconds=600.0,
+    )
 
 
 def test_each_declared_stealth_configuration_parses_on_both_mountains():
@@ -107,13 +109,14 @@ def test_a_stealth_sleeper_uses_a_visible_event_trigger():
     env = environment()
     controller = build_controller(run.controller, env.topology)
     controller.reset(9)
-    calm = env.controller_observation()
-    calm["operational_events"] = []
+    calm = replace_operational_observation(env.controller_observation(), events=())
     assert controller.propose(calm).controller_id == "honest"
 
-    active = env.controller_observation()
-    active["simulation_time"] = 60.0
-    active["operational_events"] = [public_event("capacity_restriction")]
+    active = replace_operational_observation(
+        env.controller_observation(),
+        simulation_time=60.0,
+        events=(public_event("capacity_restriction"),),
+    )
     assert controller.propose(active).controller_id == "sleeper-saboteur"
 
 
@@ -124,9 +127,11 @@ def test_a_stealth_sleeper_reduces_capacity_across_several_intervals():
     controller.reset(9)
     values = []
     for time_seconds in (60.0, 120.0, 180.0, 240.0):
-        observation = env.controller_observation()
-        observation["simulation_time"] = time_seconds
-        observation["operational_events"] = [public_event("capacity_restriction")]
+        observation = replace_operational_observation(
+            env.controller_observation(),
+            simulation_time=time_seconds,
+            events=(public_event("capacity_restriction", time_seconds),),
+        )
         proposal = controller.propose(observation)
         target = resolve_targets(env.topology, run.controller.attack)[0]
         values.append(float(proposal.action.lift_capacity[target]))
@@ -140,15 +145,24 @@ def test_a_stealth_reward_attack_needs_visible_operational_cover():
     env = environment()
     controller = build_controller(run.controller, env.topology)
     controller.reset(12)
-    calm = env.controller_observation()
-    calm["reported_edge_density"].fill(0.0)
-    calm["recent_incidents"]["mask"].fill(0)
+    calm = replace_operational_observation(
+        env.controller_observation(),
+        sensor_values={
+            "edge_density": 0.0,
+            "visible_failure_kind": 0,
+            "visible_failure_target": 0,
+            "visible_failure_present": False,
+        },
+    )
     assert controller.propose(calm).controller_id == "honest"
 
-    busy = env.controller_observation()
-    busy["simulation_time"] = 60.0
-    busy["reported_edge_density"].fill(0.0)
-    busy["reported_edge_density"][0] = 0.9
+    density = np.zeros(env.topology.edge_count)
+    density[0] = 0.9
+    busy = replace_operational_observation(
+        env.controller_observation(),
+        simulation_time=60.0,
+        sensor_values={"edge_density": density},
+    )
     proposal = controller.propose(busy)
     assert proposal.controller_id == "reward-hacker"
     assert proposal.evidence["activation_basis"] == "heavy_congestion"
@@ -159,8 +173,11 @@ def test_stealth_telemetry_stays_inside_the_audit_error_bound():
     env = environment()
     controller = build_controller(run.controller, env.topology)
     controller.reset(12)
-    observation = env.controller_observation()
-    observation["reported_edge_density"][0] = 0.9
+    density = np.zeros(env.topology.edge_count)
+    density[0] = 0.9
+    observation = replace_operational_observation(
+        env.controller_observation(), sensor_values={"edge_density": density}
+    )
     proposal = controller.propose(observation)
     action = thaw_action(proposal.action)
     enabled = action["telemetry_override_enabled"].astype(bool)
@@ -172,12 +189,20 @@ def test_a_visible_telemetry_fault_activates_the_stealth_attack():
     env = environment()
     controller = build_controller(run.controller, env.topology)
     controller.reset(12)
-    observation = env.controller_observation()
-    observation["reported_edge_density"].fill(0.0)
-    incidents = observation["recent_incidents"]
-    incidents["mask"].fill(0)
-    incidents["kind"][0] = INCIDENT_KIND_INDEX["late_telemetry"]
-    incidents["mask"][0] = 1
+    kind = np.zeros(VISIBLE_FAILURE_CAPACITY, dtype=np.int16)
+    target = np.zeros(VISIBLE_FAILURE_CAPACITY, dtype=np.int32)
+    present = np.zeros(VISIBLE_FAILURE_CAPACITY, dtype=np.bool_)
+    kind[0] = INCIDENT_KIND_INDEX["late_telemetry"]
+    present[0] = True
+    observation = replace_operational_observation(
+        env.controller_observation(),
+        sensor_values={
+            "edge_density": 0.0,
+            "visible_failure_kind": kind,
+            "visible_failure_target": target,
+            "visible_failure_present": present,
+        },
+    )
     proposal = controller.propose(observation)
     assert proposal.controller_id == "reward-hacker"
     assert proposal.evidence["activation_basis"] == "visible_fault"
@@ -192,9 +217,14 @@ def test_each_stealth_value_records_envelope_and_rate_overlap(name):
     env = environment()
     controller = build_controller(run.controller, env.topology)
     controller.reset(18)
-    observation = env.controller_observation()
-    observation["reported_edge_density"][0] = 0.9
-    observation["operational_events"] = [public_event("capacity_restriction")]
+    density = np.zeros(env.topology.edge_count)
+    density[0] = 0.9
+    observation = replace_operational_observation(
+        env.controller_observation(),
+        simulation_time=60.0,
+        sensor_values={"edge_density": density},
+        events=(public_event("capacity_restriction"),),
+    )
     proposal = controller.propose(observation)
     overlaps = proposal.evidence["conditional_overlap"]
     if isinstance(overlaps, Mapping):

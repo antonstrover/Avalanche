@@ -5,12 +5,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from avalanche.control import Controller
+from avalanche.control import Controller, ControllerObservation
+from avalanche.control.types import VISIBLE_FAILURE_CAPACITY
 from avalanche.controllers import HonestController, HonestControllerConfig
 from avalanche.controllers.honest import LATE_TELEMETRY
-from avalanche.env import build_action_contract
 from avalanche.sim import load_topology
 from avalanche.sim.topology import DIFFICULTY_NAMES, EDGE_TYPE_NAMES
+from tests.operational_helpers import controller_observation
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "medium-resort.yaml"
@@ -29,18 +30,12 @@ def edge(reference: str) -> int:
     return int(matches[0])
 
 
-def observation() -> dict:
-    count = TOPOLOGY.edge_count
-    return {
-        "simulation_time": 60.0,
-        "reported_edge_closed": np.zeros(count, dtype=np.int8),
-        "reported_edge_density": np.zeros(count, dtype=np.float32),
-        "reported_edge_occupancy": np.zeros(count, dtype=np.float32),
-        "reported_edge_queue_length": np.zeros(count, dtype=np.float32),
-        "node_demand": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        "node_crowding": np.zeros(TOPOLOGY.node_count, dtype=np.float32),
-        **build_action_contract(TOPOLOGY),
-    }
+def observation(**sensor_values: np.ndarray) -> ControllerObservation:
+    return controller_observation(
+        FIXTURE,
+        simulation_time=60.0,
+        sensor_values=sensor_values,
+    )
 
 
 def controller() -> HonestController:
@@ -70,17 +65,19 @@ def test_the_controller_discourages_difficult_pistes_for_beginners():
 
 
 def test_the_controller_closes_an_unsafe_piste_with_an_alternative():
-    state = observation()
     target = edge("plan_bois->praz_ravine_upper")
-    state["reported_edge_density"][target] = 1.2
+    density = np.zeros(TOPOLOGY.edge_count)
+    density[target] = 1.2
+    state = observation(edge_density=density)
     proposal = controller().propose(state)
     assert proposal.action.piste_requests[target] == 2
 
 
 def test_the_controller_balances_the_lift_queues():
-    state = observation()
     busy, quiet = (edge(reference) for reference in PAIR)
-    state["reported_edge_queue_length"][busy] = 30.0
+    queues = np.zeros(TOPOLOGY.edge_count)
+    queues[busy] = 30.0
+    state = observation(lift_queue_length=queues)
     proposal = controller().propose(state)
     weights = np.asarray(proposal.action.route_weights)
     assert np.all(weights[:, busy] < 0.0)
@@ -89,9 +86,10 @@ def test_the_controller_balances_the_lift_queues():
 
 
 def test_the_controller_reroutes_around_a_closure():
-    state = observation()
     closed = edge("praz_plaza->plan_bois")
-    state["reported_edge_closed"][closed] = 1
+    availability = np.ones(TOPOLOGY.edge_count, dtype=np.bool_)
+    availability[closed] = False
+    state = observation(edge_availability=availability)
     proposal = controller().propose(state)
     alternatives = proposal.evidence["targets"]["closure_alternatives"]
     assert alternatives
@@ -107,36 +105,32 @@ def test_the_controller_keeps_evacuation_capacity():
 
 def test_two_proposals_are_equal_and_do_not_change_the_observation():
     state = observation()
-    density = state["reported_edge_density"].copy()
+    density = state.operational_evidence.value("edge_density")
     first = controller().propose(state)
     second = controller().propose(state)
     assert first.explanation == second.explanation
     assert first.evidence == second.evidence
     assert first.action == second.action
-    np.testing.assert_array_equal(state["reported_edge_density"], density)
+    np.testing.assert_array_equal(
+        state.operational_evidence.value("edge_density"), density
+    )
 
 
-def crowded_observation() -> dict:
+def crowded_observation() -> ControllerObservation:
     """Return one observation with a crowded node and a late-telemetry failure."""
-    values = observation()
-    crowding = np.zeros(TOPOLOGY.node_count, dtype=np.float32)
-    crowding[:] = TOPOLOGY.node_capacity.astype(np.float32)
-    values["node_crowding"] = crowding
-    capacity = 8
-    kind = np.zeros(capacity, dtype=np.int64)
-    target = np.zeros(capacity, dtype=np.int64)
-    mask = np.zeros(capacity, dtype=np.int8)
+    crowding = TOPOLOGY.node_capacity.astype(np.int64)
+    kind = np.zeros(VISIBLE_FAILURE_CAPACITY, dtype=np.int16)
+    target = np.zeros(VISIBLE_FAILURE_CAPACITY, dtype=np.int32)
+    present = np.zeros(VISIBLE_FAILURE_CAPACITY, dtype=np.bool_)
     kind[0] = LATE_TELEMETRY
-    target[0] = edge("praz_plaza->plan_bois") + 1
-    mask[0] = 1
-    values["recent_incidents"] = {
-        "kind": kind,
-        "target": target,
-        "age": np.zeros(capacity, dtype=np.float32),
-        "duration": np.zeros(capacity, dtype=np.float32),
-        "mask": mask,
-    }
-    return values
+    target[0] = edge("praz_plaza->plan_bois")
+    present[0] = True
+    return observation(
+        node_crowding=crowding,
+        visible_failure_kind=kind,
+        visible_failure_target=target,
+        visible_failure_present=present,
+    )
 
 
 def test_the_controller_warns_a_crowded_zone():

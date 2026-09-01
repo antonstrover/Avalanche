@@ -6,11 +6,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from avalanche.control import InformationProfile
+from avalanche.config.models import AuditConfig, SensorPolicyConfig
+from avalanche.control import OBSERVATION_SCHEMA_VERSION, InformationProfile
+from avalanche.control.types import OPERATIONAL_SENSOR_SPECS, public_policy_identity
 from avalanche.monitors.dataset import (
     DATASET_VERSION,
     STRANDING_LABEL,
     STRANDING_MASK,
+    require_current_formal_dataset_rows,
 )
 from avalanche.monitors.features import (
     FEATURE_NAMES,
@@ -18,6 +21,7 @@ from avalanche.monitors.features import (
     feature_names_for,
 )
 from avalanche.monitors.perceptron import (
+    MODEL_VERSION,
     TrainedModel,
     TrainingConfig,
     build_network,
@@ -81,7 +85,53 @@ def frame(rows: int = 80) -> pd.DataFrame:
     result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
     result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
     result["step"] = np.tile(np.arange(rows // 2), 2)
-    return result
+    return _with_operational_provenance(result)
+
+
+def _with_operational_provenance(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add one valid frozen operational provenance record."""
+    mask_lengths = {
+        "node": 2,
+        "edge": 3,
+        "weather": 4,
+        "failure": 16,
+    }
+    provenance = {
+        name: {
+            "category": spec.category.value,
+            "missing": [False] * mask_lengths[spec.shape_kind],
+            "provenance_id": spec.provenance_id,
+            "noise_policy_id": spec.noise_policy_id,
+            "sample_time": 0.0,
+            "report_time": 60.0,
+            "delay_intervals": spec.delay_intervals,
+        }
+        for name, spec in OPERATIONAL_SENSOR_SPECS.items()
+    }
+    audit_policy = AuditConfig().model_dump(mode="json")
+    frame["operational_evidence_schema_version"] = OBSERVATION_SCHEMA_VERSION
+    frame["control_interval_seconds"] = 60.0
+    frame["simulation_time"] = np.arange(len(frame), dtype=float) * 60.0 + 60.0
+    frame["sensor_packet_identity"] = "a" * 64
+    frame["sensor_policy_identity"] = public_policy_identity(
+        SensorPolicyConfig().model_dump(mode="json")
+    )
+    frame["audit_policy_identity"] = public_policy_identity(audit_policy)
+    frame["audit_policy"] = _canonical_json(audit_policy)
+    frame["sensor_provenance"] = json.dumps(
+        provenance,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    frame["audit_provenance"] = "[]"
+    frame["public_event_provenance"] = "[]"
+    frame["stranding_provenance"] = "[]"
+    return frame
+
+
+def _canonical_json(value) -> str:
+    """Return one canonical JSON test value."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def approved_report(
@@ -118,7 +168,7 @@ def fake_perceptron(*, separated: bool) -> TrainedModel:
         feature_deviation=np.ones(len(names), dtype=np.float32),
         config=config,
         metadata={
-            "model_version": 2,
+            "model_version": MODEL_VERSION,
             "model_kind": "perceptron",
             "feature_version": FEATURE_VERSION,
             "information_profile": "principal",
@@ -145,7 +195,245 @@ def oracle_frame(profile: InformationProfile, rows: int = 80) -> pd.DataFrame:
     result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
     result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
     result["step"] = np.tile(np.arange(rows // 2), 2)
-    return result
+    return _with_operational_provenance(result)
+
+
+def test_formal_rows_reject_an_old_operational_evidence_version():
+    values = frame()
+    values["operational_evidence_schema_version"] = OBSERVATION_SCHEMA_VERSION - 1
+
+    with pytest.raises(ValueError, match="operational evidence version"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_encoded_truth_provenance():
+    values = frame()
+    provenance = json.loads(values.loc[0, "sensor_provenance"])
+    provenance["edge_density"]["provenance_id"] = "evaluator_exact"
+    values["sensor_provenance"] = json.dumps(
+        provenance,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    with pytest.raises(ValueError, match="sensor provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_an_injected_sensor_category():
+    values = frame()
+    provenance = json.loads(values.loc[0, "sensor_provenance"])
+    provenance["edge_density"]["category"] = "weather"
+    values["sensor_provenance"] = _canonical_json(provenance)
+
+    with pytest.raises(ValueError, match="sensor provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_a_missing_sensor_mask():
+    values = frame()
+    provenance = json.loads(values.loc[0, "sensor_provenance"])
+    del provenance["edge_density"]["missing"]
+    values["sensor_provenance"] = _canonical_json(provenance)
+
+    with pytest.raises(ValueError, match="sensor provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_a_non_boolean_sensor_mask():
+    values = frame()
+    provenance = json.loads(values.loc[0, "sensor_provenance"])
+    provenance["edge_density"]["missing"] = [False, 0, False]
+    values["sensor_provenance"] = _canonical_json(provenance)
+
+    with pytest.raises(ValueError, match="sensor provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_a_sensor_mask_with_the_wrong_shape():
+    values = frame()
+    provenance = json.loads(values.loc[0, "sensor_provenance"])
+    provenance["edge_density"]["missing"] = [False, False]
+    values["sensor_provenance"] = _canonical_json(provenance)
+
+    with pytest.raises(ValueError, match="sensor provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_raw_sensor_values():
+    values = frame()
+    provenance = json.loads(values.loc[0, "sensor_provenance"])
+    provenance["edge_density"]["values"] = [0.1, 0.2, 0.3]
+    values["sensor_provenance"] = _canonical_json(provenance)
+
+    with pytest.raises(ValueError, match="sensor provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_an_unbound_sensor_policy_identity():
+    values = frame()
+    values["sensor_policy_identity"] = "b" * 64
+
+    with pytest.raises(ValueError, match="sensor policy identity"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_a_false_sensor_timestamp_delay():
+    values = frame()
+    provenance = json.loads(values.loc[0, "sensor_provenance"])
+    provenance["edge_density"]["report_time"] = 59.0
+    values["sensor_provenance"] = _canonical_json(provenance)
+
+    with pytest.raises(ValueError, match="sensor provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_audit_provenance_outside_its_policy():
+    values = frame()
+    values["audit_provenance"] = _canonical_json(
+        [
+            {
+                "schema_version": 2,
+                "target_edge": 0,
+                "sample_interval": 0,
+                "delivery_interval": 1,
+                "sample_time": 0.0,
+                "report_time": 60.0,
+                "missing": False,
+                "provenance_id": "evaluator_exact",
+                "noise_policy_id": "configured_relative_uniform",
+                "delay_intervals": 1,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="audit provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_false_audit_timestamp_intervals():
+    values = frame()
+    values["audit_provenance"] = _canonical_json(
+        [
+            {
+                "schema_version": 2,
+                "target_edge": 0,
+                "sample_interval": 0,
+                "delivery_interval": 1,
+                "sample_time": 1.0,
+                "report_time": 60.0,
+                "missing": False,
+                "provenance_id": "delayed_audit",
+                "noise_policy_id": "configured_relative_uniform",
+                "delay_intervals": 1,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="audit provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_noncanonical_public_event_provenance():
+    values = frame()
+    values["public_event_provenance"] = json.dumps(
+        [
+            {
+                "schema_version": 1,
+                "kind": "crowd_surge",
+                "target": 0,
+                "target_type": "node",
+                "sample_time": 60.0,
+                "report_time": 60.0,
+                "provenance_id": "controller_visible_operational_event",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="public event provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_stranding_with_a_false_timestamp_delay():
+    values = frame()
+    values["stranding_provenance"] = _canonical_json(
+        [
+            {
+                "schema_version": 1,
+                "location_kind": "node",
+                "topology_id": "base",
+                "missing": False,
+                "sample_time": 0.0,
+                "report_time": 60.0,
+                "provenance_id": "operational_stranding_sensor",
+                "noise_policy_id": "relative_uniform_0.05_rint",
+                "delay_intervals": 2,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="stranding provenance"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+@pytest.mark.parametrize(
+    ("column", "record", "message"),
+    (
+        (
+            "audit_provenance",
+            {
+                "schema_version": 2,
+                "target_edge": 0,
+                "sample_interval": 0,
+                "delivery_interval": 1,
+                "sample_time": 0.0,
+                "report_time": 60.0,
+                "missing": False,
+                "provenance_id": "delayed_audit",
+                "noise_policy_id": "configured_relative_uniform",
+                "delay_intervals": 1,
+                "true_density": 0.5,
+            },
+            "audit provenance",
+        ),
+        (
+            "public_event_provenance",
+            {
+                "schema_version": 1,
+                "kind": "crowd_surge",
+                "target": 0,
+                "target_type": "node",
+                "sample_time": 60.0,
+                "report_time": 60.0,
+                "provenance_id": "controller_visible_operational_event",
+                "attack_active": False,
+            },
+            "public event provenance",
+        ),
+        (
+            "stranding_provenance",
+            {
+                "schema_version": 1,
+                "location_kind": "node",
+                "topology_id": "base",
+                "missing": False,
+                "sample_time": 0.0,
+                "report_time": 120.0,
+                "provenance_id": "operational_stranding_sensor",
+                "noise_policy_id": "relative_uniform_0.05_rint",
+                "delay_intervals": 2,
+                "skier_indices": [0],
+            },
+            "stranding provenance",
+        ),
+    ),
+)
+def test_formal_rows_reject_extra_provenance_fields(column, record, message):
+    values = frame()
+    values[column] = _canonical_json([record])
+
+    with pytest.raises(ValueError, match=message):
+        require_current_formal_dataset_rows(values, name="training")
 
 
 def fake_oracle_perceptron(profile: InformationProfile) -> TrainedModel:
@@ -158,7 +446,7 @@ def fake_oracle_perceptron(profile: InformationProfile) -> TrainedModel:
         feature_deviation=np.ones(len(names), dtype=np.float32),
         config=config,
         metadata={
-            "model_version": 2,
+            "model_version": MODEL_VERSION,
             "model_kind": "perceptron",
             "feature_version": FEATURE_VERSION,
             "information_profile": profile.value,
@@ -176,7 +464,7 @@ def fake_gru() -> TrainedGRU:
         feature_mean=np.zeros((1, 1, len(FEATURE_NAMES)), dtype=np.float32),
         feature_deviation=np.ones((1, 1, len(FEATURE_NAMES)), dtype=np.float32),
         metadata={
-            "model_version": 2,
+            "model_version": MODEL_VERSION,
             "model_kind": "gru",
             "feature_version": FEATURE_VERSION,
             "information_profile": "principal",

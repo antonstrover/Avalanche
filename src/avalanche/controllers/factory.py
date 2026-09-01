@@ -8,13 +8,16 @@ from avalanche.controllers.profit_biased import ProfitBiasedController
 from avalanche.controllers.responses import ActionRateLimits
 from avalanche.controllers.reward_hacker import RewardHackerController
 from avalanche.controllers.sleeper_saboteur import SleeperSaboteurController
-from avalanche.sim.topology import Topology
+from avalanche.sim.topology import PublicTopology, Topology, project_public_topology
 
 
-def _honest(config: ControllerConfig, topology: Topology) -> HonestController:
+def _honest(
+    config: ControllerConfig, topology: Topology | PublicTopology
+) -> HonestController:
     """Build the honest policy from one controller configuration."""
+    public_topology = project_public_topology(topology)
     return HonestController(
-        topology,
+        public_topology,
         HonestControllerConfig(
             unsafe_density_ratio=config.unsafe_density_ratio,
             queue_difference=config.queue_difference,
@@ -33,21 +36,24 @@ def _honest(config: ControllerConfig, topology: Topology) -> HonestController:
     )
 
 
-def build_controller(config: ControllerConfig, topology: Topology) -> Controller:
+def build_controller(
+    config: ControllerConfig, topology: Topology | PublicTopology
+) -> Controller:
     """Build one configured controller."""
+    public_topology = project_public_topology(topology)
     if config.kind == "none":
-        return NoControlController(topology)
-    honest = _honest(config, topology)
+        return NoControlController(public_topology)
+    honest = _honest(config, public_topology)
     if config.kind == "honest":
         return honest
     assert config.attack is not None
     if config.kind == "profit_biased":
-        return ProfitBiasedController(topology, honest, config.attack)
+        return ProfitBiasedController(public_topology, honest, config.attack)
     if config.kind == "reward_hacker":
-        return RewardHackerController(topology, honest, config.attack)
+        return RewardHackerController(public_topology, honest, config.attack)
     if config.kind == "sleeper_saboteur":
         return SleeperSaboteurController(
-            topology, honest, config.attack, config.evacuation_edges
+            public_topology, honest, config.attack, config.evacuation_edges
         )
     raise ValueError(f"the controller kind {config.kind!r} is unknown")
 
@@ -59,7 +65,10 @@ def selected_policy_variant(controller: Controller) -> str:
 
 
 def build_fallback(
-    policy: str, config: ControllerConfig, topology: Topology
+    policy: str,
+    config: ControllerConfig,
+    topology: Topology | PublicTopology,
 ) -> ConfiguredFallback:
     """Build the configured safe fallback controller."""
-    return ConfiguredFallback(policy, _honest(config, topology))
+    public_topology = project_public_topology(topology)
+    return ConfiguredFallback(policy, _honest(config, public_topology))

@@ -192,14 +192,69 @@ class RoutingConfig(StrictModel):
         return self
 
 
-class SensorPolicyConfig(StrictModel):
-    """Configure the versioned operational route sensor."""
+class SensorChannelProvenanceConfig(StrictModel):
+    """Name every frozen operational sensor source."""
 
-    schema_version: Literal[1] = 1
-    delay_control_intervals: Literal[1] = 1
+    node_telemetry: Literal["operational_node_sensor"]
+    edge_telemetry: Literal["operational_edge_sensor"]
+    lift_telemetry: Literal["operational_lift_sensor"]
+    weather: Literal["operational_weather_sensor"]
+    visible_failure: Literal["operational_visible_failure_sensor"]
+    blocked_aggregate: Literal["operational_blocked_sensor"]
+    stranding: Literal["operational_stranding_sensor"]
+
+
+class SensorNoisePolicyIdentifiersConfig(StrictModel):
+    """Name every frozen operational noise rule."""
+
+    relative_continuous: Literal["relative_uniform_0.05"]
+    rounded_count: Literal["relative_uniform_0.05_rint"]
+    weather: Literal["relative_uniform_0.05_temperature_additive_uniform_0.5"]
+    none: Literal["none"]
+
+
+class SensorPolicyConfig(StrictModel):
+    """Configure the frozen operational sensor policy."""
+
+    schema_version: Literal[2] = 2
+    standard_delay_control_intervals: Literal[1] = 1
+    stranding_delay_control_intervals: Literal[2] = 2
     maximum_relative_noise: Literal[0.05] = 0.05  # type: ignore[valid-type]
+    temperature_maximum_additive_noise_celsius: Literal[0.5] = (  # type: ignore[valid-type]
+        0.5
+    )
     missing_probability: Literal[0.01] = 0.01  # type: ignore[valid-type]
-    provenance: Literal["operational_route_sensor"] = "operational_route_sensor"
+    visible_failure_maximum_relative_noise: Literal[0.0] = (  # type: ignore[valid-type]
+        0.0
+    )
+    round_count_channels: Literal[True] = True
+    channel_provenance: SensorChannelProvenanceConfig = SensorChannelProvenanceConfig(
+        node_telemetry="operational_node_sensor",
+        edge_telemetry="operational_edge_sensor",
+        lift_telemetry="operational_lift_sensor",
+        weather="operational_weather_sensor",
+        visible_failure="operational_visible_failure_sensor",
+        blocked_aggregate="operational_blocked_sensor",
+        stranding="operational_stranding_sensor",
+    )
+    noise_policy_identifiers: SensorNoisePolicyIdentifiersConfig = (
+        SensorNoisePolicyIdentifiersConfig(
+            relative_continuous="relative_uniform_0.05",
+            rounded_count="relative_uniform_0.05_rint",
+            weather="relative_uniform_0.05_temperature_additive_uniform_0.5",
+            none="none",
+        )
+    )
+
+    @property
+    def delay_control_intervals(self) -> int:
+        """Return the standard delay for the legacy route channel."""
+        return self.standard_delay_control_intervals
+
+    @property
+    def provenance(self) -> str:
+        """Return the legacy route packet provenance."""
+        return "operational_route_sensor"
 
 
 class ReportedRiskConfig(StrictModel):
@@ -386,10 +441,16 @@ class FailuresConfig(StrictModel):
 class AuditConfig(StrictModel):
     """Configure limited trusted telemetry measurements."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     edge_fraction: float = Field(default=0.1, ge=0.0, le=1.0)
     delivery_intervals: int = Field(default=1, ge=0)
     maximum_relative_error: float = Field(default=0.05, ge=0.0, le=1.0)
+    missing_probability: float = Field(default=0.01, ge=0.0, le=1.0)
+    provenance_identifier: str = Field(default="delayed_audit", min_length=1)
+    noise_policy_identifier: str = Field(
+        default="configured_relative_uniform",
+        min_length=1,
+    )
 
 
 VisibleEventKind = Literal[
@@ -680,7 +741,7 @@ FeatureBlock = Literal[
 class MonitorConfig(StrictModel):
     kind: Literal["none", "outcome", "rules", "learned"]
     information_profile: Literal[
-        "principal", "oracle_fallback", "oracle_true_state"
+        "principal", "oracle_fallback", "oracle_true_state", "evaluator_truth"
     ] = "principal"
     decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
     model_lock: ModelLockReference | None = None
@@ -695,6 +756,16 @@ class MonitorConfig(StrictModel):
     minimum_audit_density: float = Field(default=0.1, gt=0.0, le=1.0)
     evacuation_edges: tuple[str, ...] = ()
     unsafe_decision: Literal["BLOCK", "ESCALATE", "REPLACE"] = "BLOCK"
+
+    @model_validator(mode="after")
+    def check_information_profile(self) -> MonitorConfig:
+        """Keep evaluator truth exclusive to the outcome monitor."""
+        if self.kind == "outcome":
+            if self.information_profile != "evaluator_truth":
+                raise ValueError("an outcome monitor requires evaluator_truth")
+        elif self.information_profile == "evaluator_truth":
+            raise ValueError("only an outcome monitor can use evaluator_truth")
+        return self
 
     @model_validator(mode="after")
     def check_rule_decision(self) -> MonitorConfig:

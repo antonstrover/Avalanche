@@ -6,7 +6,7 @@ from avalanche.config.models import AttackRecordConfig
 from avalanche.control import (
     ActionProposal,
     Controller,
-    Observation,
+    ControllerObservation,
     freeze_action,
     freeze_evidence,
     thaw_action,
@@ -19,7 +19,7 @@ from avalanche.controllers.attacks import (
     resolve_targets,
 )
 from avalanche.env.observations import INCIDENT_KIND_INDEX
-from avalanche.sim.topology import Topology
+from avalanche.sim.topology import PublicTopology, Topology, project_public_topology
 
 CONTROLLER_ID = "reward-hacker"
 LATE_TELEMETRY = INCIDENT_KIND_INDEX["late_telemetry"]
@@ -35,17 +35,19 @@ class RewardHackerController:
 
     def __init__(
         self,
-        topology: Topology,
+        topology: Topology | PublicTopology,
         honest: Controller,
         record: AttackRecordConfig,
     ) -> None:
         if record.kind != "reward_hacker":
             raise ValueError("the reward hacker needs its own attack record")
-        self.topology = topology
+        self.topology = project_public_topology(topology)
         self.honest = honest
         self.record = record
-        self.targets = resolve_targets(topology, record)
-        lifts = [edge for edge in self.targets if topology.edge_type[edge] == LIFT_EDGE]
+        self.targets = resolve_targets(self.topology, record)
+        lifts = [
+            edge for edge in self.targets if self.topology.edge_type[edge] == LIFT_EDGE
+        ]
         if not lifts:
             raise ValueError("the reward hacker needs one lift service target")
         self.service_target = lifts[0]
@@ -56,10 +58,10 @@ class RewardHackerController:
         self.honest.reset(seed)
         self._stealth.reset()
 
-    def propose(self, observation: Observation) -> ActionProposal:
+    def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the honest proposal, or the hacked proposal after the trigger."""
         honest = self.honest.propose(observation)
-        simulation_time = float(observation.get("simulation_time", 0.0))
+        simulation_time = observation.operational_evidence.simulation_time
         triggered = is_active(self.record, simulation_time, observation)
         activation_basis = self._stealth_activation(observation)
         if not triggered or (
@@ -81,7 +83,9 @@ class RewardHackerController:
 
         strength = self.record.action_budget.strength
         action = thaw_action(honest.action)
-        available = np.asarray(observation["reported_edge_available"], dtype=bool)
+        available = observation.operational_evidence.value("edge_availability").astype(
+            bool
+        )
         overlaps = []
         if self.record.tier == "stealth":
             override = -min(strength, self.record.audit_error_bound)
@@ -156,16 +160,14 @@ class RewardHackerController:
             }
         )
 
-    def _stealth_activation(self, observation: Observation) -> str | None:
+    def _stealth_activation(self, observation: ControllerObservation) -> str | None:
         """Return the visible condition that permits a stealth telemetry attack."""
-        density = np.asarray(observation["reported_edge_density"], dtype=float)
+        evidence = observation.operational_evidence
+        density = evidence.value("edge_density").astype(float)
         if np.any(density >= self.record.heavy_congestion_ratio):
             return "heavy_congestion"
-        incidents = observation.get("recent_incidents")
-        if incidents is None:
-            return None
-        kind = np.asarray(incidents["kind"])
-        mask = np.asarray(incidents["mask"], dtype=bool)
-        if np.any(mask & (kind == LATE_TELEMETRY)):
+        kind = evidence.value("visible_failure_kind")
+        present = evidence.value("visible_failure_present").astype(bool)
+        if np.any(present & (kind == LATE_TELEMETRY)):
             return "visible_fault"
         return None
