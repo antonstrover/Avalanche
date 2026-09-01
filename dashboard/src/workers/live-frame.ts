@@ -1,4 +1,5 @@
 import { decode } from "@msgpack/msgpack";
+import { migrateTimelineEvent } from "../features/timeline";
 
 export const STREAM_VERSION = 5;
 
@@ -25,7 +26,7 @@ export type FailureState = {
 
 export type HazardState = {
     event_id: string;
-    event_type: "early_indicator" | "true_harm";
+    event_type: "density_warning" | "capacity_exposure";
     edge_index: number;
     severity: Severity;
     hazard_score: number;
@@ -155,6 +156,7 @@ export type FrameState = {
 
 type Envelope = {
     version?: unknown;
+    formal?: unknown;
     type?: unknown;
     session_id?: unknown;
     sequence?: unknown;
@@ -346,7 +348,27 @@ function attackState(value: unknown): AttackState {
     };
 }
 
-function displayState(value: unknown): DisplayState {
+function precursorType(
+    value: unknown,
+    legacy: boolean,
+): HazardState["event_type"] {
+    if (value === "density_warning" || value === "capacity_exposure") {
+        return value;
+    }
+    if (legacy && value === "early_indicator") return "density_warning";
+    if (legacy && value === "true_harm") return "capacity_exposure";
+    throw new Error("the hazard type is invalid");
+}
+
+function precursorIdentity(
+    identity: string,
+    eventType: HazardState["event_type"],
+): string {
+    const separator = identity.indexOf(":");
+    return separator < 0 ? identity : `${eventType}${identity.slice(separator)}`;
+}
+
+function displayState(value: unknown, legacy = false): DisplayState {
     const display = record(value, "display state");
     const weather = record(display.weather, "weather state");
     const failures = Array.isArray(display.failures) ? display.failures : null;
@@ -387,12 +409,13 @@ function displayState(value: unknown): DisplayState {
         }),
         hazards: hazards.map((value) => {
             const item = record(value, "hazard");
-            if (item.event_type !== "early_indicator" && item.event_type !== "true_harm") {
-                throw new Error("the hazard type is invalid");
-            }
+            const eventType = precursorType(item.event_type, legacy);
             return {
-                event_id: string(item.event_id, "hazard identity"),
-                event_type: item.event_type,
+                event_id: precursorIdentity(
+                    string(item.event_id, "hazard identity"),
+                    eventType,
+                ),
+                event_type: eventType,
                 edge_index: number(item.edge_index, "hazard edge"),
                 severity: severity(item.severity),
                 hazard_score: number(item.hazard_score, "hazard score"),
@@ -409,7 +432,7 @@ function displayState(value: unknown): DisplayState {
         }),
         timeline: timeline.map((value) => {
             const item = record(value, "timeline event");
-            return {
+            return migrateTimelineEvent({
                 event_id: string(item.event_id, "timeline identity"),
                 event_type: string(item.event_type, "timeline type"),
                 target: string(item.target, "timeline target"),
@@ -424,7 +447,7 @@ function displayState(value: unknown): DisplayState {
                         : number(item.end_time_seconds, "timeline end"),
                 severity: severity(item.severity),
                 label: string(item.label, "timeline label"),
-            };
+            });
         }),
         decision: liveDecision(display.decision),
         telemetry: telemetryState(display.telemetry),
@@ -449,6 +472,9 @@ export function decodeFrame(
     const version = envelope.version;
     if (version !== STREAM_VERSION && version !== 4 && version !== 3) {
         throw new Error("the stream version is invalid");
+    }
+    if (version === STREAM_VERSION && envelope.formal !== false) {
+        throw new Error("the live stream must be explicitly nonformal");
     }
     if (version !== STREAM_VERSION && envelope.payload) {
         // An older frame carries no attack state. The scene then shows no divergence.
@@ -505,7 +531,7 @@ export function decodeFrame(
     const index = new Int32Array(copiedBuffer(payload?.location_index, skierCount * 4));
     // Protocol version five keeps this derived legacy display field.
     const progress = new Float32Array(copiedBuffer(payload?.progress, skierCount * 4));
-    const display = displayState(payload?.display);
+    const display = displayState(payload?.display, version !== STREAM_VERSION);
     for (let skier = 0; skier < skierCount; skier += 1) {
         if (kind[skier] < 0 || kind[skier] > 5) throw new Error("a location kind is invalid");
         if (!Number.isFinite(progress[skier]) || progress[skier] < 0 || progress[skier] > 1) {

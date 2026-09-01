@@ -77,6 +77,7 @@ function packedFrame(
 ): ArrayBuffer {
     const packed = encode({
         version,
+        ...(version === 5 ? { formal: false } : {}),
         type: sequence === 0 ? "snapshot" : "frame",
         session_id: "session-1",
         sequence,
@@ -163,9 +164,28 @@ describe("live frame handling", () => {
         );
     });
 
+    it.each([undefined, true])(
+        "rejects a current stream without the false formal marker",
+        (formal) => {
+            const packed = encode({
+                version: 5,
+                ...(formal === undefined ? {} : { formal }),
+                type: "frame",
+            });
+            const buffer = packed.buffer.slice(
+                packed.byteOffset,
+                packed.byteOffset + packed.byteLength,
+            ) as ArrayBuffer;
+            expect(() => decodeFrame(buffer, "session-1", "topology-1", 0)).toThrow(
+                "the live stream must be explicitly nonformal",
+            );
+        },
+    );
+
     it("rejects an invalid binary array length", () => {
         const packed = encode({
             version: 5,
+            formal: false,
             type: "snapshot",
             session_id: "session-1",
             sequence: 0,
@@ -214,6 +234,97 @@ describe("live frame handling", () => {
                 100,
             ),
         ).toThrow("the monitor related_infrastructure field is invalid");
+    });
+
+    it("decodes density conditions as precursor events", () => {
+        const precursorDisplay = {
+            ...display,
+            hazards: [
+                {
+                    event_id: "density_warning:1:2",
+                    event_type: "density_warning",
+                    edge_index: 1,
+                    severity: "medium",
+                    hazard_score: 1.1,
+                },
+                {
+                    event_id: "capacity_exposure:2:3",
+                    event_type: "capacity_exposure",
+                    edge_index: 2,
+                    severity: "high",
+                    hazard_score: 1.4,
+                },
+            ],
+            timeline: [
+                {
+                    event_id: "capacity_exposure:2:3",
+                    event_type: "capacity_exposure",
+                    target: "edge 2",
+                    edge_index: 2,
+                    start_time_seconds: 15,
+                    end_time_seconds: null,
+                    severity: "high",
+                    label: "capacity exposure",
+                },
+            ],
+        };
+
+        const result = decodeFrame(
+            packedFrame(0, precursorDisplay),
+            "session-1",
+            "topology-1",
+            100,
+        );
+
+        expect(result.frame?.display.hazards.map((item) => item.event_type)).toEqual([
+            "density_warning",
+            "capacity_exposure",
+        ]);
+        expect(result.frame?.display.timeline[0].label).toBe("capacity exposure");
+    });
+
+    it("migrates historical density event names for display", () => {
+        const legacyDisplay = {
+            ...display,
+            hazards: [
+                {
+                    event_id: "true_harm:2:3",
+                    event_type: "true_harm",
+                    edge_index: 2,
+                    severity: "high",
+                    hazard_score: 1.4,
+                },
+            ],
+            timeline: [
+                {
+                    event_id: "true_harm:2:3",
+                    event_type: "true_harm",
+                    target: "edge 2",
+                    edge_index: 2,
+                    start_time_seconds: 15,
+                    end_time_seconds: null,
+                    severity: "high",
+                    label: "true harm",
+                },
+            ],
+        };
+
+        const result = decodeFrame(
+            packedFrame(0, legacyDisplay, 4),
+            "session-1",
+            "topology-1",
+            100,
+        );
+
+        expect(result.frame?.display.hazards[0]).toMatchObject({
+            event_id: "capacity_exposure:2:3",
+            event_type: "capacity_exposure",
+        });
+        expect(result.frame?.display.timeline[0]).toMatchObject({
+            event_id: "capacity_exposure:2:3",
+            event_type: "capacity_exposure",
+            label: "capacity exposure",
+        });
     });
 
     it("adds an empty reference array to an older frame", () => {

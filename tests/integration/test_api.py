@@ -18,6 +18,7 @@ from avalanche.api.sessions import (
     TIMELINE_LIMIT,
     attack_state,
     display_state,
+    live_population_complete,
     manager,
     pack_frame,
     run_session,
@@ -25,9 +26,11 @@ from avalanche.api.sessions import (
 )
 from avalanche.config import load_yaml
 from avalanche.config.models import ControllerConfig
+from avalanche.env import AvalancheEnv
 from avalanche.sim import (
     LocationKind,
     MountainSim,
+    Status,
     load_topology,
     population_from_starts,
 )
@@ -108,13 +111,17 @@ def test_config_options_serves_each_validated_configuration_choice():
 def test_openapi_document_is_generated():
     response = client.get("/openapi.json")
     assert response.status_code == 200
-    assert "/api/config-options" in response.json()["paths"]
-    assert "/api/config-options/resolve" in response.json()["paths"]
-    assert "/api/demo-sessions" in response.json()["paths"]
-    session_fields = response.json()["components"]["schemas"]["SessionCreate"][
-        "properties"
-    ]
+    document = response.json()
+    assert "/api/config-options" in document["paths"]
+    assert "/api/config-options/resolve" in document["paths"]
+    assert "/api/demo-sessions" in document["paths"]
+    schemas = document["components"]["schemas"]
+    session_fields = schemas["SessionCreate"]["properties"]
     assert not {"demo_failure", "demo_monitor", "demo_approval"} & set(session_fields)
+    monitor_fields = schemas["MonitorConfig"]["properties"]
+    assert "unique_stranded_threshold" in monitor_fields
+    assert "harm_event_threshold" not in monitor_fields
+    assert "environment_context" in schemas["ScenarioConfig"]["required"]
 
 
 def test_live_configuration_resolution_combines_every_selected_part():
@@ -317,7 +324,100 @@ def test_live_version_five_derives_legacy_progress():
     frame = msgpack.unpackb(pack_frame(sim, "test", 1, "topology"), raw=False)
     progress = np.frombuffer(frame["payload"]["progress"], dtype="<f4")
 
+    assert frame["formal"] is False
     np.testing.assert_array_equal(progress, [0.75])
+
+
+def test_live_display_names_density_events_as_precursors():
+    sim = MountainSim(
+        Path(__file__).resolve().parents[2] / "configs/mountain/small-resort.yaml"
+    )
+    sim.reset(7)
+    sim.state.early_indicator[0] = True
+    sim.state.indicator_count[0] = 2
+    sim.state.dangerous_density_active[1] = True
+    sim.state.dangerous_density_onset_count[1] = 3
+
+    hazards = display_state(sim)["hazards"]
+
+    assert [hazard["event_type"] for hazard in hazards] == [
+        "density_warning",
+        "capacity_exposure",
+    ]
+    assert [hazard["event_id"] for hazard in hazards] == [
+        "density_warning:0:2",
+        "capacity_exposure:1:3",
+    ]
+
+
+def test_live_completion_requires_every_complete_status():
+    sim = MountainSim(
+        Path(__file__).resolve().parents[2] / "configs/mountain/small-resort.yaml"
+    )
+    sim.reset(7)
+    sim.population = population_from_starts([0, 0], 1)
+    sim.population.location_kind.fill(LocationKind.FINISHED)
+    sim.population.status[:] = [Status.COMPLETE, Status.STRANDED]
+
+    assert live_population_complete(sim) is False
+
+    sim.population.status.fill(Status.COMPLETE)
+
+    assert live_population_complete(sim) is True
+
+
+def test_live_worker_finishes_early_only_when_every_status_is_complete(monkeypatch):
+    statuses = [Status.COMPLETE, Status.STRANDED]
+    original_reset = AvalancheEnv.reset
+
+    def reset_with_status(env, *, seed=None, options=None):
+        result = original_reset(env, seed=seed, options=options)
+        env.sim.population.location_kind.fill(LocationKind.FINISHED)
+        env.sim.population.status[:] = statuses
+        return result
+
+    class StopAfterOneFrame:
+        def __init__(self):
+            self.checks = 0
+
+        def is_set(self):
+            self.checks += 1
+            return self.checks > 1
+
+        def wait(self, _timeout):
+            return None
+
+    monkeypatch.setattr(AvalancheEnv, "reset", reset_with_status)
+    monkeypatch.setattr(
+        "avalanche.api.sessions._control_step", lambda *_args, **_kwargs: (None, None)
+    )
+
+    for expected_complete in (False, True):
+        if expected_complete:
+            statuses[:] = [Status.COMPLETE, Status.COMPLETE]
+        clock = iter((0.0, 1.0))
+        monkeypatch.setattr(
+            "avalanche.api.sessions.time.monotonic",
+            lambda: next(clock, 1.0),
+        )
+        output = queue.Queue()
+        run_session(
+            "completion-test",
+            7,
+            2,
+            topology_version(),
+            output,
+            StopAfterOneFrame(),
+            frame_interval_ms=1,
+            initial_simulation_speed=1.0,
+        )
+        messages = []
+        while not output.empty():
+            messages.append(msgpack.unpackb(output.get(), raw=False))
+
+        assert all(message["formal"] is False for message in messages)
+        message_types = [message["type"] for message in messages]
+        assert ("complete" in message_types) is expected_complete
 
 
 def test_live_session_streams_a_complete_population():
@@ -333,6 +433,7 @@ def test_live_session_streams_a_complete_population():
     with client.websocket_connect(f"/api/sessions/{session_id}/stream") as websocket:
         first = msgpack.unpackb(websocket.receive_bytes(), raw=False)
         assert first["version"] == 5
+        assert first["formal"] is False
         assert first["type"] == "snapshot"
         assert first["session_id"] == session_id
         assert len(first["payload"]["location_kind"]) == 5000
@@ -667,6 +768,7 @@ def test_python_decodes_the_current_stream_contract_fixture():
     attack = frame["payload"]["display"]["attack"]
 
     assert frame["version"] == STREAM_VERSION == 5
+    assert frame["formal"] is False
     assert frame["session_id"] == "fixture-session"
     assert attack["kind"] == "reward_hacker"
     assert attack["active"] is True

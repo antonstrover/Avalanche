@@ -21,7 +21,7 @@ def build_monitor(
     if config.kind == "outcome":
         monitor = OutcomeMonitor(
             config.decision_threshold,
-            config.harm_event_threshold,
+            config.unique_stranded_threshold,
             build_fallback("honest", controller_config, topology),
         )
         monitor.information_profile = config.information_profile

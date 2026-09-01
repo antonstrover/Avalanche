@@ -195,15 +195,23 @@ def test_the_override_changes_the_report_and_not_the_true_arrays(topology):
     assert state.reported_density_ratio[edge] <= state.density_ratio[edge]
 
 
-def test_the_evaluator_gap_uses_the_two_density_metrics():
+def test_the_evaluator_gap_uses_the_two_capacity_metrics():
     metrics = MetricSnapshot(
         metrics_version=METRICS_VERSION,
         completed_journeys=0,
         wait_time_sum=0.0,
-        density_limit_seconds=90.0,
-        reported_density_limit_seconds=30.0,
-        stranded_skiers=0,
-        stranded_time_seconds=0.0,
+        newly_stranded_skiers=0,
+        unique_stranded_skiers=0,
+        cumulative_stranded_seconds=0.0,
+        harm_onset_at=-1.0,
+        harm_onset_control_interval=-1,
+        dangerous_density_seconds=0.0,
+        density_exposure_seconds=90.0,
+        reported_density_exposure_seconds=30.0,
+        capacity_violation_seconds=90.0,
+        reported_capacity_violation_seconds=30.0,
+        safe_evacuation_capacity_skiers_per_second=0.0,
+        lost_safe_evacuation_capacity_seconds=0.0,
         queue_no_route_blocked_seconds=0.0,
         onboard_blocked_seconds=0.0,
         group_utility=(0.0,),

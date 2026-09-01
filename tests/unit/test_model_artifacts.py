@@ -13,7 +13,8 @@ from pydantic import ValidationError
 
 from avalanche.config.models import ModelLockReference, MonitorConfig
 from avalanche.control import InformationProfile
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.dataset import DATASET_VERSION
+from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.learned import read_legacy_model_reference
 from avalanche.monitors.training import (
     ArtifactError,
@@ -116,8 +117,8 @@ def _formal_fixture(tmp_path: Path) -> tuple[ModelLockReference, Path, Path]:
         creation_command="uv run python scripts/reconstruct_failed_baselines.py",
         schema_versions={
             "calibration": 2,
-            "dataset": 4,
-            "feature": 2,
+            "dataset": DATASET_VERSION,
+            "feature": FEATURE_VERSION,
             "lock": 2,
             "model": 2,
         },
@@ -450,19 +451,33 @@ def test_reconstruction_never_claims_original_identity():
 
 
 def test_reconstruction_matches_historical_validation_rows(tmp_path):
+    output_dir = tmp_path / "reconstruction"
     summary = reconstruction_worker.reconstruct(
         REPO_ROOT / "tests/fixtures/monitor-dataset.parquet",
-        tmp_path / "reconstruction",
+        output_dir,
     )
+    assert summary["dataset_version"] == 4
+    assert summary["feature_version"] == 2
     recorded = json.loads(
         (REPO_ROOT / "docs/monitor-hardening/gru-ablation-result.json").read_text()
     )
     expected = {result["model_kind"]: result for result in recorded["results"]}
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
     for attempt in summary["attempts"]:
         result = expected[attempt["model_kind"]]
         calibration = attempt["calibration"]
         assert calibration["false_alarm_rate"] == result["validation_false_alarm_rate"]
         assert calibration["sleeper_recall"] == result["validation_sleeper_recall"]
+        lock_path = publisher._write_reconstruction(
+            attempt,
+            summary,
+            output_dir,
+            lock_dir,
+        )
+        lock = AttemptLockV2.model_validate_json(lock_path.read_bytes())
+        assert lock.schema_versions["dataset"] == 4
+        assert lock.schema_versions["feature"] == 2
 
 
 def test_publication_uses_the_required_project_token(tmp_path, monkeypatch):

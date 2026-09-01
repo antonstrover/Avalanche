@@ -7,7 +7,16 @@ import pandas as pd
 import pytest
 
 from avalanche.control import InformationProfile
-from avalanche.monitors.features import FEATURE_NAMES, feature_names_for
+from avalanche.monitors.dataset import (
+    DATASET_VERSION,
+    STRANDING_LABEL,
+    STRANDING_MASK,
+)
+from avalanche.monitors.features import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    feature_names_for,
+)
 from avalanche.monitors.perceptron import (
     TrainedModel,
     TrainingConfig,
@@ -65,6 +74,10 @@ def frame(rows: int = 80) -> pd.DataFrame:
     values[SIGNAL] = labels.astype(np.float32)
     result = pd.DataFrame(values)
     result["attack_active"] = labels
+    result["dataset_version"] = DATASET_VERSION
+    result["feature_version"] = FEATURE_VERSION
+    result[STRANDING_LABEL] = labels
+    result[STRANDING_MASK] = 1
     result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
     result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
     result["step"] = np.tile(np.arange(rows // 2), 2)
@@ -107,7 +120,7 @@ def fake_perceptron(*, separated: bool) -> TrainedModel:
         metadata={
             "model_version": 2,
             "model_kind": "perceptron",
-            "feature_version": 2,
+            "feature_version": FEATURE_VERSION,
             "information_profile": "principal",
         },
     )
@@ -125,6 +138,10 @@ def oracle_frame(profile: InformationProfile, rows: int = 80) -> pd.DataFrame:
     values[names[0]] = labels.astype(np.float32)
     result = pd.DataFrame(values)
     result["attack_active"] = labels
+    result["dataset_version"] = DATASET_VERSION
+    result["feature_version"] = FEATURE_VERSION
+    result[STRANDING_LABEL] = labels
+    result[STRANDING_MASK] = 1
     result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
     result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
     result["step"] = np.tile(np.arange(rows // 2), 2)
@@ -143,7 +160,7 @@ def fake_oracle_perceptron(profile: InformationProfile) -> TrainedModel:
         metadata={
             "model_version": 2,
             "model_kind": "perceptron",
-            "feature_version": 2,
+            "feature_version": FEATURE_VERSION,
             "information_profile": profile.value,
         },
     )
@@ -161,7 +178,7 @@ def fake_gru() -> TrainedGRU:
         metadata={
             "model_version": 2,
             "model_kind": "gru",
-            "feature_version": 2,
+            "feature_version": FEATURE_VERSION,
             "information_profile": "principal",
             "seed": 20260825,
             "epochs": 60,
@@ -334,6 +351,23 @@ def test_training_requires_an_approved_shortcut_report(tmp_path):
     )
     with pytest.raises(ValueError, match="not approved"):
         train_locked_monitor(frame(), frame(), report, tmp_path / "model")
+
+
+def test_locked_training_rejects_legacy_dataset_rows(tmp_path):
+    current = frame()
+    report = approved_report(tmp_path, current, current)
+    legacy = current.assign(dataset_version=4)
+
+    with pytest.raises(ValueError, match="invalid dataset version"):
+        train_locked_monitor(
+            legacy,
+            current,
+            report,
+            tmp_path / "model",
+            dataset_checksums=DATASET_CHECKSUMS,
+        )
+
+    assert not (tmp_path / "model").exists()
 
 
 def test_perceptron_training_failure_marks_the_base_stage(tmp_path, monkeypatch):

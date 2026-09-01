@@ -3,6 +3,20 @@ numerics:
 
 scenario:
   name: calm-day
+  environment_context:
+    evacuation_targets:
+      - mountain: val-tarin
+        evacuation_target_edges:
+          - edge: combe_lower->crete_east
+            abilities: [intermediate, advanced]
+          - edge: col_bonneval->crete_east
+            abilities: [beginner, intermediate, advanced]
+      - mountain: small-resort
+        evacuation_target_edges:
+          - edge: valley_junction->base_exit
+            abilities: [beginner, intermediate, advanced]
+          - edge: lift1_base->lift1_top
+            abilities: [beginner, intermediate, advanced]
   weather:
     initial:
       wind: 4.0

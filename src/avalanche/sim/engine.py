@@ -16,6 +16,7 @@ import numpy as np
 from avalanche.config.models import (
     PROTOCOL_TIME_EPSILON_SECONDS,
     AuditConfig,
+    EnvironmentContextConfig,
     FailuresConfig,
     HazardConfig,
     NumericsConfig,
@@ -49,6 +50,10 @@ from avalanche.scenarios.weather import (
     WeatherSchedule,
     apply_weather,
     resolve_weather_schedule,
+)
+from avalanche.sim.evacuation import (
+    ResolvedEnvironmentContext,
+    resolve_environment_context,
 )
 from avalanche.sim.hazards import HazardEvent, update_hazards
 from avalanche.sim.movement import (
@@ -147,6 +152,7 @@ class MountainSim:
         self.delivered_audits: tuple[AuditMeasurement, ...] = ()
         self.operational_event_schedule: OperationalEventSchedule | None = None
         self.active_operational_events: tuple[OperationalEvent, ...] = ()
+        self.environment_context = ResolvedEnvironmentContext((), (), 0.0)
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), DEFAULT_EPISODE_SECONDS)
         self.last_movement_transitions = MovementTransitions(
             np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
@@ -251,13 +257,31 @@ class MountainSim:
         episode_seconds = float(
             options.get("episode_duration_seconds", DEFAULT_EPISODE_SECONDS)
         )
-        self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), episode_seconds)
         self.last_movement_transitions = MovementTransitions(
             np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
         )
         self._update_weather()
         self._update_failures()
         self._update_operational_events()
+        environment_context = options.get("environment_context")
+        if environment_context is None:
+            self.environment_context = ResolvedEnvironmentContext((), (), 0.0)
+        else:
+            if not isinstance(environment_context, EnvironmentContextConfig):
+                environment_context = EnvironmentContextConfig.model_validate(
+                    environment_context
+                )
+            self.environment_context = resolve_environment_context(
+                self.topology,
+                self.state,
+                environment_context.for_mountain(self.topology.name),
+            )
+        self.metrics = OnlineMetrics(
+            len(CUSTOMER_GROUP_NAMES),
+            episode_seconds,
+            topology=self.topology,
+            environment_context=self.environment_context,
+        )
         refresh_reported_telemetry(self.state, self.topology)
         self.route_sensor_channel = RouteSensorChannel(
             self.route_sensor_config,
@@ -308,7 +332,7 @@ class MountainSim:
             returned_queue_skiers,
             onward_rejected_skiers,
         ).astype(np.int64, copy=False)
-        update_lift_blocked_times(
+        lift_stranding_candidates = update_lift_blocked_times(
             pop,
             self.topology,
             self.state,
@@ -330,8 +354,10 @@ class MountainSim:
             self.tick_seconds,
             self.time_epsilon_seconds,
         )
-        self.last_movement_transitions = transitions
         choice_time = self.simulation_time + self.tick_seconds
+        control_interval_index = int(
+            self.simulation_time / self.control_interval_seconds
+        )
         if self._is_control_boundary(choice_time):
             assert self.route_sensor_channel is not None
             self.route_sensor_packet = self.route_sensor_channel.deliver(choice_time)
@@ -350,7 +376,7 @@ class MountainSim:
             self.reported_risk_config,
         )
         self.metrics.update_route_decisions(route_decisions)
-        update_stranded(
+        node_stranding_candidates = update_stranded(
             pop,
             self.routes,
             self.state,
@@ -359,6 +385,27 @@ class MountainSim:
             self.time_epsilon_seconds,
             topology=self.topology,
         )
+        stranding_candidates = np.union1d(
+            lift_stranding_candidates,
+            node_stranding_candidates,
+        ).astype(np.int64, copy=False)
+        newly_stranded = stranding_candidates[
+            (pop.status[stranding_candidates] == Status.ACTIVE)
+            & ~pop.ever_stranded[stranding_candidates]
+        ]
+        pop.status[newly_stranded] = Status.STRANDED
+        pop.first_stranded_at[newly_stranded] = choice_time
+        pop.ever_stranded[newly_stranded] = True
+        transitions = MovementTransitions(
+            completed_skiers=transitions.completed_skiers,
+            edge_completed_at=transitions.edge_completed_at,
+            newly_stranded_indices=newly_stranded,
+            stranding_boundary_seconds=(choice_time if newly_stranded.size else None),
+            control_interval_index=(
+                control_interval_index if newly_stranded.size else None
+            ),
+        )
+        self.last_movement_transitions = transitions
         # 8. Calculate the occupancy, the speeds, and the hazards.
         update_congestion(pop, self.topology, self.state)
         self.hazard_events.extend(
@@ -384,6 +431,9 @@ class MountainSim:
             self.state,
             self.tick_seconds,
             stranded_at_tick_start=stranded_at_tick_start,
+            newly_stranded_skiers=int(newly_stranded.size),
+            movement_boundary_seconds=choice_time,
+            control_interval_index=control_interval_index,
         )
         # 10. Write the material events to the trace buffer. Stage 5 adds this.
 
@@ -520,8 +570,10 @@ class MountainSim:
             "edge_dangerous_density_seconds": (
                 self.state.dangerous_density_seconds.tolist()
             ),
-            "edge_hazard_indicator": self.state.early_indicator.tolist(),
-            "edge_harm": self.state.harm_active.tolist(),
+            "edge_density_warning": self.state.early_indicator.tolist(),
+            "edge_dangerous_density_active": (
+                self.state.dangerous_density_active.tolist()
+            ),
             "hazard_events": [event.as_dict() for event in self.hazard_events],
             "weather": self.weather.as_array().tolist(),
             "active_failures": [

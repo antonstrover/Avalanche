@@ -49,7 +49,7 @@ from avalanche.monitors import build_monitor
 from avalanche.sim.engine import MountainSim
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.population import display_progress
-from avalanche.sim.skier import LocationKind
+from avalanche.sim.skier import Status
 
 STREAM_VERSION = 5
 SIMULATION_SPEED = 20.0
@@ -86,7 +86,7 @@ def pack_frame(
     approval: ApprovalRequest | None = None,
     controller: ControllerConfig | None = None,
 ) -> bytes:
-    """Pack one complete display state."""
+    """Pack one complete nonformal display state."""
     population = sim.population
     payload = {
         "skier_count": len(population),
@@ -97,6 +97,7 @@ def pack_frame(
     }
     envelope = {
         "version": STREAM_VERSION,
+        "formal": False,
         "type": message_type,
         "session_id": session_id,
         "sequence": sequence,
@@ -137,16 +138,21 @@ def display_state(
         for event in sim.active_failures
     ]
     hazards = []
-    for edge in np.flatnonzero(sim.state.early_indicator | sim.state.harm_active):
-        harm = bool(sim.state.harm_active[edge])
-        event_type = "true_harm" if harm else "early_indicator"
-        count = sim.state.harm_count[edge] if harm else sim.state.indicator_count[edge]
+    active_precursors = sim.state.early_indicator | sim.state.dangerous_density_active
+    for edge in np.flatnonzero(active_precursors):
+        exposed = bool(sim.state.dangerous_density_active[edge])
+        event_type = "capacity_exposure" if exposed else "density_warning"
+        count = (
+            sim.state.dangerous_density_onset_count[edge]
+            if exposed
+            else sim.state.indicator_count[edge]
+        )
         hazards.append(
             {
                 "event_id": f"{event_type}:{int(edge)}:{int(count)}",
                 "event_type": event_type,
                 "edge_index": int(edge),
-                "severity": "high" if harm else "medium",
+                "severity": "high" if exposed else "medium",
                 "hazard_score": float(sim.state.hazard_score[edge]),
             }
         )
@@ -370,7 +376,9 @@ def _timeline(sim: MountainSim) -> list[dict[str, object]]:
                 "edge_index": hazard.edge_index,
                 "start_time_seconds": hazard.start_time_seconds,
                 "end_time_seconds": None,
-                "severity": ("high" if hazard.event_type == "true_harm" else "medium"),
+                "severity": (
+                    "high" if hazard.event_type == "capacity_exposure" else "medium"
+                ),
                 "label": hazard.event_type.replace("_", " "),
             }
         )
@@ -415,6 +423,11 @@ def _put_latest(output: Any, value: bytes) -> None:
         except queue.Empty:
             pass
         output.put_nowait(value)
+
+
+def live_population_complete(sim: MountainSim) -> bool:
+    """Return true only when every skier completed its journey."""
+    return bool(np.all(sim.population.status == Status.COMPLETE))
 
 
 def run_session(
@@ -610,6 +623,7 @@ def run_session(
                 msgpack.packb(
                     {
                         "version": STREAM_VERSION,
+                        "formal": False,
                         "type": "command_ack",
                         "session_id": session_id,
                         "sequence": sequence,
@@ -660,11 +674,12 @@ def run_session(
                 accumulated_seconds -= env.config.movement_tick_seconds
             publish_frame()
             next_frame += interval
-            if np.all(sim.population.location_kind == LocationKind.FINISHED):
+            if live_population_complete(sim):
                 sequence += 1
                 complete = msgpack.packb(
                     {
                         "version": STREAM_VERSION,
+                        "formal": False,
                         "type": "complete",
                         "session_id": session_id,
                         "sequence": sequence,
@@ -682,6 +697,7 @@ def run_session(
             msgpack.packb(
                 {
                     "version": STREAM_VERSION,
+                    "formal": False,
                     "type": "error",
                     "session_id": session_id,
                     "sequence": 0,

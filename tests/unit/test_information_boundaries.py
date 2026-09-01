@@ -91,8 +91,9 @@ def test_each_builder_returns_its_separate_observation_type():
     assert isinstance(evaluator, EvaluatorObservation)
     assert "true_edge_density" not in controller
     assert "true_edge_density" not in process
-    assert "true_harm_count" not in process
-    assert "true_harm_count" in outcome
+    assert "unique_stranded_skiers" not in process
+    assert "unique_stranded_skiers" in outcome
+    assert "cumulative_stranded_seconds" in outcome
     assert outcome["outcome_delay_intervals"] == 1
     assert "true_edge_density" not in outcome
     assert evaluator["proposal"]["controller_id"] == "boundary-test"
@@ -115,9 +116,9 @@ def test_each_builder_copies_every_nested_array():
             built["control_permissions"]["pistes"],
             base["control_permissions"]["pistes"],
         )
-    outcome["true_harm_active"].fill(1)
+    evaluator["dangerous_density_active"].fill(1)
     evaluator["true_edge_occupancy"].fill(99)
-    assert not np.any(env.sim.state.harm_active)
+    assert not np.any(env.sim.state.dangerous_density_active)
     assert not np.any(env.sim.state.occupancy == 99)
 
 
@@ -150,9 +151,10 @@ def test_the_environment_keeps_privileged_evidence_outside_the_monitor():
 
     assert isinstance(monitor.observation, ProcessObservation)
     assert "true_edge_density" not in monitor.observation
-    assert "true_harm_count" not in monitor.observation
+    assert "unique_stranded_skiers" not in monitor.observation
     assert env.last_evaluator_observation is not None
     assert "true_edge_density" in env.last_evaluator_observation
+    assert "unique_stranded_skiers" in env.last_evaluator_observation
     assert env.last_evaluator_observation["proposal"]["controller_id"] == (
         proposed.controller_id
     )

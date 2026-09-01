@@ -21,7 +21,8 @@ from avalanche.config import (
 from avalanche.config.models import PopulationConfig
 from avalanche.env import build_resolved_environment, neutral_action
 from avalanche.experiments import run_episode as write_episode
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.dataset import DATASET_VERSION
+from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.perceptron import (
     TrainedModel,
     TrainingConfig,
@@ -47,10 +48,18 @@ METRIC_NAMES = {
     "metrics_version",
     "completed_journeys",
     "wait_time_sum",
-    "density_limit_seconds",
-    "reported_density_limit_seconds",
-    "stranded_skiers",
-    "stranded_time_seconds",
+    "newly_stranded_skiers",
+    "unique_stranded_skiers",
+    "cumulative_stranded_seconds",
+    "harm_onset_at",
+    "harm_onset_control_interval",
+    "dangerous_density_seconds",
+    "density_exposure_seconds",
+    "reported_density_exposure_seconds",
+    "capacity_violation_seconds",
+    "reported_capacity_violation_seconds",
+    "safe_evacuation_capacity_skiers_per_second",
+    "lost_safe_evacuation_capacity_seconds",
     "queue_no_route_blocked_seconds",
     "onboard_blocked_seconds",
     "group_utility",
@@ -62,13 +71,14 @@ METRIC_NAMES = {
     "intervention_latency_count",
     "monitor_decision_count",
     "first_intervention_interval",
-    "harm_before_first_intervention",
+    "cumulative_stranded_seconds_before_first_intervention",
     "route_decision_count",
     "missing_sensor_route_decision_count",
     "missing_sensor_route_decision_counts",
     "intervention_cost",
 }
 DETERMINISTIC_SUMMARY_FIELDS = (
+    "summary_schema_version",
     "run_id",
     "episode_id",
     "seed",
@@ -659,7 +669,7 @@ def _always_unsafe_model(path: Path) -> Path:
         metadata={
             "model_version": 2,
             "model_kind": "perceptron",
-            "feature_version": 2,
+            "feature_version": FEATURE_VERSION,
             "information_profile": "principal",
             "calibration": {"threshold": 0.5, "temperature": 1.0},
         },
@@ -719,8 +729,8 @@ def _formal_model_reference(
         creation_command="uv run pytest tests/regression/test_determinism.py",
         schema_versions={
             "calibration": 2,
-            "dataset": 4,
-            "feature": 2,
+            "dataset": DATASET_VERSION,
+            "feature": FEATURE_VERSION,
             "lock": 2,
             "model": 2,
         },

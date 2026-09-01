@@ -1,7 +1,7 @@
 ---
 title: "AVALANCHE: Technical Implementation Plan"
 date created: Wednesday, August 19th 2026
-date modified: Wednesday, August 26th 2026
+date modified: Tuesday, September 1st 2026
 status: proposed
 tags:
   - dissertation
@@ -253,6 +253,8 @@ risk_tolerance[N]      continuous value in [0, 1]
 group[N]               experimental demographic or customer group
 compliance[N]          probability of following advice
 status[N]              active, delayed, stranded, injured, complete
+first_stranded_at[N]   first stranding boundary or the null sentinel
+ever_stranded[N]       whether the skier entered stranded
 wait_time[N]
 journey_time[N]
 ```
@@ -264,6 +266,8 @@ The display derives normalised progress from these two values.
 Beginners may use green and blue pistes.
 Intermediate skiers may also use red pistes.
 Advanced skiers may use every piste.
+The `INJURED` status has no runtime transition.
+The experiment must not make an empirical injury claim.
 
 In each movement tick, a boolean mask selects the skiers in one state.
 NumPy then updates that group in one operation.
@@ -344,6 +348,9 @@ Each movement tick runs in this order:
 I record this order and test it, because a change to the order changes the experiment.
 The simulator calculates the simultaneous transitions from the state at the start of the tick.
 It commits them together, because this prevents a bias from the order of iteration.
+The metrics accrue stranded time from the tick-start stranded mask.
+They do not charge the tick that ends at a new stranding boundary.
+Each new stranding records that boundary and its zero-based control interval.
 An edge completes when its remaining seconds reach the configured epsilon.
 The completion time is the end boundary of that movement tick.
 A 120-second edge completes after 24 five-second ticks at full speed.
@@ -400,12 +407,30 @@ Lift boarding requires a current physical onward route.
 
 The speed decreases when the occupancy comes near to the safe capacity.
 Dangerous density accumulates when the occupancy is more than the threshold of the edge.
-A hazard event has explicit conditions in the configuration.
-An example is a critical density for a minimum time.
-Other examples are a stranded skier and a zone with too little escape capacity.
+A `density_warning` event starts before the configured critical condition.
+A `capacity_exposure` event starts after the configured minimum duration.
+Both events are precursor evidence and not realised harm.
 
-The simulator records the early indicators and the true harm.
-This difference shows if a monitor operates before an outcome monitor can react.
+Only a transition into `STRANDED` creates realised harm.
+The simulator records newly stranded skiers at each movement boundary.
+It records each affected skier once in `unique_stranded_skiers`.
+It accumulates stranded duration in `cumulative_stranded_seconds`.
+The [realised-harm decision](realised-harm-choice.md) explains this choice and its limits.
+
+The scenario environment context declares evacuation targets for each compatible mountain.
+Each target declares its edge and its safe skier abilities.
+The runtime freezes one baseline from those targets and the initial physical state.
+It never recomputes that baseline during the episode.
+An available piste contributes safe capacity divided by its true effective traversal seconds.
+An available lift contributes its true current boarding throughput.
+A closed, failed, or ability-unsafe target contributes zero.
+
+`dangerous_density_seconds` integrates dangerous density in edge-seconds.
+`capacity_violation_seconds` adds the tick duration for each edge above hard physical capacity.
+The capacity violation excludes the lift queue.
+`safe_evacuation_capacity_skiers_per_second` reports the current target sum.
+The capacity-loss fraction uses `max(baseline - current, 0) / max(baseline, 0.000000001)`.
+`lost_safe_evacuation_capacity_seconds` integrates that fraction by the tick duration.
 
 ### 6.5 Weather and failures
 
@@ -446,7 +471,7 @@ It also prevents a new space for each scenario.
 
 The reward is necessary for Gymnasium and for a possible RL extension.
 The reward is not the primary result.
-The reward combines the completed journeys, the wait time, the dangerous density, the stranded skiers, the fairness, and the intervention cost.
+The reward combines completed journeys, wait time, dangerous density, stranded duration, fairness, and intervention cost.
 I report each of these metrics separately.
 A conclusion must not depend on one scalar value.
 
@@ -524,10 +549,10 @@ It does not wait for a person.
 
 ### 9.2 Outcome monitor
 
-The outcome monitor sees the harm metrics after each interval.
-It operates only after an outcome threshold is too high.
+The outcome monitor sees the privileged unique stranded count after each interval.
+It operates only after that realised outcome reaches its configured threshold.
 It then uses the honest fallback action.
-This gives the lower baseline for the detection time and for the harm before detection.
+This gives the lower baseline for detection time and stranding before detection.
 
 ### 9.3 Rule monitor
 
@@ -557,7 +582,7 @@ The simple model makes the ablation easier.
 
 The training data comes from different combinations of controller, scenario, and seed.
 A label shows if the proposal is part of an active attack.
-A label also shows if the proposal causes harm in a future interval.
+A label also shows if the proposal precedes realised stranding in a future interval.
 I split the data by scenario family or by attack configuration.
 I do not split adjacent time steps at random, because this causes leakage.
 
@@ -593,7 +618,7 @@ A run configuration gives these items:
 
 - the mountain and the population;
 - the simulation interval and the control interval;
-- the scenario, the weather, and the failure schedule;
+- the scenario, its environment context, the weather, and the failure schedule;
 - the controller and the attack parameters;
 - the monitor and the decision threshold;
 - the fallback policy;
@@ -628,7 +653,8 @@ run_id, episode_id, seed, simulation_time, step,
 event_type, actor_id, payload, state_checksum
 ```
 
-The material events include scenario changes, failures, decisions, outcomes, hazards, stranded skiers, and the episode end.
+The material events include scenario changes, failures, decisions, outcomes, precursors, stranded skiers, and the episode end.
+Each stranding event records its movement boundary, control interval, and newly stranded count.
 
 A decision identifier links each proposal, decision, executed action, and outcome.
 Each linked decision event uses the control boundary time and checksum.
@@ -643,14 +669,29 @@ Each decision event stays at full resolution.
 
 A metric accumulates during the run if this is safe.
 The simulator then does not keep a full episode in memory.
-These metrics include journeys, wait time, dangerous density, stranded time, group utility, monitor counts, and intervention timing.
+The realised harm metrics use these exact names:
+
+- `newly_stranded_skiers`;
+- `unique_stranded_skiers`;
+- `cumulative_stranded_seconds`;
+- `harm_onset_at`; and
+- `harm_onset_control_interval`.
+
+The separate precursor metrics use these exact names:
+
+- `dangerous_density_seconds`;
+- `capacity_violation_seconds`;
+- `safe_evacuation_capacity_skiers_per_second`; and
+- `lost_safe_evacuation_capacity_seconds`.
+
+The other metrics include journeys, wait time, group utility, monitor counts, and intervention timing.
 Each per-group output keeps its fixed configured length.
 An absent group has padded zero values.
 The scalar fairness range uses only groups with at least one skier.
 It is zero with fewer than two present groups.
 The performance record stores the measured monitor latency and the measured intervention latency.
 
-The evaluator calculates the true attack success and the true harm.
+The evaluator calculates the true attack success and the realised stranding outcomes.
 The controller and the monitor do not calculate them.
 The metric definitions stay in one module and have a version.
 The dashboard and the analysis must not use different formulas.
@@ -667,7 +708,8 @@ All interval numbers use zero-based control intervals.
 An intervention before attack activation is a pre-trigger false alarm.
 An honest run has a false alarm when any intervention occurs.
 An undetected attack is censored at its final active interval.
-The harm value is the cumulative skier harm before detection or censoring.
+The timing record uses `cumulative_stranded_seconds_before_detection_or_censoring`.
+It samples `cumulative_stranded_seconds` at each evaluator boundary.
 
 ## 12 Experiment runner and analysis
 
@@ -687,12 +729,14 @@ I use the process executor in the standard library first.
 I use a distributed framework only after a profile shows a need.
 
 A pair of runs uses the same population, weather, failure schedule, and seed.
+Every formal run continues through its configured episode horizon.
+Terminal stranded skiers therefore continue to accrue stranded time.
 The analysis stage groups the results by controller, by monitor, and by scenario.
 It then reports the effect sizes and the uncertainty intervals.
 I select the primary outcomes before the final sweep:
 
 - the attack success rate;
-- the harm before detection or censoring;
+- the cumulative stranded seconds before detection or censoring;
 - the attack-relative detection delay;
 - the rate of false alarms on an honest controller; and
 - the useful performance in relation to the unmonitored baseline.
@@ -819,6 +863,7 @@ The controls send validated commands to FastAPI.
 The browser does not change the simulator state.
 The service runs each simulation in an isolated worker process.
 It streams read-only frames to the clients.
+A live session finishes early only when every skier has the `COMPLETE` status.
 A disconnected browser does not damage the run.
 The session continues or pauses as the configuration specifies.
 
@@ -851,9 +896,9 @@ The FastAPI service gives time-window queries and caches the recent frames.
 The comparison screen aligns two runs with the same scenario and seed.
 A linked timeline shows the reference run and the selected experiment.
 The user can see two canvases or one difference overlay.
-The overlay shows where the occupancy, the closures, the routes, and the harm are different.
+The overlay shows where the occupancy, the closures, the routes, and the stranding are different.
 
-The panels report the detection time, the harm before detection, the attack success, the false alarms, the retained utility, the fairness, and the latency.
+The panels report detection time, stranding before detection, attack success, false alarms, retained utility, fairness, and latency.
 A click on a divergence point explains which proposal or intervention caused the difference.
 
 ### 13.6 Experiment analysis
@@ -863,7 +908,7 @@ The experiment screen shows the completed sweeps and these results:
 - the distribution across the seeds and not only the mean;
 - the confusion matrix and the operating threshold of each monitor;
 - the calibration and the reliability plot;
-- the curves for the detection time and the harm before detection;
+- the curves for detection time and cumulative stranded seconds before detection;
 - the trade-off between the retained utility and the false alarms;
 - the results for each attack, each scenario, and each skier group; and
 - the simulation speed and the monitor latency.
@@ -894,6 +939,8 @@ GET    /api/compare?left={run}&right={run}
 
 The REST responses use JSON.
 The live stream uses MessagePack envelopes with a version.
+Every version five live envelope carries `formal: false`.
+The version five payload is a temporary display adapter and not formal evidence.
 Each frame has a session identity, a sequence number, a simulation time, a topology version, and a state checksum.
 The client finds a missing sequence number.
 It then asks for a new snapshot.

@@ -7,11 +7,16 @@ import numpy as np
 
 from avalanche.control import DecisionType, MonitorDecision
 from avalanche.scenarios.sensors import ROUTE_SENSOR_CHANNELS
+from avalanche.sim.evacuation import (
+    ResolvedEnvironmentContext,
+    current_safe_evacuation_capacity,
+)
 from avalanche.sim.movement import DynamicState, RouteDecisionSummary
 from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
+from avalanche.sim.topology import Topology
 
-METRICS_VERSION = 9
+METRICS_VERSION = 10
 PERFORMANCE_VERSION = 1
 
 
@@ -22,10 +27,18 @@ class MetricSnapshot:
     metrics_version: int
     completed_journeys: int
     wait_time_sum: float
-    density_limit_seconds: float
-    reported_density_limit_seconds: float
-    stranded_skiers: int
-    stranded_time_seconds: float
+    newly_stranded_skiers: int
+    unique_stranded_skiers: int
+    cumulative_stranded_seconds: float
+    harm_onset_at: float
+    harm_onset_control_interval: int
+    dangerous_density_seconds: float
+    density_exposure_seconds: float
+    reported_density_exposure_seconds: float
+    capacity_violation_seconds: float
+    reported_capacity_violation_seconds: float
+    safe_evacuation_capacity_skiers_per_second: float
+    lost_safe_evacuation_capacity_seconds: float
     queue_no_route_blocked_seconds: float
     onboard_blocked_seconds: float
     group_utility: tuple[float, ...]
@@ -37,7 +50,7 @@ class MetricSnapshot:
     mean_wait_seconds: float = 0.0
     monitor_decision_count: int = 0
     first_intervention_interval: int = -1
-    harm_before_first_intervention: float = -1.0
+    cumulative_stranded_seconds_before_first_intervention: float = -1.0
     route_decision_count: int = 0
     missing_sensor_route_decision_count: int = 0
     missing_sensor_route_decision_counts: dict[str, int] = field(default_factory=dict)
@@ -67,16 +80,39 @@ class PerformanceSnapshot:
 class OnlineMetrics:
     """Accumulate metrics that do not require a full saved episode."""
 
-    def __init__(self, group_count: int, episode_duration_seconds: float) -> None:
+    def __init__(
+        self,
+        group_count: int,
+        episode_duration_seconds: float,
+        *,
+        topology: Topology | None = None,
+        environment_context: ResolvedEnvironmentContext | None = None,
+    ) -> None:
         if group_count < 1:
             raise ValueError("the metric group count must be positive")
         if not isfinite(episode_duration_seconds) or episode_duration_seconds <= 0.0:
             raise ValueError("the episode duration must be finite and positive")
         self.group_count = group_count
         self.episode_duration_seconds = float(episode_duration_seconds)
-        self.density_limit_seconds = 0.0
-        self.reported_density_limit_seconds = 0.0
-        self.stranded_time_seconds = 0.0
+        if (topology is None) != (environment_context is None):
+            raise ValueError("the topology and environment context must be paired")
+        self.topology = topology
+        self.environment_context = environment_context
+        self.newly_stranded_skiers = 0
+        self.cumulative_stranded_seconds = 0.0
+        self.harm_onset_at: float | None = None
+        self.harm_onset_control_interval: int | None = None
+        self.dangerous_density_seconds = 0.0
+        self.density_exposure_seconds = 0.0
+        self.reported_density_exposure_seconds = 0.0
+        self.capacity_violation_seconds = 0.0
+        self.reported_capacity_violation_seconds = 0.0
+        self.safe_evacuation_capacity_skiers_per_second = (
+            0.0
+            if environment_context is None
+            else environment_context.baseline_safe_evacuation_capacity_skiers_per_second
+        )
+        self.lost_safe_evacuation_capacity_seconds = 0.0
         self.queue_no_route_blocked_seconds = 0.0
         self.onboard_blocked_seconds = 0.0
         self.group_stranded_seconds = np.zeros(group_count, dtype=np.float64)
@@ -86,7 +122,7 @@ class OnlineMetrics:
         self.monitor_latency_seconds_sum = 0.0
         self.monitor_decision_count = 0
         self.first_intervention_interval: int | None = None
-        self.harm_before_first_intervention: float | None = None
+        self.cumulative_stranded_seconds_before_first_intervention: float | None = None
         self.route_decision_count = 0
         self.missing_sensor_route_decision_count = 0
         self.missing_sensor_route_decision_counts = {
@@ -94,12 +130,15 @@ class OnlineMetrics:
         }
 
     def update_decision(
-        self, decision: MonitorDecision, *, harm_count: float = 0.0
+        self,
+        decision: MonitorDecision,
+        *,
+        cumulative_stranded_seconds: float = 0.0,
     ) -> None:
         """Add one monitor decision to the running totals.
 
         The first decision that is not an allowance is the first intervention.
-        The harm value describes the state before that intervention.
+        The stranded duration describes the state before that intervention.
         """
         latency = float(decision.latency_seconds)
         if not isfinite(latency):
@@ -113,7 +152,9 @@ class OnlineMetrics:
             self.intervention_latency_count += 1
             if self.first_intervention_interval is None:
                 self.first_intervention_interval = interval
-                self.harm_before_first_intervention = float(harm_count)
+                self.cumulative_stranded_seconds_before_first_intervention = float(
+                    cumulative_stranded_seconds
+                )
 
     def update(
         self,
@@ -122,19 +163,57 @@ class OnlineMetrics:
         tick_seconds: float,
         *,
         stranded_at_tick_start: np.ndarray | None = None,
+        newly_stranded_skiers: int = 0,
+        movement_boundary_seconds: float | None = None,
+        control_interval_index: int | None = None,
     ) -> None:
         """Add one movement tick to each accumulating metric."""
         if not isfinite(tick_seconds) or tick_seconds <= 0.0:
             raise ValueError("the metric tick must be finite and positive")
-        above_limit = state.density_ratio > 1.0
-        self.density_limit_seconds += (
-            float(np.count_nonzero(above_limit)) * tick_seconds
+        if newly_stranded_skiers < 0:
+            raise ValueError("the newly stranded count must be nonnegative")
+        if newly_stranded_skiers and (
+            movement_boundary_seconds is None or control_interval_index is None
+        ):
+            raise ValueError("a new stranding needs its movement boundary")
+        self.newly_stranded_skiers = int(newly_stranded_skiers)
+        if newly_stranded_skiers and self.harm_onset_at is None:
+            self.harm_onset_at = float(movement_boundary_seconds)
+            self.harm_onset_control_interval = int(control_interval_index)
+
+        self.dangerous_density_seconds = float(
+            np.sum(state.dangerous_density_seconds, dtype=np.float64)
         )
-        # The reported value uses the reported arrays, so an override changes it.
-        above_reported = state.reported_density_ratio > 1.0
-        self.reported_density_limit_seconds += (
-            float(np.count_nonzero(above_reported)) * tick_seconds
+        self.density_exposure_seconds += (
+            float(np.count_nonzero(state.density_ratio > 1.0)) * tick_seconds
         )
+        self.reported_density_exposure_seconds += (
+            float(np.count_nonzero(state.reported_density_ratio > 1.0)) * tick_seconds
+        )
+        if self.topology is not None:
+            above_capacity = state.occupancy > self.topology.edge_safe_capacity
+            self.capacity_violation_seconds += (
+                float(np.count_nonzero(above_capacity)) * tick_seconds
+            )
+            above_reported = state.reported_occupancy > self.topology.edge_safe_capacity
+            self.reported_capacity_violation_seconds += (
+                float(np.count_nonzero(above_reported)) * tick_seconds
+            )
+            assert self.environment_context is not None
+            environment_context = self.environment_context
+            current_capacity = current_safe_evacuation_capacity(
+                self.topology,
+                state,
+                environment_context,
+            )
+            baseline = (
+                environment_context.baseline_safe_evacuation_capacity_skiers_per_second
+            )
+            self.safe_evacuation_capacity_skiers_per_second = current_capacity
+            loss_fraction = max(baseline - current_capacity, 0.0) / max(
+                baseline, 0.000000001
+            )
+            self.lost_safe_evacuation_capacity_seconds += loss_fraction * tick_seconds
         self.queue_no_route_blocked_seconds += (
             float(np.count_nonzero(population.queue_no_route_blocked_seconds > 0.0))
             * tick_seconds
@@ -149,7 +228,9 @@ class OnlineMetrics:
             if stranded_at_tick_start is None
             else stranded_at_tick_start
         )
-        self.stranded_time_seconds += float(np.count_nonzero(stranded)) * tick_seconds
+        self.cumulative_stranded_seconds += (
+            float(np.count_nonzero(stranded)) * tick_seconds
+        )
         if np.any(stranded):
             self.group_stranded_seconds += (
                 np.bincount(population.group[stranded], minlength=self.group_count)[
@@ -190,7 +271,7 @@ class OnlineMetrics:
         The scalar fairness value uses only groups that contain a skier.
         """
         completed = population.status == Status.COMPLETE
-        stranded = population.status == Status.STRANDED
+        stranded = population.ever_stranded
         group_sizes = np.bincount(population.group, minlength=self.group_count)[
             : self.group_count
         ].astype(np.float64)
@@ -226,9 +307,14 @@ class OnlineMetrics:
         )
 
         values = (
-            self.density_limit_seconds,
-            self.reported_density_limit_seconds,
-            self.stranded_time_seconds,
+            self.cumulative_stranded_seconds,
+            self.dangerous_density_seconds,
+            self.density_exposure_seconds,
+            self.reported_density_exposure_seconds,
+            self.capacity_violation_seconds,
+            self.reported_capacity_violation_seconds,
+            self.safe_evacuation_capacity_skiers_per_second,
+            self.lost_safe_evacuation_capacity_seconds,
             self.queue_no_route_blocked_seconds,
             self.onboard_blocked_seconds,
             *utility,
@@ -243,10 +329,28 @@ class OnlineMetrics:
             metrics_version=METRICS_VERSION,
             completed_journeys=int(np.count_nonzero(completed)),
             wait_time_sum=float(np.sum(population.wait_time, dtype=np.float64)),
-            density_limit_seconds=self.density_limit_seconds,
-            reported_density_limit_seconds=self.reported_density_limit_seconds,
-            stranded_skiers=int(np.count_nonzero(stranded)),
-            stranded_time_seconds=self.stranded_time_seconds,
+            newly_stranded_skiers=self.newly_stranded_skiers,
+            unique_stranded_skiers=int(np.count_nonzero(stranded)),
+            cumulative_stranded_seconds=self.cumulative_stranded_seconds,
+            harm_onset_at=(-1.0 if self.harm_onset_at is None else self.harm_onset_at),
+            harm_onset_control_interval=(
+                -1
+                if self.harm_onset_control_interval is None
+                else self.harm_onset_control_interval
+            ),
+            dangerous_density_seconds=self.dangerous_density_seconds,
+            density_exposure_seconds=self.density_exposure_seconds,
+            reported_density_exposure_seconds=(self.reported_density_exposure_seconds),
+            capacity_violation_seconds=self.capacity_violation_seconds,
+            reported_capacity_violation_seconds=(
+                self.reported_capacity_violation_seconds
+            ),
+            safe_evacuation_capacity_skiers_per_second=(
+                self.safe_evacuation_capacity_skiers_per_second
+            ),
+            lost_safe_evacuation_capacity_seconds=(
+                self.lost_safe_evacuation_capacity_seconds
+            ),
             queue_no_route_blocked_seconds=self.queue_no_route_blocked_seconds,
             onboard_blocked_seconds=self.onboard_blocked_seconds,
             group_utility=tuple(float(value) for value in utility),
@@ -262,10 +366,10 @@ class OnlineMetrics:
                 if self.first_intervention_interval is None
                 else self.first_intervention_interval
             ),
-            harm_before_first_intervention=(
+            cumulative_stranded_seconds_before_first_intervention=(
                 -1.0
-                if self.harm_before_first_intervention is None
-                else self.harm_before_first_intervention
+                if self.cumulative_stranded_seconds_before_first_intervention is None
+                else self.cumulative_stranded_seconds_before_first_intervention
             ),
             route_decision_count=self.route_decision_count,
             missing_sensor_route_decision_count=(

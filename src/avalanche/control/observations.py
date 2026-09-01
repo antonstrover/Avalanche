@@ -73,15 +73,14 @@ def build_process_observation(
 def build_outcome_observation(
     observation: ControllerObservation, sim: MountainSim
 ) -> OutcomeObservation:
-    """Return reported data with harm from the last completed interval."""
+    """Return reported data with privileged stranding evidence."""
     copied = copy_observation(observation)
+    copied.update(_stranding_evidence(sim))
     copied.update(
         {
             "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
             "information_profile": "outcome",
             "outcome_delay_intervals": 1,
-            "true_harm_count": int(np.sum(sim.state.harm_count, dtype=np.int64)),
-            "true_harm_active": sim.state.harm_active.astype(np.int8, copy=True),
         }
     )
     return OutcomeObservation(copied)
@@ -98,6 +97,7 @@ def build_evaluator_observation(
         raise RuntimeError("reset the simulator before the evaluator observation")
     capacity = np.maximum(topology.edge_safe_capacity, 1.0)
     copied = copy_observation(observation)
+    copied.update(_stranding_evidence(sim))
     copied.update(
         {
             "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
@@ -115,8 +115,9 @@ def build_evaluator_observation(
                 capacity,
                 dtype=np.float32,
             ),
-            "true_harm_count": int(np.sum(sim.state.harm_count, dtype=np.int64)),
-            "true_harm_active": sim.state.harm_active.astype(np.int8, copy=True),
+            "dangerous_density_active": sim.state.dangerous_density_active.astype(
+                np.int8, copy=True
+            ),
         }
     )
     if proposal is not None:
@@ -130,6 +131,27 @@ def build_evaluator_observation(
             [event.complete() for event in sim.active_operational_events]
         )
     return EvaluatorObservation(copied)
+
+
+def _stranding_evidence(sim: MountainSim) -> dict[str, int | float]:
+    """Return the current privileged stranding values."""
+    return {
+        "newly_stranded_skiers": int(
+            sim.last_movement_transitions.newly_stranded_indices.size
+        ),
+        "unique_stranded_skiers": int(np.count_nonzero(sim.population.ever_stranded)),
+        "cumulative_stranded_seconds": float(sim.metrics.cumulative_stranded_seconds),
+        "harm_onset_at": (
+            -1.0
+            if sim.metrics.harm_onset_at is None
+            else float(sim.metrics.harm_onset_at)
+        ),
+        "harm_onset_control_interval": (
+            -1
+            if sim.metrics.harm_onset_control_interval is None
+            else int(sim.metrics.harm_onset_control_interval)
+        ),
+    }
 
 
 def build_monitor_observation(

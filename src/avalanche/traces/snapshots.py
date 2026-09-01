@@ -17,7 +17,7 @@ from avalanche.sim.hazards import HazardEvent
 from avalanche.sim.movement import DynamicState, new_dynamic_state
 from avalanche.sim.population import SkierArrays, display_progress, empty_population
 
-SNAPSHOT_SCHEMA_VERSION = 2
+SNAPSHOT_SCHEMA_VERSION = 3
 
 _SNAPSHOT_KEYS = {
     "snapshot_schema_version",
@@ -54,9 +54,17 @@ _METRIC_KEYS = {
     "metrics_version",
     "group_count",
     "episode_duration_seconds",
-    "density_limit_seconds",
-    "reported_density_limit_seconds",
-    "stranded_time_seconds",
+    "newly_stranded_skiers",
+    "cumulative_stranded_seconds",
+    "harm_onset_at",
+    "harm_onset_control_interval",
+    "dangerous_density_seconds",
+    "density_exposure_seconds",
+    "reported_density_exposure_seconds",
+    "capacity_violation_seconds",
+    "reported_capacity_violation_seconds",
+    "safe_evacuation_capacity_skiers_per_second",
+    "lost_safe_evacuation_capacity_seconds",
     "queue_no_route_blocked_seconds",
     "onboard_blocked_seconds",
     "group_stranded_seconds",
@@ -66,7 +74,7 @@ _METRIC_KEYS = {
     "monitor_latency_seconds_sum",
     "monitor_decision_count",
     "first_intervention_interval",
-    "harm_before_first_intervention",
+    "cumulative_stranded_seconds_before_first_intervention",
     "route_decision_count",
     "missing_sensor_route_decision_count",
     "missing_sensor_route_decision_counts",
@@ -90,7 +98,7 @@ def encode_snapshot(
     assert sim.weather_schedule is not None
     arrays = [
         _encode_array(f"population.{name}", values)
-        for name, values in _snapshot_v2_population_arrays(sim.population)
+        for name, values in _snapshot_v3_population_arrays(sim.population)
     ]
     arrays.extend(
         _encode_array(f"state.{name}", values)
@@ -149,7 +157,7 @@ def restore_snapshot(sim: MountainSim, row: dict[str, Any]) -> None:
             f"the snapshot schema version {version} is unsupported"
         )
     raise SnapshotSchemaError(
-        "snapshot version two is display-only and cannot restore formal state"
+        "snapshot version three is display-only and cannot restore formal state"
     )
 
     simulation_time = _finite_float(row["simulation_time"], "simulation time")
@@ -285,10 +293,10 @@ def _require_reset(sim: MountainSim) -> None:
         raise SnapshotSchemaError("reset the simulator before snapshot work")
 
 
-def _snapshot_v2_population_arrays(
+def _snapshot_v3_population_arrays(
     population: SkierArrays,
 ) -> tuple[tuple[str, np.ndarray], ...]:
-    """Return the legacy version two display arrays."""
+    """Return the version three display arrays."""
     arrays: list[tuple[str, np.ndarray]] = []
     for name, values in population.checksum_fields():
         if name == "required_travel_seconds":
@@ -300,6 +308,8 @@ def _snapshot_v2_population_arrays(
             "queue_source_node",
             "chosen_edge",
             "locally_rejected_edge",
+            "first_stranded_at",
+            "ever_stranded",
         }:
             arrays.append((name, values))
     return tuple(arrays)
@@ -424,9 +434,25 @@ def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
         "metrics_version": METRICS_VERSION,
         "group_count": metrics.group_count,
         "episode_duration_seconds": metrics.episode_duration_seconds,
-        "density_limit_seconds": metrics.density_limit_seconds,
-        "reported_density_limit_seconds": metrics.reported_density_limit_seconds,
-        "stranded_time_seconds": metrics.stranded_time_seconds,
+        "newly_stranded_skiers": metrics.newly_stranded_skiers,
+        "cumulative_stranded_seconds": metrics.cumulative_stranded_seconds,
+        "harm_onset_at": metrics.harm_onset_at,
+        "harm_onset_control_interval": metrics.harm_onset_control_interval,
+        "dangerous_density_seconds": metrics.dangerous_density_seconds,
+        "density_exposure_seconds": metrics.density_exposure_seconds,
+        "reported_density_exposure_seconds": (
+            metrics.reported_density_exposure_seconds
+        ),
+        "capacity_violation_seconds": metrics.capacity_violation_seconds,
+        "reported_capacity_violation_seconds": (
+            metrics.reported_capacity_violation_seconds
+        ),
+        "safe_evacuation_capacity_skiers_per_second": (
+            metrics.safe_evacuation_capacity_skiers_per_second
+        ),
+        "lost_safe_evacuation_capacity_seconds": (
+            metrics.lost_safe_evacuation_capacity_seconds
+        ),
         "queue_no_route_blocked_seconds": metrics.queue_no_route_blocked_seconds,
         "onboard_blocked_seconds": metrics.onboard_blocked_seconds,
         "group_stranded_seconds": metrics.group_stranded_seconds.tolist(),
@@ -436,7 +462,9 @@ def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
         "monitor_latency_seconds_sum": metrics.monitor_latency_seconds_sum,
         "monitor_decision_count": metrics.monitor_decision_count,
         "first_intervention_interval": metrics.first_intervention_interval,
-        "harm_before_first_intervention": metrics.harm_before_first_intervention,
+        "cumulative_stranded_seconds_before_first_intervention": (
+            metrics.cumulative_stranded_seconds_before_first_intervention
+        ),
         "route_decision_count": metrics.route_decision_count,
         "missing_sensor_route_decision_count": (
             metrics.missing_sensor_route_decision_count
@@ -464,14 +492,46 @@ def _metrics(value: Any) -> OnlineMetrics:
         metrics = OnlineMetrics(group_count, duration)
     except ValueError as error:
         raise SnapshotSchemaError(str(error)) from error
-    metrics.density_limit_seconds = _nonnegative_float(
-        state["density_limit_seconds"], "density metric"
+    metrics.newly_stranded_skiers = _nonnegative_integer(
+        state["newly_stranded_skiers"], "newly stranded metric"
     )
-    metrics.reported_density_limit_seconds = _nonnegative_float(
-        state["reported_density_limit_seconds"], "reported density metric"
+    metrics.cumulative_stranded_seconds = _nonnegative_float(
+        state["cumulative_stranded_seconds"], "cumulative stranded metric"
     )
-    metrics.stranded_time_seconds = _nonnegative_float(
-        state["stranded_time_seconds"], "stranded time metric"
+    onset = state["harm_onset_at"]
+    metrics.harm_onset_at = (
+        None if onset is None else _nonnegative_float(onset, "harm onset")
+    )
+    onset_interval = state["harm_onset_control_interval"]
+    metrics.harm_onset_control_interval = (
+        None
+        if onset_interval is None
+        else _nonnegative_integer(onset_interval, "harm onset interval")
+    )
+    metrics.dangerous_density_seconds = _nonnegative_float(
+        state["dangerous_density_seconds"], "dangerous density metric"
+    )
+    metrics.density_exposure_seconds = _nonnegative_float(
+        state["density_exposure_seconds"], "density exposure metric"
+    )
+    metrics.reported_density_exposure_seconds = _nonnegative_float(
+        state["reported_density_exposure_seconds"],
+        "reported density exposure metric",
+    )
+    metrics.capacity_violation_seconds = _nonnegative_float(
+        state["capacity_violation_seconds"], "capacity violation metric"
+    )
+    metrics.reported_capacity_violation_seconds = _nonnegative_float(
+        state["reported_capacity_violation_seconds"],
+        "reported capacity violation metric",
+    )
+    metrics.safe_evacuation_capacity_skiers_per_second = _nonnegative_float(
+        state["safe_evacuation_capacity_skiers_per_second"],
+        "safe evacuation capacity metric",
+    )
+    metrics.lost_safe_evacuation_capacity_seconds = _nonnegative_float(
+        state["lost_safe_evacuation_capacity_seconds"],
+        "lost safe evacuation capacity metric",
     )
     metrics.queue_no_route_blocked_seconds = _nonnegative_float(
         state["queue_no_route_blocked_seconds"], "queue blocked metric"
@@ -512,11 +572,11 @@ def _metrics(value: Any) -> OnlineMetrics:
         if intervention is None
         else _nonnegative_integer(intervention, "first intervention")
     )
-    harm = state["harm_before_first_intervention"]
-    metrics.harm_before_first_intervention = (
+    harm = state["cumulative_stranded_seconds_before_first_intervention"]
+    metrics.cumulative_stranded_seconds_before_first_intervention = (
         None
         if harm is None
-        else _nonnegative_float(harm, "harm before first intervention")
+        else _nonnegative_float(harm, "stranded seconds before first intervention")
     )
     metrics.route_decision_count = _nonnegative_integer(
         state["route_decision_count"], "route decision count"
@@ -630,6 +690,18 @@ def _context_checksum(sim: MountainSim) -> str:
         "operational_event_schedule": [
             item.complete() for item in sim.operational_event_schedule.events
         ],
+        "environment_context": {
+            "evacuation_target_edges": list(
+                sim.environment_context.evacuation_target_edges
+            ),
+            "evacuation_target_abilities": [
+                list(abilities)
+                for abilities in sim.environment_context.evacuation_target_abilities
+            ],
+            "baseline_safe_evacuation_capacity_skiers_per_second": (
+                sim.environment_context.baseline_safe_evacuation_capacity_skiers_per_second
+            ),
+        },
     }
     return hashlib.sha256(_canonical_json(context).encode()).hexdigest()
 

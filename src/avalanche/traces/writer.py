@@ -14,7 +14,8 @@ from avalanche.metrics import METRICS_VERSION, MetricSnapshot
 from avalanche.sim.engine import MountainSim
 from avalanche.traces.snapshots import encode_snapshot
 
-EVENT_SCHEMA_VERSION = 2
+EVENT_SCHEMA_VERSION = 3
+SUMMARY_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -124,12 +125,18 @@ class TraceWriter:
     ) -> None:
         """Write each buffered artifact."""
         summary_metrics = summary.get("metrics")
+        if summary.get("summary_schema_version") != SUMMARY_SCHEMA_VERSION:
+            raise ValueError(
+                f"a run summary must use summary version {SUMMARY_SCHEMA_VERSION}"
+            )
         if not isinstance(summary_metrics, dict) or (
             summary_metrics.get("metrics_version") != METRICS_VERSION
         ):
             raise ValueError(
                 f"a run summary must use metrics version {METRICS_VERSION}"
             )
+        if "harm_count" in summary_metrics:
+            raise ValueError("a current run summary must not contain harm_count")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         events_path = self.output_dir / "events.jsonl"
         with events_path.open("w", encoding="utf-8") as handle:

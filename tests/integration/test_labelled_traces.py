@@ -1,7 +1,7 @@
 """The labelled traces must match the known attack windows.
 
 The plan gives the labels in section 9.4.
-One label shows an active attack. The other shows harm in a later interval.
+One label shows an active attack. The other shows stranding in a later interval.
 The sleeper fixture has a known trigger time, so its label rate is known.
 """
 
@@ -18,8 +18,9 @@ from avalanche.config.models import ControllerConfig
 from avalanche.control import InformationProfile
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
-    HARM_LABEL,
-    HARM_MASK,
+    DATASET_VERSION,
+    STRANDING_LABEL,
+    STRANDING_MASK,
     DatasetEntry,
     RecordingMonitor,
     ResolvedDatasetEntry,
@@ -99,13 +100,13 @@ def test_an_honest_run_carries_no_attack_label():
     assert rows[ATTACK_LABEL].sum() == 0
 
 
-def test_the_last_rows_carry_no_future_harm_label():
+def test_the_last_rows_carry_no_future_stranding_label():
     rows = run_entry(SLEEPER, HORIZON)
 
-    assert rows[HARM_MASK].tail(HORIZON).sum() == 0
-    assert rows[HARM_MASK].head(len(rows) - HORIZON).all()
-    assert rows[HARM_LABEL].tail(HORIZON).isna().all()
-    assert set(rows[HARM_LABEL].dropna().unique()) <= {0, 1}
+    assert rows[STRANDING_MASK].tail(HORIZON).sum() == 0
+    assert rows[STRANDING_MASK].head(len(rows) - HORIZON).all()
+    assert rows[STRANDING_LABEL].tail(HORIZON).isna().all()
+    assert set(rows[STRANDING_LABEL].dropna().unique()) <= {0, 1}
 
 
 def test_each_row_holds_every_feature_and_key():
@@ -118,7 +119,8 @@ def test_each_row_holds_every_feature_and_key():
     assert list(rows["step"]) == list(range(len(rows)))
     assert "controller_id" not in rows.columns
     assert "true_harm_count" not in rows.columns
-    assert (rows["dataset_version"] == 4).all()
+    assert "unique_stranded_skiers" not in rows.columns
+    assert (rows["dataset_version"] == DATASET_VERSION).all()
     assert (rows["feature_version"] == FEATURE_VERSION).all()
     assert (rows["policy_version"] == 3).all()
     assert (rows["information_profile"] == "principal").all()
@@ -138,10 +140,19 @@ def test_the_matrix_expands_to_one_entry_for_each_run():
     assert len(identities) == len(entries)
 
 
+def test_the_version_five_manifest_requires_a_stranding_horizon():
+    manifest = deepcopy(yaml.safe_load(MANIFEST.read_text()))
+    manifest.pop("stranding_horizon_intervals")
+    manifest["harm_horizon_intervals"] = HORIZON
+
+    with pytest.raises(ValueError, match="stranding horizon"):
+        expand_manifest(manifest)
+
+
 def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     class Pool:
         def __init__(self, max_workers):
-            assert max_workers == 4
+            assert max_workers == 8
 
         def __enter__(self):
             return self
@@ -168,7 +179,7 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     assert summary["feature_names"] == list(FEATURE_NAMES)
     assert summary["feature_version"] == FEATURE_VERSION
     assert summary["information_profile"] == "principal"
-    assert summary["dataset_version"] == 4
+    assert summary["dataset_version"] == DATASET_VERSION
     assert summary["policy_version"] == 3
     assert summary["checksums"]["dataset_sha256"]
     assert len(summary["code_revision"]) == 40
@@ -182,6 +193,10 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     assert set(
         validate_generated_dataset(output, frame, InformationProfile.PRINCIPAL)
     ) == {"dataset_sha256", "manifest_sha256", "summary_sha256"}
+
+    obsolete = frame.assign(harm_count=0)
+    with pytest.raises(ValueError, match="obsolete harm field"):
+        validate_generated_dataset(output, obsolete, InformationProfile.PRINCIPAL)
 
     summary["code_revision"] = "0" * 40
     output.with_suffix(".summary.json").write_text(
@@ -374,7 +389,7 @@ def test_worker_entries_are_resolved_before_pool_creation(monkeypatch):
     monkeypatch.setattr("avalanche.monitors.dataset.ProcessPoolExecutor", Pool)
     frames = _run_entries((selected,), HORIZON, "principal")
 
-    assert observed == [4]
+    assert observed == [8]
     assert frames[0]["validated"].tolist() == [1]
 
 

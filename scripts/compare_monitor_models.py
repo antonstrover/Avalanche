@@ -13,10 +13,9 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-import pandas as pd
-
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
+from avalanche.monitors.dataset import load_nonformal_legacy_dataset_v4_fixture
 from avalanche.monitors.features import feature_names_for
 from avalanche.monitors.perceptron import TrainingConfig, code_revision
 from avalanche.monitors.splits import split_declared_runs
@@ -43,8 +42,8 @@ def comparison_record(
     seed: int = 20260825,
     epochs: int = 60,
 ) -> dict[str, object]:
-    """Return one reproducible result record for the committed dataset."""
-    frame = pd.read_parquet(dataset_path)
+    """Return one nonformal result for the historical dataset."""
+    frame = load_nonformal_legacy_dataset_v4_fixture(dataset_path)
     if "attack_kind" not in frame:
         frame["attack_kind"] = frame["controller_kind"].str.replace("-", "_")
     missing_features = [
@@ -64,6 +63,7 @@ def comparison_record(
     )
     return {
         "record_version": 1,
+        "formal": False,
         "code_revision": code_revision(),
         "dataset": str(dataset_path.resolve().relative_to(REPO_ROOT)),
         "dataset_sha256": _checksum(dataset_path),

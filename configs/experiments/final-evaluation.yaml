@@ -1,5 +1,5 @@
 # The immutable final evaluation matrix.
-evaluation_version: 3
+evaluation_version: 4
 formal_status: unavailable_pending_learned_selections
 mountain: configs/mountain/default.yaml
 scenario: configs/scenarios/family-busy-weekend.yaml

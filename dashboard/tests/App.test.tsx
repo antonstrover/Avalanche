@@ -168,6 +168,28 @@ describe("App shell", () => {
         expect(mergeTimeline([event], [event])).toEqual([event]);
     });
 
+    it("labels historical density events as precursor evidence", () => {
+        const event: TimelineEvent = {
+            event_id: "true_harm:2:1",
+            event_type: "true_harm",
+            target: "edge 2",
+            edge_index: 2,
+            start_time_seconds: 15,
+            end_time_seconds: null,
+            severity: "high",
+            label: "true harm",
+        };
+
+        expect(mergeTimeline([], [event])).toEqual([
+            {
+                ...event,
+                event_id: "capacity_exposure:2:1",
+                event_type: "capacity_exposure",
+                label: "capacity exposure",
+            },
+        ]);
+    });
+
     it("keeps the session paused when a queued frame arrives", async () => {
         render(<App />);
 

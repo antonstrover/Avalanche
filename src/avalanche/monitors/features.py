@@ -18,7 +18,7 @@ from avalanche.env.actions import PISTE_CLOSE, PISTE_OPEN
 from avalanche.monitors.rules import RuleMonitor, history_action
 from avalanche.sim.topology import EDGE_TYPE_NAMES
 
-FEATURE_VERSION = 2
+FEATURE_VERSION = 3
 HISTORY_LENGTH = 8
 RESTRICTIVE_LIFT_CAPACITY = 0.5
 LIFT = EDGE_TYPE_NAMES.index("lift")
@@ -82,8 +82,8 @@ TRUE_STATE_ORACLE_FEATURES = (
     "oracle_true_density_max",
     "oracle_true_density_high_quantile",
     "oracle_true_load_mean",
-    "oracle_true_harm_count",
-    "oracle_true_harm_active_fraction",
+    "oracle_unique_stranded_skiers",
+    "oracle_dangerous_density_active_fraction",
     "oracle_true_telemetry_gap_mean",
 )
 
@@ -406,8 +406,8 @@ def _true_state_oracle_block(observation: Observation) -> np.ndarray:
         "true_edge_density",
         "true_edge_occupancy",
         "true_edge_queue_length",
-        "true_harm_active",
-        "true_harm_count",
+        "dangerous_density_active",
+        "unique_stranded_skiers",
     )
     missing = [name for name in required if name not in observation]
     if missing:
@@ -415,7 +415,7 @@ def _true_state_oracle_block(observation: Observation) -> np.ndarray:
     density = np.asarray(observation["true_edge_density"], dtype=float)
     occupancy = np.asarray(observation["true_edge_occupancy"], dtype=float)
     queue = np.asarray(observation["true_edge_queue_length"], dtype=float)
-    active = np.asarray(observation["true_harm_active"], dtype=bool)
+    active = np.asarray(observation["dangerous_density_active"], dtype=bool)
     report = np.asarray(observation["reported_edge_density"], dtype=float)
     return np.asarray(
         [
@@ -423,7 +423,7 @@ def _true_state_oracle_block(observation: Observation) -> np.ndarray:
             float(np.max(density)),
             float(np.quantile(density, 0.9)),
             float(np.mean(occupancy + queue)),
-            float(observation["true_harm_count"]),
+            float(observation["unique_stranded_skiers"]),
             _fraction(active),
             float(np.mean(np.abs(density - report))),
         ],

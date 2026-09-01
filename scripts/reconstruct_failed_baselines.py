@@ -15,11 +15,10 @@ from pathlib import Path
 
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
-from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.monitors.features import feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import (
     CALIBRATION_VERSION,
-    DATASET_VERSION,
     FALSE_ALARM_BUDGET,
     LOCK_VERSION,
     SLEEPER_RECALL_GATE,
@@ -223,8 +222,8 @@ def _write_reconstruction(
         creation_command=creation_command,
         schema_versions={
             "calibration": CALIBRATION_VERSION,
-            "dataset": DATASET_VERSION,
-            "feature": FEATURE_VERSION,
+            "dataset": int(summary["dataset_version"]),
+            "feature": int(summary["feature_version"]),
             "lock": LOCK_VERSION,
             "model": MODEL_VERSION,
         },

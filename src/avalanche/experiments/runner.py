@@ -23,9 +23,8 @@ from avalanche.env import AvalancheEnv, build_resolved_environment
 from avalanche.experiments.evaluation import assess_attack
 from avalanche.monitors import build_monitor
 from avalanche.sim.movement import effective_closed
-from avalanche.sim.skier import Status
 from avalanche.sim.time import time_boundary_reached
-from avalanche.traces import EventState, TraceWriter
+from avalanche.traces import SUMMARY_SCHEMA_VERSION, EventState, TraceWriter
 
 
 def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
@@ -57,7 +56,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     attack_labels: list[int] = []
     started = perf_counter()
 
-    while not (terminated or truncated):
+    while not truncated:
         controller_observation = env.controller_observation()
         proposal = controller.propose(controller_observation)
         decision_id = decision_identifier(proposal)
@@ -189,10 +188,6 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     snapshot = env.sim.metrics.snapshot(env.sim.population)
     metrics = snapshot.as_dict()
     metrics.update(_score_quality(risk_scores, attack_labels))
-    metrics["harm_count"] = int(np.sum(env.sim.state.harm_count, dtype=np.int64))
-    metrics["dangerous_density_seconds"] = float(
-        np.sum(env.sim.state.dangerous_density_seconds, dtype=np.float64)
-    )
     metrics["false_alarm"] = float(
         resolved.controller.attack is None and snapshot.first_intervention_interval >= 0
     )
@@ -200,6 +195,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         resolved.controller, env.topology, snapshot, env.sim.state
     )
     summary = {
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
         "run_id": identity,
         "episode_id": "episode-0",
         "seed": resolved.seed,
@@ -240,8 +236,8 @@ def _material_state(env: AvalancheEnv) -> dict[str, Any]:
         "lift_capacity": env.sim.state.lift_capacity_factor.copy(),
         "lift_stopped": env.sim.state.lift_stopped.copy(),
         "warning": env.sim.state.early_indicator.copy(),
-        "harm": env.sim.state.harm_active.copy(),
-        "stranded": (env.sim.population.status == Status.STRANDED).copy(),
+        "capacity_exposure": env.sim.state.dangerous_density_active.copy(),
+        "first_stranded_at": env.sim.population.first_stranded_at.copy(),
     }
 
 
@@ -253,8 +249,11 @@ def _record_material_changes(
     changes = (
         ("piste_closed", effective_closed(sim.state) & ~before["closed"]),
         ("piste_opened", ~effective_closed(sim.state) & before["closed"]),
-        ("congestion_warning", sim.state.early_indicator & ~before["warning"]),
-        ("hazard_started", sim.state.harm_active & ~before["harm"]),
+        ("density_warning", sim.state.early_indicator & ~before["warning"]),
+        (
+            "capacity_exposure",
+            sim.state.dangerous_density_active & ~before["capacity_exposure"],
+        ),
     )
     for event_type, mask in changes:
         for edge in np.flatnonzero(mask):
@@ -274,12 +273,22 @@ def _record_material_changes(
             },
             sim,
         )
-    stranded = (sim.population.status == Status.STRANDED) & ~before["stranded"]
-    if np.any(stranded):
+    first_stranded_at = sim.population.first_stranded_at
+    newly_stranded = (before["first_stranded_at"] < 0.0) & (first_stranded_at >= 0.0)
+    onset_times, onset_counts = np.unique(
+        first_stranded_at[newly_stranded], return_counts=True
+    )
+    for onset_at, count in zip(onset_times, onset_counts, strict=True):
         trace.record(
             "skiers_stranded",
             "simulator",
-            {"count": int(np.count_nonzero(stranded))},
+            {
+                "stranding_boundary_seconds": float(onset_at),
+                "control_interval_index": int(
+                    (float(onset_at) - sim.tick_seconds) / sim.control_interval_seconds
+                ),
+                "newly_stranded_skiers": int(count),
+            },
             sim,
         )
     previous_time = float(before["simulation_time"])

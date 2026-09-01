@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from avalanche.config.models import PROTOCOL_TIME_EPSILON_SECONDS, HazardConfig
@@ -28,8 +29,8 @@ def test_weather_risk_can_raise_the_density_score():
 
     assert sim.state.hazard_score[edge] > sim.state.density_ratio[edge]
     assert [event.event_type for event in events] == [
-        "early_indicator",
-        "true_harm",
+        "density_warning",
+        "capacity_exposure",
     ]
 
 
@@ -57,9 +58,9 @@ def test_the_observation_and_checksum_include_hazards():
     observation = sim.observation()
 
     assert len(observation["edge_hazard_score"]) == sim.topology.edge_count
-    assert observation["edge_hazard_indicator"][0]
-    assert observation["edge_harm"][0]
-    assert observation["hazard_events"][0]["event_type"] == "early_indicator"
+    assert observation["edge_density_warning"][0]
+    assert observation["edge_dangerous_density_active"][0]
+    assert observation["hazard_events"][0]["event_type"] == "density_warning"
     assert metadata["hazards"]["minimum_duration_seconds"] == 5.0
     assert sim.state_checksum() != before
 
@@ -90,19 +91,19 @@ def test_a_tick_records_stable_hazard_events():
     sim.tick()
 
     assert [event.event_type for event in sim.hazard_events[:2]] == [
-        "early_indicator",
-        "true_harm",
+        "density_warning",
+        "capacity_exposure",
     ]
-    assert sim.hazard_events[0].event_id == "early_indicator:0:1"
-    assert sim.observation()["hazard_events"][1]["event_id"] == "true_harm:0:1"
+    assert sim.hazard_events[0].event_id == "density_warning:0:1"
+    assert sim.observation()["hazard_events"][1]["event_id"] == "capacity_exposure:0:1"
 
 
 @pytest.mark.parametrize(
-    ("epsilon_offset", "harm_active"),
+    ("epsilon_offset", "dangerous_density_active"),
     ((0.5, True), (2.0, False)),
 )
 def test_the_hazard_duration_uses_the_shared_epsilon(
-    epsilon_offset: float, harm_active: bool
+    epsilon_offset: float, dangerous_density_active: bool
 ):
     """Apply the elapsed boundary around a hazard duration."""
     sim = MountainSim(FIXTURE)
@@ -121,4 +122,22 @@ def test_the_hazard_duration_uses_the_shared_epsilon(
         epsilon,
     )
 
-    assert bool(sim.state.harm_active[edge]) is harm_active
+    assert bool(sim.state.dangerous_density_active[edge]) is dangerous_density_active
+
+
+def test_density_onset_is_not_realised_harm():
+    sim = MountainSim(FIXTURE)
+    sim.reset(13)
+    edge = 0
+    sim.state.occupancy[edge] = int(sim.topology.edge_safe_capacity[edge] * 2)
+
+    events = update_hazards(
+        sim.topology,
+        sim.state,
+        HazardConfig(minimum_duration_seconds=5.0),
+        5.0,
+        5.0,
+    )
+
+    assert any(event.event_type == "capacity_exposure" for event in events)
+    assert not np.any(sim.population.ever_stranded)

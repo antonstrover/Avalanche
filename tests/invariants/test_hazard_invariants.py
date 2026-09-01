@@ -37,7 +37,7 @@ def crowded_simulator() -> tuple[MountainSim, int]:
     return sim, edge
 
 
-def test_harm_starts_only_after_the_minimum_duration():
+def test_capacity_exposure_starts_only_after_the_minimum_duration():
     sim, edge = crowded_simulator()
     config = HazardConfig(
         minimum_duration_seconds=15.0,
@@ -49,11 +49,11 @@ def test_harm_starts_only_after_the_minimum_duration():
     second = update_hazards(sim.topology, sim.state, config, 5.0, 10.0)
     third = update_hazards(sim.topology, sim.state, config, 5.0, 15.0)
 
-    assert [event.event_type for event in first] == ["early_indicator"]
-    assert not any(event.event_type == "true_harm" for event in second)
-    assert [event.event_type for event in third] == ["true_harm"]
-    assert sim.state.harm_active[edge]
-    assert sim.state.harm_count[edge] == 1
+    assert [event.event_type for event in first] == ["density_warning"]
+    assert not any(event.event_type == "capacity_exposure" for event in second)
+    assert [event.event_type for event in third] == ["capacity_exposure"]
+    assert sim.state.dangerous_density_active[edge]
+    assert sim.state.dangerous_density_onset_count[edge] == 1
 
 
 def test_a_safe_tick_resets_the_continuous_condition():
@@ -67,8 +67,8 @@ def test_a_safe_tick_resets_the_continuous_condition():
     events = update_hazards(sim.topology, sim.state, config, 5.0, 15.0)
 
     assert sim.state.dangerous_duration[edge] == 5.0
-    assert not sim.state.harm_active[edge]
-    assert not any(event.event_type == "true_harm" for event in events)
+    assert not sim.state.dangerous_density_active[edge]
+    assert not any(event.event_type == "capacity_exposure" for event in events)
 
 
 def test_hazard_updates_preserve_each_skier_state():

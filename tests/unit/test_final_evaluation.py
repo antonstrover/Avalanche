@@ -13,6 +13,7 @@ from avalanche.experiments.final_evaluation import (
     ATTACK_KINDS,
     ATTACK_TIERS,
     BOOTSTRAP_SEED,
+    EVALUATION_VERSION,
     EVENT_KINDS,
     FEATURE_PROFILES,
     HOLDOUT_SLICES,
@@ -30,8 +31,10 @@ from avalanche.experiments.final_evaluation import (
     write_final_evaluation,
 )
 from avalanche.metrics import METRICS_VERSION
-from avalanche.monitors.features import feature_names_for
+from avalanche.monitors.dataset import DATASET_VERSION
+from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.training import AttemptLockV2, gate_digest
+from avalanche.traces import EVENT_SCHEMA_VERSION, SUMMARY_SCHEMA_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
 EVALUATION_CONFIG = ROOT / "configs/experiments/final-evaluation.yaml"
@@ -76,10 +79,17 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
                         "resolved_config_checksum": f"config-{index}-{role}",
                         "pair_context_checksum": f"context-{index}-{root_seed}",
                         "model_lock_checksum": f"model-{profile}",
+                        "evaluation_version": EVALUATION_VERSION,
+                        "dataset_version": DATASET_VERSION,
+                        "feature_version": FEATURE_VERSION,
+                        "event_schema_version": EVENT_SCHEMA_VERSION,
+                        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
                         "metrics_version": METRICS_VERSION,
                         "attack_success": float(attacked),
                         "first_intervention_interval": 7 if attacked else -1,
-                        "harm_before_first_intervention": 4.0 if attacked else -1.0,
+                        "cumulative_stranded_seconds_before_first_intervention": (
+                            4.0 if attacked else -1.0
+                        ),
                         "attack_activated": int(attacked),
                         "attack_detected": int(attacked),
                         "attack_detection_censored": 0,
@@ -87,13 +97,23 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
                         "attack_detection_interval": 7 if attacked else -1,
                         "attack_detection_delay_intervals": 2 if attacked else -1,
                         "pre_trigger_false_alarm_count": 0,
-                        "harm_before_detection_or_censoring": (
+                        "cumulative_stranded_seconds_before_detection_or_censoring": (
                             4.0 if attacked else -1.0
                         ),
                         "false_alarm": 0.0,
-                        "harm_count": 3.0 if attacked else 1.0,
+                        "newly_stranded_skiers": 1.0 if attacked else 0.0,
+                        "unique_stranded_skiers": 3.0 if attacked else 1.0,
+                        "cumulative_stranded_seconds": (20.0 if attacked else 5.0),
+                        "harm_onset_at": 120.0 if attacked else -1.0,
+                        "harm_onset_control_interval": 2 if attacked else -1,
                         "dangerous_density_seconds": 30.0 if attacked else 10.0,
-                        "stranded_skiers": 2.0 if attacked else 0.0,
+                        "capacity_violation_seconds": (15.0 if attacked else 5.0),
+                        "safe_evacuation_capacity_skiers_per_second": (
+                            1.0 if attacked else 2.0
+                        ),
+                        "lost_safe_evacuation_capacity_seconds": (
+                            12.0 if attacked else 2.0
+                        ),
                         "completed_journeys": 90.0 if attacked else 100.0,
                         "mean_wait_seconds": 12.0 if attacked else 10.0,
                         "utility": 90.0 if attacked else 100.0,
@@ -152,8 +172,8 @@ def model_lock(tmp_path, name, information_profile):
         creation_command="uv run pytest tests/unit/test_final_evaluation.py",
         schema_versions={
             "calibration": 2,
-            "dataset": 4,
-            "feature": 2,
+            "dataset": DATASET_VERSION,
+            "feature": FEATURE_VERSION,
             "lock": 2,
             "model": 2,
         },
@@ -231,28 +251,30 @@ def test_the_paired_bootstrap_is_deterministic():
 
 
 def decision_timeline(
-    active: list[int], decisions: list[str], harm: list[float]
+    active: list[int], decisions: list[str], stranded_seconds: list[float]
 ) -> list[dict]:
     events = []
-    for interval, (label, decision, harm_count) in enumerate(
-        zip(active, decisions, harm, strict=True)
+    for interval, (label, decision, cumulative_seconds) in enumerate(
+        zip(active, decisions, stranded_seconds, strict=True)
     ):
         decision_id = f"decision-{interval}"
         envelope = {"simulation_time": float(interval * 60), "step": interval * 12}
         events.append(
             {
                 **envelope,
+                "schema_version": EVENT_SCHEMA_VERSION,
                 "event_type": "evaluator_observation",
                 "payload": {
                     "decision_id": decision_id,
                     "attack_active": label,
-                    "true_harm_count": harm_count,
+                    "cumulative_stranded_seconds": cumulative_seconds,
                 },
             }
         )
         events.append(
             {
                 **envelope,
+                "schema_version": EVENT_SCHEMA_VERSION,
                 "event_type": "monitor_decision",
                 "payload": {"decision_id": decision_id, "decision": decision},
             }
@@ -278,7 +300,7 @@ def test_attack_detection_uses_the_active_attack_window():
         "attack_detection_interval": 7,
         "attack_detection_delay_intervals": 2,
         "pre_trigger_false_alarm_count": 1,
-        "harm_before_detection_or_censoring": 7.0,
+        "cumulative_stranded_seconds_before_detection_or_censoring": 7.0,
     }
 
 
@@ -294,7 +316,7 @@ def test_an_undetected_attack_is_censored_at_its_final_active_interval():
     assert result["attack_detected"] == 0
     assert result["attack_detection_censored"] == 1
     assert result["attack_detection_delay_intervals"] == 1
-    assert result["harm_before_detection_or_censoring"] == 4.0
+    assert result["cumulative_stranded_seconds_before_detection_or_censoring"] == 4.0
 
 
 def test_an_honest_intervention_is_a_false_alarm():
@@ -304,6 +326,14 @@ def test_an_honest_intervention_is_a_false_alarm():
 
     assert result["false_alarm"] == 1.0
     assert result["attack_activated"] == 0
+
+
+def test_attack_detection_rejects_an_old_event_schema():
+    events = decision_timeline([0], ["ALLOW"], [0.0])
+    events[0]["schema_version"] = EVENT_SCHEMA_VERSION - 1
+
+    with pytest.raises(ValueError, match="event version"):
+        attack_detection_metrics(events, attack_run=False)
 
 
 def test_the_final_evaluation_covers_all_profiles_and_slices():
@@ -361,16 +391,18 @@ def test_each_cell_reports_every_declared_metric_with_paired_intervals():
     metrics = result["cells"][0]["metrics"]
     assert set(metrics) == {
         "attack_success_rate",
-        "harm_before_detection_or_censoring",
+        "cumulative_stranded_seconds_before_detection_or_censoring",
         "attack_detection_rate",
         "attack_detection_censoring_rate",
         "attack_detection_delay_intervals",
         "pre_trigger_false_alarm_count",
         "false_alarm_rate",
         "retained_utility",
-        "harm_delta",
+        "unique_stranded_skiers_delta",
+        "cumulative_stranded_seconds_delta",
         "dangerous_density_delta",
-        "stranded_delta",
+        "capacity_violation_delta",
+        "lost_safe_evacuation_capacity_delta",
         "completed_journeys_delta",
         "wait_time_delta",
         "utility_delta",
@@ -420,6 +452,14 @@ def test_each_final_cell_requires_the_declared_root_seed_count():
         )
 
 
+def test_current_final_records_reject_an_obsolete_harm_field():
+    rows = final_records()
+    rows["harm_count"] = 0.0
+
+    with pytest.raises(ValueError, match="obsolete harm field"):
+        evaluate_final_records(rows, required_root_seeds=2, bootstrap_resamples=20)
+
+
 def test_the_final_evaluation_rejects_a_development_seed():
     with pytest.raises(ValueError, match="reuses a development seed"):
         require_unseen_evaluation_seeds(
@@ -451,6 +491,8 @@ def test_the_final_writer_preserves_the_lock_and_checksums_results(tmp_path):
     assert written["manifest"]["observation_schema_version"] == 2
     assert written["manifest"]["metrics_version"] == METRICS_VERSION
     assert written["results"]["metrics_version"] == METRICS_VERSION
+    assert written["manifest"]["event_schema_version"] == EVENT_SCHEMA_VERSION
+    assert written["manifest"]["summary_schema_version"] == SUMMARY_SCHEMA_VERSION
     assert written["manifest"]["policy_version"] == 3
     assert written["manifest"]["required_root_seeds"] == 2
     assert set(written["manifest"]["locked_models"]) == set(locks)
@@ -474,7 +516,7 @@ def test_an_immutable_result_set_rejects_changed_records(tmp_path):
         artifact_repo_root=tmp_path,
     )
     changed = rows.copy()
-    changed.loc[0, "harm_count"] = 99.0
+    changed.loc[0, "unique_stranded_skiers"] = 99.0
     with pytest.raises(ValueError, match="already exists"):
         write_final_evaluation(
             changed,

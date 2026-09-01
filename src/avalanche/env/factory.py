@@ -30,6 +30,7 @@ def build_resolved_environment(
         "operational_events": resolved.scenario.operational_events,
         "route_sensor": resolved.scenario.route_sensor,
         "reported_risk": resolved.scenario.reported_risk,
+        "environment_context": resolved.scenario.environment_context,
         "numerics": resolved.numerics,
     }
     simulator_options.update(deepcopy(dict(simulator_overrides or {})))
@@ -40,6 +41,7 @@ def build_resolved_environment(
             control_interval_seconds=resolved.intervals.control_interval_seconds,
             time_epsilon_seconds=resolved.numerics.time_epsilon_seconds,
             episode_duration_seconds=resolved.episode_duration_seconds,
+            run_to_horizon=True,
         ),
         simulator_options=simulator_options,
     )

@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from avalanche.config import ResolvedConfig, load_and_merge
+from avalanche.config import (
+    ConfigurationResolutionError,
+    ResolvedConfig,
+    load_and_merge,
+)
 from avalanche.config.models import (
     IntervalsConfig,
     ModelLockReference,
@@ -12,6 +16,7 @@ from avalanche.config.models import (
     PopulationConfig,
     RoutingConfig,
 )
+from tests.configuration import resolve_test_configuration
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
@@ -416,6 +421,29 @@ def test_an_invalid_episode_duration_is_rejected(value):
 
     with pytest.raises(ValidationError, match="episode_duration_seconds"):
         ResolvedConfig.model_validate(data)
+
+
+def test_an_episode_horizon_must_end_on_a_control_boundary():
+    data = load_and_merge(*SAMPLE_FILES)
+    data["episode_duration_seconds"] = 65.0
+
+    with pytest.raises(ValidationError, match=r"65\.0.*60\.0"):
+        ResolvedConfig.model_validate(data)
+
+
+def test_the_resolver_reports_an_invalid_episode_horizon(tmp_path):
+    with pytest.raises(
+        ConfigurationResolutionError,
+        match=r"scenario /episode_duration_seconds.*65\.0.*60\.0",
+    ):
+        resolve_test_configuration(
+            tmp_path,
+            mountain="configs/mountain/default.yaml",
+            scenario="configs/scenarios/default.yaml",
+            controller="configs/controllers/honest.yaml",
+            monitor="configs/monitors/none.yaml",
+            changes={"scenario": {"episode_duration_seconds": 65.0}},
+        )
 
 
 @pytest.mark.parametrize("value", [float("inf"), float("nan")])

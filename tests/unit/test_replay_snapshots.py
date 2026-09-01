@@ -1,4 +1,4 @@
-"""Check the version two physical replay snapshot."""
+"""Check the version three display replay snapshot."""
 
 import json
 from pathlib import Path
@@ -58,7 +58,7 @@ def array_entries(row: dict) -> dict[str, dict]:
     return {entry["name"]: entry for entry in row["arrays"]}
 
 
-def test_version_two_derives_legacy_progress():
+def test_version_three_derives_display_progress():
     """Encode bounded progress without persisting formal travel state."""
     sim = populated_simulator()
     row = snapshot(sim)
@@ -68,12 +68,14 @@ def test_version_two_derives_legacy_progress():
     assert "population.progress" in arrays
     assert "population.required_travel_seconds" not in arrays
     assert "population.remaining_travel_seconds" not in arrays
+    assert "population.first_stranded_at" not in arrays
+    assert "population.ever_stranded" not in arrays
     progress = np.frombuffer(arrays["population.progress"]["data"], dtype="<f8")
     np.testing.assert_array_equal(progress, display_progress(sim.population))
     assert np.all((progress >= 0.0) & (progress <= 1.0))
 
 
-def test_version_two_keeps_the_legacy_population_array_names():
+def test_version_three_keeps_the_display_population_array_names():
     """Keep the old display array contract until its owned migration."""
     arrays = array_entries(snapshot(populated_simulator()))
     population_names = {
@@ -101,7 +103,7 @@ def test_version_two_keeps_the_legacy_population_array_names():
 
 
 def test_the_snapshot_records_portable_types_and_shapes():
-    """Keep each version two array portable."""
+    """Keep each version three array portable."""
     row = snapshot(populated_simulator())
 
     assert all(
@@ -118,7 +120,7 @@ def test_the_snapshot_records_portable_types_and_shapes():
 
 
 def test_the_snapshot_records_each_non_array_state_group():
-    """Keep each existing version two state group."""
+    """Keep each existing version three state group."""
     state = json.loads(snapshot(populated_simulator())["state_json"])
 
     assert set(state) == {
@@ -134,7 +136,7 @@ def test_the_snapshot_records_each_non_array_state_group():
     assert state["metrics"]["metrics_version"] == METRICS_VERSION
 
 
-def test_version_two_rejects_formal_state_restoration():
+def test_version_three_rejects_formal_state_restoration():
     """Do not guess remaining travel seconds from derived progress."""
     original = populated_simulator()
     target = MountainSim(FIXTURE)

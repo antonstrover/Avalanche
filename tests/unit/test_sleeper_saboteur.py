@@ -289,6 +289,23 @@ def resolved_config(episode_duration_seconds: float) -> dict:
         "numerics": {"time_epsilon_seconds": PROTOCOL_TIME_EPSILON_SECONDS},
         "scenario": {
             "name": "sleeper-unit",
+            "environment_context": {
+                "evacuation_targets": [
+                    {
+                        "mountain": "premium-resort",
+                        "evacuation_target_edges": [
+                            {
+                                "edge": TARGET,
+                                "abilities": [
+                                    "beginner",
+                                    "intermediate",
+                                    "advanced",
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            },
         },
         "controller": controller_config().model_dump(),
         "monitor": {"kind": "none"},

@@ -443,6 +443,24 @@ export interface components {
             controller: components["schemas"]["ControllerConfig"];
         };
         /**
+         * EnvironmentContextConfig
+         * @description Declare the mountain-specific evaluator context.
+         */
+        EnvironmentContextConfig: {
+            /** Evacuation Targets */
+            evacuation_targets: components["schemas"]["MountainEnvironmentContextConfig"][];
+        };
+        /**
+         * EvacuationTargetEdgeConfig
+         * @description Declare one evacuation edge and the abilities that use it.
+         */
+        EvacuationTargetEdgeConfig: {
+            /** Edge */
+            edge: string;
+            /** Abilities */
+            abilities: ("beginner" | "intermediate" | "advanced")[];
+        };
+        /**
          * FailureEventConfig
          * @description One configured infrastructure or telemetry failure.
          */
@@ -653,10 +671,10 @@ export interface components {
              */
             false_alarm_budget: number;
             /**
-             * Harm Event Threshold
+             * Unique Stranded Threshold
              * @default 1
              */
-            harm_event_threshold: number;
+            unique_stranded_threshold: number;
             /**
              * Capacity Ratio
              * @default 1
@@ -726,6 +744,16 @@ export interface components {
              * @default configs/mountain/medium-resort.yaml
              */
             path: string;
+        };
+        /**
+         * MountainEnvironmentContextConfig
+         * @description Declare evaluator-truth evacuation targets for one mountain.
+         */
+        MountainEnvironmentContextConfig: {
+            /** Mountain */
+            mountain: string;
+            /** Evacuation Target Edges */
+            evacuation_target_edges: components["schemas"]["EvacuationTargetEdgeConfig"][];
         };
         /**
          * MountainOption
@@ -923,6 +951,7 @@ export interface components {
         ScenarioConfig: {
             /** Name */
             name: string;
+            environment_context: components["schemas"]["EnvironmentContextConfig"];
             /**
              * @default {
              *       "initial": {

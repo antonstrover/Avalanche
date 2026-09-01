@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from avalanche.monitors.dataset import load_dataset_fixture
+from avalanche.monitors.dataset import load_nonformal_legacy_dataset_v4_fixture
 from avalanche.monitors.perceptron import TrainingConfig
 from avalanche.monitors.splits import split_declared_runs
 from avalanche.monitors.training import FALSE_ALARM_BUDGET, compare_declared_models
@@ -15,7 +15,7 @@ RESULT = REPO / "docs" / "monitor-hardening" / "gru-ablation-result.json"
 
 
 def test_the_real_models_match_the_recorded_held_out_result():
-    rows = load_dataset_fixture(DATASET)
+    rows = load_nonformal_legacy_dataset_v4_fixture(DATASET)
     parts = split_declared_runs(rows)
 
     results = compare_declared_models(

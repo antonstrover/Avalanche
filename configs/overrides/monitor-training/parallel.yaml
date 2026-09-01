@@ -1,2 +1,2 @@
 runtime:
-  worker_count: 4
+  worker_count: 8

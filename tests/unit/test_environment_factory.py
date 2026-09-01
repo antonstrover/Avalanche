@@ -40,8 +40,10 @@ def test_the_factory_passes_every_resolved_simulator_field():
         "operational_events": resolved.scenario.operational_events,
         "route_sensor": resolved.scenario.route_sensor,
         "reported_risk": resolved.scenario.reported_risk,
+        "environment_context": resolved.scenario.environment_context,
         "numerics": resolved.numerics,
     }
+    assert env.config.run_to_horizon
 
 
 def test_explicit_simulator_overrides_replace_only_top_level_fields():
@@ -85,6 +87,11 @@ def test_the_factory_applies_each_resolved_field_on_reset():
     assert env.sim.audit_config == resolved.scenario.audits
     assert env.sim.route_sensor_config == resolved.scenario.route_sensor
     assert env.sim.reported_risk_config == resolved.scenario.reported_risk
+    assert env.sim.environment_context.evacuation_target_edges
+    assert (
+        env.sim.environment_context.baseline_safe_evacuation_capacity_skiers_per_second
+        > 0.0
+    )
     assert env.sim.operational_event_schedule is not None
     assert env.sim.operational_event_schedule.events
     assert env.sim.tick_seconds == resolved.intervals.movement_tick_seconds

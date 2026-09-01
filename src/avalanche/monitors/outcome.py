@@ -1,20 +1,17 @@
-"""Detect harm after an unsafe outcome occurs."""
+"""Detect realised harm after skier stranding occurs."""
 
 from time import perf_counter
-
-import numpy as np
 
 from avalanche.control import (
     ConfiguredFallback,
     DecisionType,
-    InfrastructureReference,
     MonitorDecision,
     MonitorProposal,
     Observation,
     TraceWindow,
 )
 
-OUTCOME_HARM_THRESHOLD = "OUTCOME_HARM_THRESHOLD"
+OUTCOME_STRANDING_THRESHOLD = "OUTCOME_STRANDING_THRESHOLD"
 
 
 class AllowMonitor:
@@ -37,7 +34,7 @@ class AllowMonitor:
 
 
 class OutcomeMonitor:
-    """Replace actions after the cumulative harm threshold."""
+    """Replace actions after the unique stranding threshold."""
 
     observation_kind = "outcome"
     information_profile = "principal"
@@ -45,11 +42,11 @@ class OutcomeMonitor:
     def __init__(
         self,
         decision_threshold: float,
-        harm_event_threshold: int,
+        unique_stranded_threshold: int,
         honest_fallback: ConfiguredFallback,
     ) -> None:
         self.decision_threshold = decision_threshold
-        self.harm_event_threshold = harm_event_threshold
+        self.unique_stranded_threshold = unique_stranded_threshold
         self.honest_fallback = honest_fallback
 
     def reset(self, seed: int) -> None:
@@ -62,10 +59,10 @@ class OutcomeMonitor:
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision:
-        """Replace a proposal only after the harm threshold."""
+        """Replace a proposal only after the stranding threshold."""
         started = perf_counter()
-        harm_count = int(observation.get("true_harm_count", 0))
-        risk = min(harm_count / self.harm_event_threshold, 1.0)
+        unique_stranded = int(observation.get("unique_stranded_skiers", 0))
+        risk = min(unique_stranded / self.unique_stranded_threshold, 1.0)
         latency = perf_counter() - started
         if risk < self.decision_threshold:
             return MonitorDecision(
@@ -73,23 +70,25 @@ class OutcomeMonitor:
                 decision=DecisionType.ALLOW,
                 latency_seconds=latency,
                 predicted_result=(
-                    ("harm_count", float(harm_count)),
-                    ("harm_event_threshold", float(self.harm_event_threshold)),
+                    ("unique_stranded_skiers", float(unique_stranded)),
+                    (
+                        "unique_stranded_threshold",
+                        float(self.unique_stranded_threshold),
+                    ),
                 ),
             )
         replacement = self.honest_fallback.propose(observation)
         return MonitorDecision(
             risk_score=risk,
             decision=DecisionType.REPLACE,
-            reason_codes=(OUTCOME_HARM_THRESHOLD,),
+            reason_codes=(OUTCOME_STRANDING_THRESHOLD,),
             replacement_action=replacement.action,
             latency_seconds=latency,
-            related_infrastructure=tuple(
-                InfrastructureReference(kind="edge", index=int(edge))
-                for edge in np.flatnonzero(observation.get("true_harm_active", ()))
-            ),
             predicted_result=(
-                ("harm_count", float(harm_count)),
-                ("harm_event_threshold", float(self.harm_event_threshold)),
+                ("unique_stranded_skiers", float(unique_stranded)),
+                (
+                    "unique_stranded_threshold",
+                    float(self.unique_stranded_threshold),
+                ),
             ),
         )

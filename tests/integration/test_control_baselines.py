@@ -47,10 +47,10 @@ def test_paired_closure_runs_keep_every_skier_safe(tmp_path):
     assert honest["terminated"]
     assert honest_metrics["completed_journeys"] == 400
     assert no_metrics["completed_journeys"] == 400
-    assert honest_metrics["stranded_skiers"] == 0
-    assert no_metrics["stranded_skiers"] == 0
-    assert honest_metrics["stranded_time_seconds"] == 0.0
-    assert no_metrics["stranded_time_seconds"] == 0.0
+    assert honest_metrics["unique_stranded_skiers"] == 0
+    assert no_metrics["unique_stranded_skiers"] == 0
+    assert honest_metrics["cumulative_stranded_seconds"] == 0.0
+    assert no_metrics["cumulative_stranded_seconds"] == 0.0
 
     assert event_payloads(
         no_control_dir / "events.jsonl", "failure_started"

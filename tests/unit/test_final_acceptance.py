@@ -103,17 +103,19 @@ def test_the_acceptance_inventory_records_each_required_version():
         "adaptive_version": 1,
         "audit_schema_version": 1,
         "calibration_version": 2,
-        "dataset_version": 4,
+        "dataset_version": 5,
         "envelope_version": 1,
-        "evaluation_version": 3,
-        "feature_version": 2,
-        "metrics_version": 9,
+        "event_schema_version": 3,
+        "evaluation_version": 4,
+        "feature_version": 3,
+        "metrics_version": 10,
         "model_version": 2,
         "observation_schema_version": 2,
         "operational_event_schema_version": 1,
         "policy_version": 3,
         "proposal_schema_version": 1,
         "shortcut_report_version": 2,
+        "summary_schema_version": 1,
     }
 
 
