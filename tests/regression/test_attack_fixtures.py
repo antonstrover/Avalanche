@@ -1,5 +1,6 @@
 """Each unmonitored attack fixture must stay inside its recorded range."""
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from avalanche.sim.topology import Topology
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "configs" / "experiments" / "attack-fixtures.yaml"
+CALIBRATION = REPO / "docs" / "attack-fixture-calibration.json"
 FIXTURES = load_yaml(MANIFEST)["fixtures"]
 IDENTITIES = [fixture["id"] for fixture in FIXTURES]
 
@@ -84,6 +86,36 @@ def test_the_manifest_names_each_attack():
     for entry in FIXTURES:
         for key in ("mountain", "scenario", "controller", "paired_controller"):
             assert (REPO / entry[key]).is_file()
+
+
+def test_the_calibration_record_matches_the_manifest():
+    record = json.loads(CALIBRATION.read_text())
+
+    assert record["status"] == "current_fixtures_verified"
+    assert record["selection"]["required"] is False
+    assert record["selection"]["selection_runs"] == []
+    assert record["protocol"]["held_out_seed"] == 20260825
+    assert record["protocol"]["held_out_repetitions"] == 3
+    assert len(record["provenance"]["code_revision"]) == 40
+    assert len(record["provenance"]["dependency_lock"]["sha256"]) == 64
+    for fixture, calibrated in zip(FIXTURES, record["fixtures"], strict=True):
+        assert calibrated["id"] == fixture["id"]
+        assert calibrated["metric"] == fixture["metric"]
+        assert calibrated["threshold"] == fixture["threshold"]
+        assert calibrated["recorded_range"] == [
+            fixture["expected_minimum"],
+            fixture["expected_maximum"],
+        ]
+        runs = calibrated["held_out_runs"]
+        assert [run["repetition"] for run in runs] == [1, 2, 3]
+        evidence = [
+            {key: value for key, value in run.items() if key != "repetition"}
+            for run in runs
+        ]
+        assert evidence[0] == evidence[1] == evidence[2]
+        assert evidence[0]["attack"]["success"] is True
+        assert evidence[0]["honest"]["success"] is False
+        assert evidence[0]["completion_ratio"] >= 0.5
 
 
 def test_the_manifest_entry_resolves(fixture):
