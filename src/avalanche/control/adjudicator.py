@@ -24,9 +24,7 @@ from avalanche.control.types import (
     MonitorDecision,
     MonitorObservation,
     PredictedResult,
-    TraceWindow,
     build_monitor_proposal,
-    sanitize_trace_window,
 )
 
 ActionValidator = Callable[[ImmutableAction], None]
@@ -138,7 +136,6 @@ class Adjudicator:
         self,
         observation: MonitorObservation,
         proposal: ActionProposal,
-        history: TraceWindow = (),
         *,
         simulation_time: float,
         fallback_observation: ControllerObservation | None = None,
@@ -156,14 +153,12 @@ class Adjudicator:
             EngineeringErrorCode.INVALID_PROPOSAL,
         )
         self._validate_monitor_observation(observation, proposal)
-        safe_history = sanitize_trace_window(history)
-        if safe_history != observation.operational_evidence.executed_actions:
-            raise TypeError("the process history does not match its evidence envelope")
+        history = observation.operational_evidence.executed_actions
         try:
             decision = self.monitor.assess(
                 observation,
                 build_monitor_proposal(proposal),
-                safe_history,
+                history,
             )
         except MonitorRefusal as error:
             raise ProposalEngineeringError(

@@ -34,6 +34,7 @@ from avalanche.control import (
     build_process_observation,
     freeze_action,
     freeze_evidence,
+    sanitize_trace_window,
 )
 from avalanche.control.types import (
     ACTION_FIELD_NAMES,
@@ -842,10 +843,12 @@ def test_execution_and_reset_invalidate_the_boundary_packet_cache():
     env = configured_env()
     controller = env.controller_observation()
     assert env.controller_observation() is controller
+    static = controller.operational_evidence.static
 
     env.execute_proposal(proposal(env))
     after_execution = env.controller_observation()
     assert after_execution is not controller
+    assert after_execution.operational_evidence.static is static
     assert (
         after_execution.operational_evidence.packet
         is not controller.operational_evidence.packet
@@ -853,6 +856,7 @@ def test_execution_and_reset_invalidate_the_boundary_packet_cache():
 
     env.reset(seed=158, options={"population": {"skier_count": 20}})
     after_reset = env.controller_observation()
+    assert after_reset.operational_evidence.static is not static
     assert after_reset is not after_execution
     assert (
         after_reset.operational_evidence.packet
@@ -1707,24 +1711,21 @@ def test_the_adjudicator_rejects_an_extended_process_envelope():
         )
 
 
-def test_the_adjudicator_rejects_history_outside_the_evidence_envelope():
+def test_the_adjudicator_uses_only_the_evidence_envelope_history():
     proposed = direct_proposal()
+    history = ({"executed_action": action_mapping()},)
     observation = ProcessObservation(
         OPERATIONAL_EVIDENCE_SCHEMA_VERSION,
         InformationProfile.PRINCIPAL,
-        operational_evidence(),
+        operational_evidence(executed_actions=history),
         build_monitor_proposal(proposed),
     )
-    history = ({"executed_action": action_mapping()},)
-    adjudicator = Adjudicator(CaptureMonitor(), lambda action: None)
+    monitor = CaptureMonitor()
+    adjudicator = Adjudicator(monitor, lambda action: None)
 
-    with pytest.raises(TypeError, match="history does not match"):
-        adjudicator.adjudicate(
-            observation,
-            proposed,
-            history,
-            simulation_time=0.0,
-        )
+    adjudicator.adjudicate(observation, proposed, simulation_time=0.0)
+
+    assert monitor.history is observation.operational_evidence.executed_actions
 
 
 def test_the_adjudicator_rejects_a_mismatched_process_profile():
@@ -1782,6 +1783,12 @@ def test_process_history_contains_only_immutable_executed_actions():
     assert "outcome" not in entry
     with pytest.raises(TypeError):
         entry["decision"] = "ALLOW"
+
+
+def test_canonical_process_history_sanitation_is_idempotent():
+    history = sanitize_trace_window(({"executed_action": action_mapping()},))
+
+    assert sanitize_trace_window(history) is history
 
 
 @pytest.mark.parametrize(

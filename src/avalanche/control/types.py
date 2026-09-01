@@ -3,7 +3,7 @@
 import hashlib
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from numbers import Integral, Real
 from typing import Annotated, Any, Literal
@@ -1165,7 +1165,64 @@ class StaticPublicEvidence:
         }
 
 
+ACTION_FIELD_NAMES = frozenset(
+    {
+        "route_weights",
+        "piste_requests",
+        "lift_capacity",
+        "lift_capacity_enabled",
+        "crowd_messages",
+        "telemetry_overrides",
+        "telemetry_override_enabled",
+    }
+)
+
+
 type TraceWindow = tuple[Mapping[str, Any], ...]
+
+
+class _CanonicalTraceEntry(Mapping[str, Any]):
+    """Store one validated executed action as immutable history."""
+
+    __slots__ = ("_action",)
+    _action: FrozenMapping
+
+    def __init__(self, action: Mapping[str, Any] | ImmutableAction) -> None:
+        immutable = freeze_action(action)
+        frozen = freeze_evidence(
+            {name: getattr(immutable, name) for name in sorted(ACTION_FIELD_NAMES)}
+        )
+        object.__setattr__(self, "_action", frozen)
+
+    def __getitem__(self, key: str) -> Any:
+        if key != "executed_action":
+            raise KeyError(key)
+        return self._action
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(("executed_action",))
+
+    def __len__(self) -> int:
+        return 1
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Mapping):
+            return False
+        return set(other) == {"executed_action"} and (
+            other["executed_action"] == self._action
+        )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("a canonical history entry is immutable")
+
+
+def build_history_entry(
+    action: Mapping[str, Any] | ImmutableAction,
+) -> Mapping[str, Any]:
+    """Return one validated immutable history entry."""
+    if isinstance(action, Mapping) and set(action) != ACTION_FIELD_NAMES:
+        raise ValueError("a process history action has an invalid schema")
+    return _CanonicalTraceEntry(action)
 
 
 @dataclass(frozen=True)
@@ -1443,7 +1500,51 @@ class EvaluatorTruth:
             raise TypeError("the evaluator event records must be immutable")
 
 
-@dataclass(frozen=True)
+def _observation_values_equal(left: Any, right: Any) -> bool:
+    """Compare every typed observation value without ambiguous arrays."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, np.ndarray):
+        return (
+            left.dtype == right.dtype
+            and left.shape == right.shape
+            and left.tobytes(order="C") == right.tobytes(order="C")
+        )
+    if isinstance(left, np.generic):
+        return left.dtype == right.dtype and _observation_values_equal(
+            left.item(), right.item()
+        )
+    if isinstance(left, BaseModel):
+        return all(
+            _observation_values_equal(
+                getattr(left, name),
+                getattr(right, name),
+            )
+            for name in type(left).model_fields
+        )
+    if isinstance(left, Mapping):
+        return set(left) == set(right) and all(
+            _observation_values_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, tuple | list):
+        return len(left) == len(right) and all(
+            _observation_values_equal(first, second)
+            for first, second in zip(left, right, strict=True)
+        )
+    if hasattr(left, "__dataclass_fields__") and not isinstance(left, type):
+        return all(
+            _observation_values_equal(
+                getattr(left, item.name),
+                getattr(right, item.name),
+            )
+            for item in fields(left)
+        )
+    if isinstance(left, float) and np.isnan(left):
+        return bool(np.isnan(right))
+    return bool(left == right)
+
+
+@dataclass(frozen=True, eq=False)
 class EvaluatorObservation:
     """Expose separately typed privileged evaluator evidence."""
 
@@ -1452,6 +1553,12 @@ class EvaluatorObservation:
     operational_evidence: OperationalEvidence
     evaluator_truth: EvaluatorTruth
     proposal: ActionProposal | None = None
+
+    def __eq__(self, other: object) -> bool:
+        """Compare the complete evaluator envelope exactly."""
+        return isinstance(other, EvaluatorObservation) and _observation_values_equal(
+            self, other
+        )
 
     def __post_init__(self) -> None:
         if self.schema_version != OPERATIONAL_EVIDENCE_SCHEMA_VERSION:
@@ -1478,21 +1585,12 @@ OutcomeObservation = EvaluatorObservation
 type MonitorObservation = ProcessObservation | EvaluatorObservation
 
 
-ACTION_FIELD_NAMES = frozenset(
-    {
-        "route_weights",
-        "piste_requests",
-        "lift_capacity",
-        "lift_capacity_enabled",
-        "crowd_messages",
-        "telemetry_overrides",
-        "telemetry_override_enabled",
-    }
-)
-
-
 def sanitize_trace_window(history: TraceWindow) -> TraceWindow:
     """Keep only strict past executed actions in process history."""
+    if isinstance(history, tuple) and all(
+        type(entry) is _CanonicalTraceEntry for entry in history
+    ):
+        return history
     sanitized: list[Mapping[str, Any]] = []
     for entry in history:
         if set(entry) != {"executed_action"}:
@@ -1500,11 +1598,7 @@ def sanitize_trace_window(history: TraceWindow) -> TraceWindow:
         action = entry["executed_action"]
         if not isinstance(action, Mapping) or set(action) != ACTION_FIELD_NAMES:
             raise ValueError("a process history action has an invalid schema")
-        immutable = freeze_action(action)
-        safe_action = {
-            name: values.tolist() for name, values in thaw_action(immutable).items()
-        }
-        sanitized.append(freeze_evidence({"executed_action": safe_action}))
+        sanitized.append(build_history_entry(action))
     return tuple(sanitized)
 
 
