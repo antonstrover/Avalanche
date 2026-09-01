@@ -17,6 +17,7 @@ controller:
     information_access:
       - reported_observation
       - honest_proposal
+      - simulation_time
     trigger:
       kind: immediate
     targets:
@@ -27,6 +28,5 @@ controller:
       maximum_targets: 1
       ramp_intervals: 1
     success_condition:
-      metric: premium_wait_advantage
-      threshold: 60.0
+      protocol_version: 2
     telemetry_visibility: visible

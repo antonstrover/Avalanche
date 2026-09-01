@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, dataclass, field
 from math import isfinite
+from typing import Any
 
 import numpy as np
 
@@ -16,7 +17,7 @@ from avalanche.sim.population import SkierArrays
 from avalanche.sim.skier import Status
 from avalanche.sim.topology import Topology
 
-METRICS_VERSION = 10
+METRICS_VERSION = 11
 PERFORMANCE_VERSION = 1
 
 
@@ -54,10 +55,26 @@ class MetricSnapshot:
     route_decision_count: int = 0
     missing_sensor_route_decision_count: int = 0
     missing_sensor_route_decision_counts: dict[str, int] = field(default_factory=dict)
+    population: int = 0
+    edge_count: int = 0
+    episode_duration_seconds: float = 0.0
+    group_population: tuple[int, ...] = ()
+    group_completed_journeys: tuple[int, ...] = ()
+    evacuation_capacity_trajectory: tuple[float, ...] = ()
+    true_density_ratio_trajectory: tuple[tuple[float, ...], ...] = ()
+    reported_density_ratio_trajectory: tuple[tuple[float, ...], ...] = ()
+    wait_time_range_seconds: float = 0.0
+    completion_score: float = 0.0
+    waiting_score: float = 0.0
+    exposure_score: float = 0.0
+    stranding_score: float = 0.0
+    fairness_score: float = 0.0
+    operational_utility: float = 0.0
+    edge_references: tuple[str, ...] = ()
 
     def as_dict(
         self,
-    ) -> dict[str, int | float | tuple[float, ...] | dict[str, int]]:
+    ) -> dict[str, Any]:
         """Return the metric fields with stable names."""
         return asdict(self)
 
@@ -98,6 +115,19 @@ class OnlineMetrics:
             raise ValueError("the topology and environment context must be paired")
         self.topology = topology
         self.environment_context = environment_context
+        self.edge_count = 0 if topology is None else topology.edge_count
+        self.edge_references = (
+            ()
+            if topology is None
+            else tuple(
+                f"{topology.node_ids[int(source)]}->{topology.node_ids[int(destination)]}"
+                for source, destination in zip(
+                    topology.edge_source,
+                    topology.edge_destination,
+                    strict=True,
+                )
+            )
+        )
         self.newly_stranded_skiers = 0
         self.cumulative_stranded_seconds = 0.0
         self.harm_onset_at: float | None = None
@@ -128,6 +158,9 @@ class OnlineMetrics:
         self.missing_sensor_route_decision_counts = {
             name: 0 for name in ROUTE_SENSOR_CHANNELS
         }
+        self.evacuation_capacity_trajectory: list[float] = []
+        self.true_density_ratio_trajectory: list[tuple[float, ...]] = []
+        self.reported_density_ratio_trajectory: list[tuple[float, ...]] = []
 
     def update_decision(
         self,
@@ -170,6 +203,7 @@ class OnlineMetrics:
         """Add one movement tick to each accumulating metric."""
         if not isfinite(tick_seconds) or tick_seconds <= 0.0:
             raise ValueError("the metric tick must be finite and positive")
+        self._infer_edge_count(state)
         if newly_stranded_skiers < 0:
             raise ValueError("the newly stranded count must be nonnegative")
         if newly_stranded_skiers:
@@ -238,6 +272,46 @@ class OnlineMetrics:
                 * tick_seconds
             )
 
+    def record_control_interval(self, state: DynamicState) -> None:
+        """Record one aligned evaluator sample after a control interval."""
+        self._infer_edge_count(state)
+        if self.edge_count <= 0:
+            raise ValueError("a control sample needs one edge")
+        true_density = np.asarray(state.density_ratio, dtype=np.float64)
+        reported_density = np.asarray(state.reported_density_ratio, dtype=np.float64)
+        expected_shape = (self.edge_count,)
+        if true_density.shape != expected_shape:
+            raise ValueError("the true density sample must match the metric edges")
+        if reported_density.shape != expected_shape:
+            raise ValueError("the reported density sample must match the metric edges")
+        if np.any(~np.isfinite(true_density)) or np.any(true_density < 0.0):
+            raise ValueError("the true density sample must be finite and nonnegative")
+        if np.any(~np.isfinite(reported_density)) or np.any(reported_density < 0.0):
+            raise ValueError(
+                "the reported density sample must be finite and nonnegative"
+            )
+        capacity = float(self.safe_evacuation_capacity_skiers_per_second)
+        if not isfinite(capacity) or capacity < 0.0:
+            raise ValueError("the evacuation capacity sample must be nonnegative")
+        self.evacuation_capacity_trajectory.append(capacity)
+        self.true_density_ratio_trajectory.append(
+            tuple(float(value) for value in true_density)
+        )
+        self.reported_density_ratio_trajectory.append(
+            tuple(float(value) for value in reported_density)
+        )
+
+    def _infer_edge_count(self, state: DynamicState) -> None:
+        """Set the edge count from one complete state array when needed."""
+        if self.edge_count > 0:
+            return
+        sizes = (
+            int(np.asarray(state.density_ratio).size),
+            int(np.asarray(state.reported_density_ratio).size),
+            int(np.asarray(state.dangerous_density_seconds).size),
+        )
+        self.edge_count = next((size for size in sizes if size > 0), 0)
+
     def update_route_decisions(self, summary: RouteDecisionSummary) -> None:
         """Add one tick's complete and missing-sensor route decisions."""
         channel_counts = summary.missing_sensor_channel_counts
@@ -296,14 +370,41 @@ class OnlineMetrics:
             else 0.0
         )
         total = float(np.sum(group_sizes))
-        scalar_utility = (
-            float(np.average(utility, weights=group_sizes)) if total > 0.0 else 0.0
-        )
+        population_count = int(population.status.size)
+        completed_count = int(np.count_nonzero(completed))
         scalar_wait = (
             float(np.sum(population.wait_time, dtype=np.float64)) / total
             if total > 0.0
             else 0.0
         )
+        from avalanche.env.reward import (
+            OperationalUtilityInputs,
+            OperationalUtilityResult,
+            calculate_operational_utility,
+        )
+
+        if population_count > 0 and self.edge_count > 0:
+            operational = calculate_operational_utility(
+                OperationalUtilityInputs(
+                    completed_journeys=completed_count,
+                    population=population_count,
+                    mean_wait_seconds=scalar_wait,
+                    dangerous_density_seconds=self.dangerous_density_seconds,
+                    edge_count=self.edge_count,
+                    episode_duration_seconds=self.episode_duration_seconds,
+                    stranded_skier_seconds=self.cumulative_stranded_seconds,
+                    wait_time_range_seconds=fairness,
+                )
+            )
+        else:
+            operational = OperationalUtilityResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        trajectory_lengths = {
+            len(self.evacuation_capacity_trajectory),
+            len(self.true_density_ratio_trajectory),
+            len(self.reported_density_ratio_trajectory),
+        }
+        if len(trajectory_lengths) != 1:
+            raise ValueError("the control metric trajectories must stay aligned")
 
         values = (
             self.cumulative_stranded_seconds,
@@ -319,14 +420,19 @@ class OnlineMetrics:
             *utility,
             *mean_wait,
             fairness,
-            scalar_utility,
             scalar_wait,
+            operational.completion_score,
+            operational.waiting_score,
+            operational.exposure_score,
+            operational.stranding_score,
+            operational.fairness_score,
+            operational.utility,
         )
         if any(not isfinite(float(value)) for value in values):
             raise ValueError("an online metric is not finite")
         return MetricSnapshot(
             metrics_version=METRICS_VERSION,
-            completed_journeys=int(np.count_nonzero(completed)),
+            completed_journeys=completed_count,
             wait_time_sum=float(np.sum(population.wait_time, dtype=np.float64)),
             newly_stranded_skiers=self.newly_stranded_skiers,
             unique_stranded_skiers=int(np.count_nonzero(stranded)),
@@ -355,7 +461,7 @@ class OnlineMetrics:
             group_utility=tuple(float(value) for value in utility),
             group_mean_wait_times=tuple(float(value) for value in mean_wait),
             fairness=fairness,
-            utility=scalar_utility,
+            utility=operational.utility,
             mean_wait_seconds=scalar_wait,
             decision_counts=dict(self.decision_counts),
             intervention_latency_count=self.intervention_latency_count,
@@ -377,6 +483,24 @@ class OnlineMetrics:
             missing_sensor_route_decision_counts=dict(
                 self.missing_sensor_route_decision_counts
             ),
+            population=population_count,
+            edge_count=self.edge_count,
+            episode_duration_seconds=self.episode_duration_seconds,
+            group_population=tuple(int(value) for value in group_sizes),
+            group_completed_journeys=tuple(int(value) for value in group_completed),
+            evacuation_capacity_trajectory=tuple(self.evacuation_capacity_trajectory),
+            true_density_ratio_trajectory=tuple(self.true_density_ratio_trajectory),
+            reported_density_ratio_trajectory=tuple(
+                self.reported_density_ratio_trajectory
+            ),
+            wait_time_range_seconds=fairness,
+            completion_score=operational.completion_score,
+            waiting_score=operational.waiting_score,
+            exposure_score=operational.exposure_score,
+            stranding_score=operational.stranding_score,
+            fairness_score=operational.fairness_score,
+            operational_utility=operational.utility,
+            edge_references=self.edge_references,
         )
 
     def performance_snapshot(self) -> PerformanceSnapshot:

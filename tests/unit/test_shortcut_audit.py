@@ -9,7 +9,14 @@ import pytest
 from avalanche.config.models import AuditConfig, SensorPolicyConfig
 from avalanche.control import OBSERVATION_SCHEMA_VERSION
 from avalanche.control.types import OPERATIONAL_SENSOR_SPECS, public_policy_identity
-from avalanche.monitors.dataset import DATASET_VERSION, STRANDING_LABEL
+from avalanche.experiments.protocols import PAIR_CONTEXT_VERSION, PairContext
+from avalanche.monitors.dataset import (
+    ATTACK_LABEL,
+    DATASET_VERSION,
+    EXECUTED_ACTIVATION,
+    LABEL_SCHEMA_VERSION,
+    STRANDING_LABEL,
+)
 from avalanche.monitors.features import FEATURE_VERSION
 from avalanche.monitors.shortcut_audit import (
     SHORTCUT_GATE,
@@ -22,6 +29,42 @@ from avalanche.monitors.shortcut_audit import (
 )
 
 FEATURES = ("signal", "context")
+
+
+def _with_pair_context(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add one valid complete pair context."""
+    context = PairContext(
+        pair_context_version=PAIR_CONTEXT_VERSION,
+        pair_context_sha256="1" * 64,
+        invariant_configuration_sha256="1" * 64,
+        honest_resolved_configuration_sha256="2" * 64,
+        attack_resolved_configuration_sha256="3" * 64,
+        honest_controller_sha256="4" * 64,
+        attack_controller_sha256="5" * 64,
+        attack_base_controller_sha256="4" * 64,
+        root_seed=20260825,
+        code_sha256="6" * 64,
+        mountain_sha256="7" * 64,
+        schedule_sha256="8" * 64,
+        sensor_sha256="9" * 64,
+        monitor_sha256="a" * 64,
+        policy_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+    )
+    context.validate()
+    honest = np.arange(len(frame)) < len(frame) // 2
+    frame["pair_id"] = "pair-a"
+    frame["pair_role"] = np.where(honest, "honest", "attack")
+    frame["seed"] = context.root_seed
+    frame["resolved_config_checksum"] = np.where(
+        honest,
+        context.honest_resolved_configuration_sha256,
+        context.attack_resolved_configuration_sha256,
+    )
+    frame["pair_context_checksum"] = context.pair_context_sha256
+    for field, value in context.as_dict().items():
+        frame[field] = value
+    return frame
 
 
 def rows(*, reverse: bool = False) -> pd.DataFrame:
@@ -48,38 +91,42 @@ def rows(*, reverse: bool = False) -> pd.DataFrame:
         for name, spec in OPERATIONAL_SENSOR_SPECS.items()
     }
     audit_policy = AuditConfig().model_dump(mode="json")
-    return pd.DataFrame(
-        {
-            "signal": signal,
-            "context": np.linspace(-1.0, 1.0, len(labels)),
-            "attack_active": labels,
-            "dataset_version": DATASET_VERSION,
-            "feature_version": FEATURE_VERSION,
-            "simulation_time": np.arange(len(labels)) * 60.0,
-            STRANDING_LABEL: labels,
-            "stranding_label_known": np.tile([1, 1, 1, 0], 20),
-            "attack_kind": np.where(labels == 1, "sleeper", "honest"),
-            "operational_evidence_schema_version": OBSERVATION_SCHEMA_VERSION,
-            "control_interval_seconds": 60.0,
-            "sensor_packet_identity": "a" * 64,
-            "sensor_policy_identity": public_policy_identity(
-                SensorPolicyConfig().model_dump(mode="json")
-            ),
-            "audit_policy_identity": public_policy_identity(audit_policy),
-            "audit_policy": json.dumps(
-                audit_policy,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-            "sensor_provenance": json.dumps(
-                provenance,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-            "audit_provenance": "[]",
-            "public_event_provenance": "[]",
-            "stranding_provenance": "[]",
-        }
+    return _with_pair_context(
+        pd.DataFrame(
+            {
+                "signal": signal,
+                "context": np.linspace(-1.0, 1.0, len(labels)),
+                ATTACK_LABEL: labels,
+                EXECUTED_ACTIVATION: labels,
+                "dataset_version": DATASET_VERSION,
+                "label_schema_version": LABEL_SCHEMA_VERSION,
+                "feature_version": FEATURE_VERSION,
+                "simulation_time": np.arange(len(labels)) * 60.0,
+                STRANDING_LABEL: labels,
+                "stranding_label_known": np.tile([1, 1, 1, 0], 20),
+                "attack_kind": np.where(labels == 1, "sleeper", "honest"),
+                "operational_evidence_schema_version": OBSERVATION_SCHEMA_VERSION,
+                "control_interval_seconds": 60.0,
+                "sensor_packet_identity": "a" * 64,
+                "sensor_policy_identity": public_policy_identity(
+                    SensorPolicyConfig().model_dump(mode="json")
+                ),
+                "audit_policy_identity": public_policy_identity(audit_policy),
+                "audit_policy": json.dumps(
+                    audit_policy,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "sensor_provenance": json.dumps(
+                    provenance,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "audit_provenance": "[]",
+                "public_event_provenance": "[]",
+                "stranding_provenance": "[]",
+            }
+        )
     )
 
 

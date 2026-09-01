@@ -16,6 +16,7 @@ from avalanche.control.approval import (
 from avalanche.control.protocols import Monitor
 from avalanche.control.types import (
     ActionProposal,
+    AttackStepRecord,
     ControllerObservation,
     DecisionType,
     ExecutedAction,
@@ -24,7 +25,11 @@ from avalanche.control.types import (
     MonitorDecision,
     MonitorObservation,
     PredictedResult,
+    SelectedActionProvenance,
+    action_delta,
+    action_sha256,
     build_monitor_proposal,
+    finalize_attack_step_record,
 )
 
 ActionValidator = Callable[[ImmutableAction], None]
@@ -104,6 +109,8 @@ class AdjudicationResult:
     proposal: ActionProposal
     decision: MonitorDecision
     executed_action: ExecutedAction
+    selected_action_provenance: SelectedActionProvenance
+    attack_step_record: AttackStepRecord | None = None
     fallback_source: str | None = None
     predicted_result: PredictedResult = ()
     approval_request: ApprovalRequest | None = None
@@ -139,6 +146,7 @@ class Adjudicator:
         *,
         simulation_time: float,
         fallback_observation: ControllerObservation | None = None,
+        attack_step_record: AttackStepRecord | None = None,
     ) -> AdjudicationResult:
         """Return one final action after both validation passes."""
         if proposal.simulation_time != simulation_time:
@@ -152,6 +160,7 @@ class Adjudicator:
             proposal,
             EngineeringErrorCode.INVALID_PROPOSAL,
         )
+        self._validate_attack_step_record(attack_step_record, proposal)
         self._validate_monitor_observation(observation, proposal)
         history = observation.operational_evidence.executed_actions
         try:
@@ -186,6 +195,7 @@ class Adjudicator:
 
         action = proposal.action
         controller_id = proposal.controller_id
+        selected_action_provenance = SelectedActionProvenance.PROPOSAL_ALLOW
         fallback_source = None
         approval_request = None
         approval_response = None
@@ -193,6 +203,7 @@ class Adjudicator:
             assert decision.replacement_action is not None
             action = decision.replacement_action
             controller_id = "monitor-replacement"
+            selected_action_provenance = SelectedActionProvenance.MONITOR_REPLACEMENT
         elif decision.decision in {DecisionType.BLOCK, DecisionType.ESCALATE}:
             if self.fallback is None:
                 raise ProposalEngineeringError(
@@ -211,6 +222,7 @@ class Adjudicator:
                 action = fallback.action
                 controller_id = fallback.controller_id
                 fallback_source = fallback.controller_id
+                selected_action_provenance = SelectedActionProvenance.FALLBACK_BLOCK
             else:
                 approval_request = ApprovalRequest(
                     decision_id=decision_identifier(proposal),
@@ -223,14 +235,23 @@ class Adjudicator:
                 if approval_response.choice is ApprovalChoice.APPROVE:
                     action = proposal.action
                     controller_id = proposal.controller_id
+                    selected_action_provenance = (
+                        SelectedActionProvenance.PROPOSAL_ESCALATE_APPROVED
+                    )
                 elif approval_response.choice is ApprovalChoice.REPLACE:
                     assert approval_response.replacement_action is not None
                     action = approval_response.replacement_action
                     controller_id = "approval-replacement"
+                    selected_action_provenance = (
+                        SelectedActionProvenance.APPROVAL_REPLACEMENT
+                    )
                 else:
                     action = fallback.action
                     controller_id = fallback.controller_id
                     fallback_source = fallback.controller_id
+                    selected_action_provenance = (
+                        SelectedActionProvenance.FALLBACK_ESCALATE_BLOCKED
+                    )
 
         self._validate(
             action,
@@ -245,16 +266,45 @@ class Adjudicator:
         record_fallback = getattr(self.fallback, "record", None)
         if record_fallback is not None:
             record_fallback(executed_action)
+        finalized_attack_step = (
+            None
+            if attack_step_record is None
+            else finalize_attack_step_record(
+                attack_step_record,
+                executed_action.action,
+                selected_action_provenance,
+            )
+        )
         return AdjudicationResult(
             decision_id=decision_identifier(proposal),
             proposal=proposal,
             decision=decision,
             executed_action=executed_action,
+            selected_action_provenance=selected_action_provenance,
+            attack_step_record=finalized_attack_step,
             fallback_source=fallback_source,
             predicted_result=decision.predicted_result,
             approval_request=approval_request,
             approval_response=approval_response,
         )
+
+    def _validate_attack_step_record(
+        self,
+        record: AttackStepRecord | None,
+        proposal: ActionProposal,
+    ) -> None:
+        """Bind optional evaluator evidence to the current proposal."""
+        if record is None:
+            return
+        if record.selected_action_provenance is not None:
+            raise ValueError("the attack step must precede adjudication")
+        if record.simulation_time != proposal.simulation_time:
+            raise ValueError("the attack step time must match the proposal")
+        if record.proposed_action_sha256 != action_sha256(proposal.action):
+            raise ValueError("the attack step digest must match the proposal")
+        expected_delta = action_delta(record._honest_base_action, proposal.action)
+        if record.malicious_delta != expected_delta:
+            raise ValueError("the attack step malicious delta must match the proposal")
 
     def _validate(
         self,

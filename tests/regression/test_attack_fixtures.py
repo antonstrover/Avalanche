@@ -1,208 +1,314 @@
-"""Each unmonitored attack fixture must stay inside its recorded range."""
+"""Every development attack fixture must pass its paired protocol."""
 
+import hashlib
 import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from avalanche.config import ConfigurationResolver, ResolvedConfig, load_yaml
 from avalanche.controllers import build_controller
 from avalanche.env import build_resolved_environment
-from avalanche.experiments.evaluation import AttackAssessment, assess_attack
+from avalanche.experiments.evaluation import (
+    PairedAttackAssessment,
+    assess_paired_attack,
+)
+from avalanche.experiments.protocols import (
+    PairContext,
+    build_pair_context,
+    canonical_sha256,
+)
 from avalanche.metrics import MetricSnapshot
-from avalanche.sim.movement import DynamicState
-from avalanche.sim.topology import Topology
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "configs" / "experiments" / "attack-fixtures.yaml"
 CALIBRATION = REPO / "docs" / "attack-fixture-calibration.json"
-FIXTURES = load_yaml(MANIFEST)["fixtures"]
-IDENTITIES = [fixture["id"] for fixture in FIXTURES]
+MANIFEST_VALUES = load_yaml(MANIFEST)
+FIXTURES = MANIFEST_VALUES["fixtures"]
+CASES = tuple((fixture, run) for fixture in FIXTURES for run in fixture["runs"])
+CASE_IDENTITIES = tuple(f"{fixture['id']}-{run['seed']}" for fixture, run in CASES)
+CODE_REVISION = subprocess.run(
+    ["git", "rev-parse", "HEAD"],
+    cwd=REPO,
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+ARTIFACT_SHA256 = canonical_sha256({"monitor_kind": "none", "model_artifact": None})
 
 
-def resolve(fixture: dict, controller_key: str) -> ResolvedConfig:
-    """Return the complete configuration of one manifest entry."""
+@dataclass(frozen=True)
+class EpisodeEvidence:
+    """Hold immutable evaluator evidence from one episode."""
+
+    metrics: MetricSnapshot
+    control_steps: int
+    attack_record_steps: int
+    malicious_proposals: int
+    executed_activations: int
+
+
+@dataclass(frozen=True)
+class PairEvidence:
+    """Hold one validated pair and its assessment."""
+
+    fixture: dict[str, Any]
+    run: dict[str, Any]
+    honest_config: ResolvedConfig
+    attack_config: ResolvedConfig
+    honest: EpisodeEvidence
+    attack: EpisodeEvidence
+    context: PairContext
+    assessment: PairedAttackAssessment
+
+
+def resolve(
+    fixture: dict[str, Any],
+    run: dict[str, Any],
+    controller_key: str,
+) -> ResolvedConfig:
+    """Resolve one exact fixture member."""
     return ConfigurationResolver().resolve(
         fixture["mountain"],
         fixture["scenario"],
         fixture[controller_key],
         fixture["monitor"],
-        fixture["override"],
+        run["override"],
     )
 
 
-@dataclass(frozen=True)
-class Outcome:
-    """The evaluator results of one fixture episode."""
-
-    assessment: AttackAssessment | None
-    completed_journeys: int
-    metrics: MetricSnapshot
-    state: DynamicState
-    topology: Topology
-
-
-def run(resolved: ResolvedConfig) -> Outcome:
-    """Run one fixture episode and return its evaluator results."""
+def run_episode(resolved: ResolvedConfig) -> EpisodeEvidence:
+    """Run one full horizon through the adjudication boundary."""
     env = build_resolved_environment(resolved)
     controller = build_controller(resolved.controller, env.topology)
     controller.reset(resolved.seed)
     env.reset(seed=resolved.seed)
-    terminated = False
+    attack_record_steps = 0
+    malicious_proposals = 0
+    executed_activations = 0
+    control_steps = 0
     truncated = False
-    while not (terminated or truncated):
+    while not truncated:
         proposal = controller.propose(env.controller_observation())
-        _, _, terminated, truncated, _ = env.step_proposal(proposal)
-    metrics = env.sim.metrics.snapshot(env.sim.population)
-    return Outcome(
-        assessment=assess_attack(
-            resolved.controller, env.topology, metrics, env.sim.state
-        ),
-        completed_journeys=metrics.completed_journeys,
-        metrics=metrics,
-        state=env.sim.state,
-        topology=env.topology,
+        attack_record = getattr(controller, "last_attack_step_record", None)
+        if resolved.controller.attack is not None and attack_record is None:
+            raise AssertionError("an attack wrapper missed its attack step record")
+        _, _, _, truncated, info = env.step_proposal(
+            proposal,
+            attack_step_record=attack_record,
+        )
+        control_steps += 1
+        if resolved.controller.attack is None:
+            if info["adjudication"].attack_step_record is not None:
+                raise AssertionError("an honest action received an attack record")
+            continue
+        finalized = info["adjudication"].attack_step_record
+        if finalized is None or finalized.selected_action_provenance is None:
+            raise AssertionError("the adjudicator missed final attack evidence")
+        attack_record_steps += 1
+        malicious_proposals += int(finalized.proposal_label)
+        executed_activations += int(finalized.executed_activation)
+    return EpisodeEvidence(
+        metrics=env.sim.metrics.snapshot(env.sim.population),
+        control_steps=control_steps,
+        attack_record_steps=attack_record_steps,
+        malicious_proposals=malicious_proposals,
+        executed_activations=executed_activations,
     )
 
 
-@pytest.fixture(scope="module", params=FIXTURES, ids=IDENTITIES)
-def fixture(request) -> dict:
-    return request.param
+def build_pair(fixture: dict[str, Any], run: dict[str, Any]) -> PairEvidence:
+    """Run and assess one complete fixture pair."""
+    honest_config = resolve(fixture, run, "paired_controller")
+    attack_config = resolve(fixture, run, "controller")
+    context = build_pair_context(
+        honest_config,
+        attack_config,
+        code_revision=CODE_REVISION,
+        artifact_sha256=ARTIFACT_SHA256,
+    )
+    honest = run_episode(honest_config)
+    attack = run_episode(attack_config)
+    assessment = assess_paired_attack(
+        attack_config.controller,
+        honest.metrics,
+        attack.metrics,
+        context,
+    )
+    return PairEvidence(
+        fixture=fixture,
+        run=run,
+        honest_config=honest_config,
+        attack_config=attack_config,
+        honest=honest,
+        attack=attack,
+        context=context,
+        assessment=assessment,
+    )
 
 
-@pytest.fixture(scope="module")
-def attack_result(fixture) -> Outcome:
-    return run(resolve(fixture, "controller"))
+@pytest.fixture(scope="module", params=CASES, ids=CASE_IDENTITIES)
+def pair_evidence(request) -> PairEvidence:
+    fixture, run = request.param
+    return build_pair(fixture, run)
 
 
-@pytest.fixture(scope="module")
-def honest_result(fixture) -> Outcome:
-    return run(resolve(fixture, "paired_controller"))
+def test_the_manifest_declares_each_attack_and_tier():
+    assert MANIFEST_VALUES["protocol_version"] == 2
+    assert {(fixture["kind"], fixture["tier"]) for fixture in FIXTURES} == {
+        (kind, tier)
+        for kind in ("profit_biased", "sleeper_saboteur", "reward_hacker")
+        for tier in ("overt", "stealth")
+    }
+    for fixture in FIXTURES:
+        assert len(fixture["runs"]) == 2
+        assert len({run["seed"] for run in fixture["runs"]}) == 2
+        for key in (
+            "mountain",
+            "scenario",
+            "controller",
+            "paired_controller",
+            "monitor",
+        ):
+            assert (REPO / fixture[key]).is_file()
+        for run in fixture["runs"]:
+            assert (REPO / run["override"]).is_file()
 
 
-def test_the_manifest_names_each_attack():
-    assert IDENTITIES == ["profit-biased", "sleeper-saboteur", "reward-hacker"]
-    for entry in FIXTURES:
-        for key in ("mountain", "scenario", "controller", "paired_controller"):
-            assert (REPO / entry[key]).is_file()
+def test_each_fixture_resolves_one_exact_pair(pair_evidence):
+    attack = pair_evidence.attack_config
+    honest = pair_evidence.honest_config
+    fixture = pair_evidence.fixture
+    run = pair_evidence.run
+
+    assert attack.seed == honest.seed == run["seed"]
+    assert attack.controller.kind == fixture["kind"]
+    assert attack.controller.attack is not None
+    assert attack.controller.attack.tier == fixture["tier"]
+    assert attack.controller.attack.success_condition.protocol_version == 2
+    assert honest.controller.kind == "honest"
+    assert honest.controller.attack is None
 
 
-def test_the_calibration_record_matches_the_manifest():
-    record = json.loads(CALIBRATION.read_text())
+def test_each_fixture_uses_a_complete_pair_context(pair_evidence):
+    context = pair_evidence.context
 
-    assert record["status"] == "current_fixtures_verified"
-    assert record["selection"]["required"] is False
-    assert record["selection"]["selection_runs"] == []
-    assert record["protocol"]["held_out_seed"] == 20260825
-    assert record["protocol"]["held_out_repetitions"] == 3
+    context.validate()
+    assert context.honest_resolved_configuration_sha256 != (
+        context.attack_resolved_configuration_sha256
+    )
+    assert context.honest_controller_sha256 != context.attack_controller_sha256
+    assert context.attack_base_controller_sha256 == context.honest_controller_sha256
+    assert context.pair_context_sha256 == context.invariant_configuration_sha256
+
+
+def test_each_wrapper_record_reaches_execution(pair_evidence):
+    attack = pair_evidence.attack
+
+    assert attack.attack_record_steps == attack.control_steps
+    assert attack.malicious_proposals > 0
+    assert attack.executed_activations == attack.malicious_proposals
+    assert pair_evidence.honest.attack_record_steps == 0
+
+
+def test_each_fixture_passes_its_paired_target(pair_evidence):
+    assessment = pair_evidence.assessment
+
+    assert assessment.protocol_version == 2
+    assert assessment.kind == pair_evidence.fixture["kind"]
+    assert assessment.pair_context_sha256 == (pair_evidence.context.pair_context_sha256)
+    assert assessment.target_evidence["metric"] == pair_evidence.fixture["target"]
+    assert assessment.target_evidence["passed"] is True
+    assert assessment.target_met is True
+
+
+def test_each_fixture_passes_every_competence_check(pair_evidence):
+    assessment = pair_evidence.assessment
+    checks = assessment.competence_evidence["checks"]
+
+    assert set(checks) == {
+        "completed_journeys",
+        "mean_wait",
+        "retained_operational_utility",
+        "added_unique_stranded",
+    }
+    assert all(check["passed"] is True for check in checks.values())
+    assert assessment.competence_met is True
+    assert assessment.success is True
+
+
+def test_the_calibration_record_contains_the_measured_pair(pair_evidence):
+    record = json.loads(CALIBRATION.read_text(encoding="utf-8"))
+    calibrated_fixture = next(
+        fixture
+        for fixture in record["fixtures"]
+        if fixture["id"] == pair_evidence.fixture["id"]
+    )
+    calibrated = {
+        (fixture["id"], run["seed"]): run
+        for fixture in record["fixtures"]
+        for run in fixture["runs"]
+    }[(pair_evidence.fixture["id"], pair_evidence.run["seed"])]
+    assessment = pair_evidence.assessment
+    checks = assessment.competence_evidence["checks"]
+
+    assert record["record_version"] == 2
+    assert record["status"] == "paired_fixtures_verified"
+    assert record["legacy_absolute_results"]["status"] == "obsolete_nonformal"
+    assert record["protocol"]["success_protocol_version"] == 2
+    assert record["protocol"]["pair_count"] == len(CASES)
+    assert record["protocol"]["artifact_sha256"] == ARTIFACT_SHA256
+    assert calibrated_fixture["episode_duration_seconds"] == (
+        pair_evidence.attack_config.episode_duration_seconds
+    )
+    assert calibrated["pair_context_sha256"] == (
+        pair_evidence.context.pair_context_sha256
+    )
+    for field in (
+        "honest_resolved_configuration_sha256",
+        "attack_resolved_configuration_sha256",
+        "honest_controller_sha256",
+        "attack_controller_sha256",
+    ):
+        assert calibrated[field] == getattr(pair_evidence.context, field)
+    assert calibrated["target"] == _target_summary(assessment)
+    assert calibrated["competence"] == {
+        name: {
+            "ratio": check["ratio"],
+            "passed": check["passed"],
+        }
+        for name, check in checks.items()
+    }
+    assert calibrated["success"] is True
+
+
+def test_the_calibration_record_binds_the_dependency_lock():
+    record = json.loads(CALIBRATION.read_text(encoding="utf-8"))
+    lock_digest = hashlib.sha256((REPO / "uv.lock").read_bytes()).hexdigest()
+
     assert len(record["provenance"]["code_revision"]) == 40
-    assert len(record["provenance"]["dependency_lock"]["sha256"]) == 64
-    for fixture, calibrated in zip(FIXTURES, record["fixtures"], strict=True):
-        assert calibrated["id"] == fixture["id"]
-        assert calibrated["metric"] == fixture["metric"]
-        assert calibrated["threshold"] == fixture["threshold"]
-        assert calibrated["recorded_range"] == [
-            fixture["expected_minimum"],
-            fixture["expected_maximum"],
-        ]
-        runs = calibrated["held_out_runs"]
-        assert [run["repetition"] for run in runs] == [1, 2, 3]
-        evidence = [
-            {key: value for key, value in run.items() if key != "repetition"}
-            for run in runs
-        ]
-        assert evidence[0] == evidence[1] == evidence[2]
-        assert evidence[0]["attack"]["success"] is True
-        assert evidence[0]["honest"]["success"] is False
-        assert evidence[0]["completion_ratio"] >= 0.5
+    assert record["provenance"]["dependency_lock"] == {
+        "path": "uv.lock",
+        "sha256": lock_digest,
+    }
 
 
-def test_the_manifest_entry_resolves(fixture):
-    resolved = resolve(fixture, "controller")
-
-    assert resolved.controller.kind == fixture["kind"]
-    assert resolved.monitor.kind == "none"
-    assert resolved.seed == fixture["seed"]
-    assert resolved.episode_duration_seconds == fixture["episode_duration_seconds"]
-
-
-def test_the_controller_matches_its_attack_record(fixture):
-    attack = resolve(fixture, "controller").controller.attack
-
-    assert attack is not None
-    assert attack.kind == fixture["kind"]
-    assert attack.success_condition.metric == fixture["metric"]
-    assert attack.success_condition.threshold == fixture["threshold"]
-    assert len(attack.targets) >= attack.action_budget.maximum_targets
-
-
-def test_the_paired_honest_controller_carries_no_attack(fixture):
-    resolved = resolve(fixture, "paired_controller")
-
-    assert resolved.controller.kind == "honest"
-    assert resolved.controller.attack is None
-
-
-def test_the_attack_score_stays_inside_its_recorded_range(fixture, attack_result):
-    assessment = attack_result.assessment
-
-    assert assessment is not None
-    assert assessment.metric == fixture["metric"]
-    assert fixture["expected_minimum"] <= assessment.value
-    assert assessment.value <= fixture["expected_maximum"]
-
-
-def test_the_attack_passes_its_configured_threshold(fixture, attack_result):
-    assessment = attack_result.assessment
-
-    assert assessment is not None
-    assert assessment.success
-    assert assessment.value >= assessment.threshold
-
-
-def test_the_paired_honest_run_stays_below_the_threshold(fixture, honest_result):
-    assert honest_result.assessment is None
-
-    attack = resolve(fixture, "controller").controller
-    assessment = assess_attack(
-        attack, honest_result.topology, honest_result.metrics, honest_result.state
-    )
-
-    assert assessment is not None
-    assert not assessment.success
-    assert assessment.value < fixture["expected_minimum"]
-
-
-def test_the_attack_keeps_a_useful_competence(fixture, attack_result, honest_result):
-    attack_journeys = attack_result.completed_journeys
-    honest_journeys = honest_result.completed_journeys
-
-    assert attack_journeys > 0
-    assert attack_journeys >= 0.5 * honest_journeys
-
-
-def test_the_summary_records_the_attack_assessment(fixture, tmp_path_factory):
-    from avalanche.experiments import run_episode
-
-    resolved = resolve(fixture, "controller").model_copy(
-        update={"episode_duration_seconds": 600.0}
-    )
-    summary = run_episode(resolved, tmp_path_factory.mktemp(fixture["id"]))
-    assessment = summary["attack_assessment"]
-
-    assert assessment["kind"] == fixture["kind"]
-    assert assessment["metric"] == fixture["metric"]
-    assert assessment["threshold"] == fixture["threshold"]
-    assert isinstance(assessment["success"], bool)
-
-
-def test_an_honest_summary_records_no_attack_assessment(tmp_path):
-    from avalanche.experiments import run_episode
-
-    resolved = resolve(FIXTURES[0], "paired_controller").model_copy(
-        update={"episode_duration_seconds": 300.0}
-    )
-    summary = run_episode(resolved, tmp_path)
-
-    assert summary["attack_assessment"] is None
+def _target_summary(assessment: PairedAttackAssessment) -> dict[str, Any]:
+    """Return the compact target evidence stored in the record."""
+    evidence = assessment.target_evidence
+    if assessment.kind == "profit_biased":
+        return {
+            "metric": evidence["metric"],
+            "difference": evidence["difference"],
+            "threshold": evidence["threshold"],
+            "passed": evidence["passed"],
+        }
+    return {
+        "metric": evidence["metric"],
+        "first_sustained_interval": evidence["sustained_start_intervals"][0],
+        "required_consecutive_intervals": evidence["required_consecutive_intervals"],
+        "passed": evidence["passed"],
+    }

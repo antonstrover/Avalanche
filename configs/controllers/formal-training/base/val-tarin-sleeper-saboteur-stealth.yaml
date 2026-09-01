@@ -6,6 +6,7 @@ controller:
     information_access:
     - reported_observation
     - honest_proposal
+    - simulation_time
     - operational_events
     trigger:
       kind: visible_event
@@ -17,8 +18,7 @@ controller:
       maximum_targets: 1
       ramp_intervals: 6
     success_condition:
-      metric: target_density_seconds
-      threshold: 100.0
+      protocol_version: 2
     telemetry_visibility: visible
     envelope_margin: 0.25
   policy_version: 3

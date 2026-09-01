@@ -14,7 +14,7 @@ from avalanche.experiments.acceptance import (
     load_acceptance_config,
     select_acceptance_entries,
 )
-from avalanche.monitors.dataset import run_entry
+from avalanche.monitors.dataset import ATTACK_LABEL, run_entry
 from avalanche.monitors.features import FEATURE_NAMES
 from avalanche.monitors.shortcut_audit import fit_stumps
 
@@ -56,8 +56,8 @@ def paired_rows() -> pd.DataFrame:
 
 def test_no_principal_feature_separates_the_classes_exactly(paired_rows):
     frame = paired_rows.copy(deep=True)
-    assert (frame["attack_active"] == 0).any()
-    assert (frame["attack_active"] == 1).any()
+    assert (frame[ATTACK_LABEL] == 0).any()
+    assert (frame[ATTACK_LABEL] == 1).any()
 
     stumps = fit_stumps(frame, frame, FEATURE_NAMES)
     perfect = sorted(
@@ -78,7 +78,7 @@ def test_the_honest_controller_restricts_the_evacuation_capacity_sometimes(
     The monitor can then not use one restriction as proof of an attack.
     """
     frame = paired_rows.copy(deep=True)
-    honest = frame.loc[frame["attack_active"] == 0]
+    honest = frame.loc[frame[ATTACK_LABEL] == 0]
     restriction = honest["context_evacuation_restriction_fraction"].to_numpy(
         dtype=float
     )

@@ -103,12 +103,13 @@ def test_the_acceptance_inventory_records_each_required_version():
         "adaptive_version": 1,
         "audit_schema_version": 2,
         "calibration_version": 2,
-        "dataset_version": 6,
+        "dataset_version": 7,
         "envelope_version": 1,
-        "event_schema_version": 4,
+        "event_schema_version": 5,
         "evaluation_version": 4,
         "feature_version": 4,
-        "metrics_version": 10,
+        "label_schema_version": 2,
+        "metrics_version": 11,
         "model_version": 3,
         "observation_schema_version": 3,
         "operational_event_schema_version": 1,
@@ -117,15 +118,15 @@ def test_the_acceptance_inventory_records_each_required_version():
         "route_sensor_schema_version": 3,
         "sensor_policy_schema_version": 2,
         "shortcut_report_version": 2,
-        "snapshot_schema_version": 4,
-        "summary_schema_version": 1,
+        "snapshot_schema_version": 5,
+        "summary_schema_version": 2,
     }
 
 
 def test_every_acceptance_fixture_resolves_before_execution():
     config = load_acceptance_config(CONFIG)
     tasks = acceptance_script._resolve_fixtures(config)
-    assert len(tasks) == 3
+    assert len(tasks) == 12
     assert all(task.attack.runtime.worker_count == 4 for task in tasks)
     assert all(task.honest.runtime.worker_count == 4 for task in tasks)
 
@@ -154,7 +155,7 @@ def test_fixture_workers_receive_only_resolved_tasks(monkeypatch, tmp_path):
     monkeypatch.setattr(acceptance_script, "ProcessPoolExecutor", Pool)
     result = acceptance_script._run_fixtures(config, tasks, tmp_path)
     assert observed == [4]
-    assert len(result["fixtures"]) == 3
+    assert len(result["fixtures"]) == 12
 
 
 def test_invalid_fixture_preflight_creates_no_output(monkeypatch, tmp_path):

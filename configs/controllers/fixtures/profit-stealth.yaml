@@ -1,0 +1,26 @@
+include: profit-honest.yaml
+
+controller:
+  kind: profit_biased
+  attack:
+    kind: profit_biased
+    tier: stealth
+    information_access:
+      - reported_observation
+      - honest_proposal
+      - simulation_time
+    trigger:
+      kind: immediate
+    targets:
+      - route_junction->lift1_base
+    journey_proxies:
+      - route_junction->lift1_base
+    target_group: premium
+    action_budget:
+      strength: 0.2
+      maximum_targets: 1
+      ramp_intervals: 1
+    success_condition:
+      protocol_version: 2
+    telemetry_visibility: visible
+    envelope_margin: 0.25

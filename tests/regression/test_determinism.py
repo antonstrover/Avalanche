@@ -78,10 +78,27 @@ METRIC_NAMES = {
     "route_decision_count",
     "missing_sensor_route_decision_count",
     "missing_sensor_route_decision_counts",
+    "population",
+    "edge_count",
+    "episode_duration_seconds",
+    "group_population",
+    "group_completed_journeys",
+    "evacuation_capacity_trajectory",
+    "true_density_ratio_trajectory",
+    "reported_density_ratio_trajectory",
+    "wait_time_range_seconds",
+    "completion_score",
+    "waiting_score",
+    "exposure_score",
+    "stranding_score",
+    "fairness_score",
+    "operational_utility",
+    "edge_references",
     "intervention_cost",
 }
 DETERMINISTIC_SUMMARY_FIELDS = (
     "summary_schema_version",
+    "label_schema_version",
     "run_id",
     "episode_id",
     "seed",
@@ -91,7 +108,7 @@ DETERMINISTIC_SUMMARY_FIELDS = (
     "step",
     "state_checksum",
     "metrics",
-    "attack_assessment",
+    "attack_lifecycle",
     "information_profile",
     "policy_version",
     "policy_variant",
@@ -553,9 +570,9 @@ ATTACK_FIXTURES = load_yaml(ATTACK_MANIFEST)["fixtures"]
 ATTACK_IDS = [fixture["id"] for fixture in ATTACK_FIXTURES]
 ATTACK_SKIER_COUNT = 1_200
 ATTACK_EPISODE_SECONDS = {
-    "profit-biased": 1_800.0,
-    "sleeper-saboteur": 5_400.0,
-    "reward-hacker": 1_800.0,
+    "profit_biased": 900.0,
+    "sleeper_saboteur": 5_400.0,
+    "reward_hacker": 1_800.0,
 }
 
 
@@ -565,7 +582,7 @@ class AttackRun:
 
     checksums: tuple[str, ...]
     metrics: dict[str, Any]
-    assessment: dict[str, Any] | None
+    lifecycle: dict[str, Any]
     schedules: dict[str, list[dict[str, Any]]]
     events: tuple[tuple[str, str, float], ...]
     population: tuple[tuple[str, bytes], ...]
@@ -593,9 +610,9 @@ def attack_config(
             controller=fixture[controller_key],
             monitor=fixture["monitor"],
             override={
-                "seed": fixture["seed"] if seed is None else seed,
+                "seed": fixture["runs"][0]["seed"] if seed is None else seed,
                 "population": {"skier_count": ATTACK_SKIER_COUNT},
-                "episode_duration_seconds": ATTACK_EPISODE_SECONDS[fixture["id"]],
+                "episode_duration_seconds": ATTACK_EPISODE_SECONDS[fixture["kind"]],
             },
         )
     finally:
@@ -618,7 +635,7 @@ def run_attack_episode(resolved: ResolvedConfig, output_dir: Path) -> AttackRun:
     return AttackRun(
         checksums=checksums,
         metrics=summary["metrics"],
-        assessment=summary["attack_assessment"],
+        lifecycle=summary["attack_lifecycle"],
         schedules=_resolved_schedules(resolved),
         events=events,
         population=_population_bytes(resolved),
@@ -681,8 +698,9 @@ def test_two_attack_runs_repeat_every_recorded_output(
     second = attack_episode_runs.second_attack
 
     assert deterministic_result(first) == deterministic_result(second)
-    assert first.assessment is not None
-    assert first.assessment["kind"] == attack_fixture["kind"]
+    assert first.lifecycle["first_malicious_proposal_at"] is not None
+    assert first.lifecycle["first_malicious_action_executed_at"] is not None
+    assert not first.lifecycle["prevented_before_activation"]
 
 
 def test_the_attack_run_moves_the_state(attack_episode_runs):

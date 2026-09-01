@@ -1,0 +1,126 @@
+# The paired profit fixture uses one fast route and one slower route.
+# A bounded controller preference can change the selected branch.
+
+name: small-resort
+
+nodes:
+  - node_id: base_village
+    node_type: entrance
+    x: 0.0
+    y: 0.0
+    elevation: 1000.0
+    capacity: 5000
+
+  - node_id: lift1_base
+    node_type: lift_station
+    x: 50.0
+    y: 0.0
+    elevation: 1000.0
+    capacity: 5000
+
+  - node_id: route_junction
+    node_type: junction
+    x: 30.0
+    y: 0.0
+    elevation: 1000.0
+    capacity: 5000
+
+  - node_id: lift1_top
+    node_type: lift_station
+    x: 100.0
+    y: 0.0
+    elevation: 1050.0
+    capacity: 5000
+
+  - node_id: valley_junction
+    node_type: junction
+    x: 75.0
+    y: 75.0
+    elevation: 1000.0
+    capacity: 5000
+
+  - node_id: base_exit
+    node_type: exit
+    x: 150.0
+    y: 0.0
+    elevation: 1000.0
+    capacity: 5000
+
+edges:
+  - source: base_village
+    destination: route_junction
+    edge_type: piste
+    difficulty: green
+    length: 120.0
+    nominal_travel_time: 120.0
+    safe_capacity: 5000
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: route_junction
+    destination: lift1_base
+    edge_type: piste
+    difficulty: green
+    length: 480.0
+    nominal_travel_time: 480.0
+    safe_capacity: 5000
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: route_junction
+    destination: valley_junction
+    edge_type: piste
+    difficulty: green
+    length: 261.0
+    nominal_travel_time: 261.0
+    safe_capacity: 5000
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: lift1_base
+    destination: lift1_top
+    edge_type: lift
+    difficulty: none
+    length: 10.0
+    nominal_travel_time: 10.0
+    safe_capacity: 5000
+    critical_density: 2.0
+    lift_throughput: 360000
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: lift1_top
+    destination: base_exit
+    edge_type: piste
+    difficulty: green
+    length: 10.0
+    nominal_travel_time: 10.0
+    safe_capacity: 5000
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0
+
+  - source: valley_junction
+    destination: base_exit
+    edge_type: piste
+    difficulty: green
+    length: 262.0
+    nominal_travel_time: 262.0
+    safe_capacity: 5000
+    critical_density: 2.0
+    lift_throughput: null
+    wind_sensitivity: 0.0
+    visibility_sensitivity: 0.0
+    snow_sensitivity: 0.0

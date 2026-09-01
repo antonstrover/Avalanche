@@ -57,7 +57,7 @@ def model_reference(tmp_path_factory) -> ModelLockReference:
     """Train one small model and save it with its calibration."""
     frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE).rows
     parts, assignment = split_by_family(frame, seed=SEED)
-    config = TrainingConfig(seed=SEED, epochs=8)
+    config = TrainingConfig(seed=SEED, epochs=8, label="attack_active")
     model = train_perceptron(parts["train"], parts["validation"], config)
     validation = parts["validation"]
     calibration = calibrate(

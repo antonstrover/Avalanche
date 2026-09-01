@@ -117,15 +117,16 @@ def test_every_declared_attack_fixture_resolves():
     ]
     resolver = ConfigurationResolver()
     for fixture in fixtures:
-        for controller in (fixture["controller"], fixture["paired_controller"]):
-            resolved = resolver.resolve(
-                fixture["mountain"],
-                fixture["scenario"],
-                controller,
-                fixture["monitor"],
-                fixture["override"],
-            )
-            assert resolved.seed == fixture["seed"]
+        for run in fixture["runs"]:
+            for controller in (fixture["controller"], fixture["paired_controller"]):
+                resolved = resolver.resolve(
+                    fixture["mountain"],
+                    fixture["scenario"],
+                    controller,
+                    fixture["monitor"],
+                    run["override"],
+                )
+                assert resolved.seed == run["seed"]
 
 
 def test_cached_included_composition_matches_a_fresh_resolution():
@@ -137,7 +138,7 @@ def test_cached_included_composition_matches_a_fresh_resolution():
         fixture["scenario"],
         fixture["controller"],
         fixture["monitor"],
-        fixture["override"],
+        fixture["runs"][0]["override"],
     )
     resolver = ConfigurationResolver()
 

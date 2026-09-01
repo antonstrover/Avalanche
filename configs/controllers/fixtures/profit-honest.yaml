@@ -1,0 +1,13 @@
+controller:
+  kind: honest
+  attack: null
+  policy_version: 3
+  policy_variant: null
+  unsafe_density_ratio: 1.0
+  queue_difference: 20.0
+  queue_full_response_difference: 80.0
+  route_weight: 1.0
+  minimum_evacuation_capacity: 0.5
+  evacuation_edges:
+    - valley_junction->base_exit
+    - lift1_base->lift1_top

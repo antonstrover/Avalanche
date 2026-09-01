@@ -17,11 +17,11 @@ from avalanche.control import (
     observation_as_json,
 )
 from avalanche.controllers import build_controller
-from avalanche.controllers.attacks import is_active
+from avalanche.controllers.attacks import AttackLifecycle
 from avalanche.controllers.factory import build_fallback, selected_policy_variant
 from avalanche.env import AvalancheEnv, build_resolved_environment
-from avalanche.experiments.evaluation import assess_attack
 from avalanche.monitors import build_monitor
+from avalanche.monitors.dataset import LABEL_SCHEMA_VERSION
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.time import time_boundary_reached
 from avalanche.traces import SUMMARY_SCHEMA_VERSION, EventState, TraceWriter
@@ -54,20 +54,19 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     # The monitor never sees this record.
     risk_scores: list[float] = []
     attack_labels: list[int] = []
+    attack_lifecycle = AttackLifecycle()
     started = perf_counter()
 
     while not truncated:
         controller_observation = env.controller_observation()
         proposal = controller.propose(controller_observation)
+        attack_step_record = getattr(controller, "last_attack_step_record", None)
+        if resolved.controller.attack is not None and attack_step_record is None:
+            raise RuntimeError("the attack wrapper must record every proposal")
         decision_id = decision_identifier(proposal)
         boundary_state = EventState.capture(env.sim)
-        attack_active = int(
-            resolved.controller.attack is not None
-            and is_active(
-                resolved.controller.attack,
-                float(proposal.simulation_time),
-                controller_observation,
-            )
+        proposal_label = (
+            0 if attack_step_record is None else attack_step_record.proposal_label
         )
         trace.record(
             "action_proposed",
@@ -85,7 +84,9 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             "evaluator",
             {
                 **evaluator_payload,
-                "attack_active": attack_active,
+                "attack_step_record": (
+                    None if attack_step_record is None else attack_step_record.as_dict()
+                ),
                 "decision_id": decision_id,
             },
             env.sim,
@@ -93,7 +94,10 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         )
         before = _material_state(env)
         try:
-            transition = env.begin_control_interval(proposal)
+            transition = env.begin_control_interval(
+                proposal,
+                attack_step_record=attack_step_record,
+            )
         except ProposalEngineeringError as error:
             trace.record("engineering_error", "adjudicator", error.as_dict(), env.sim)
             raise
@@ -103,7 +107,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         if transition.state_checksum != boundary_state.state_checksum:
             raise RuntimeError("the adjudication changed the boundary identity")
         risk_scores.append(float(adjudication.decision.risk_score))
-        attack_labels.append(attack_active)
+        attack_labels.append(proposal_label)
         trace.record(
             "monitor_decision",
             resolved.monitor.kind,
@@ -144,6 +148,9 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 state=boundary_state,
             )
         executed = adjudication.executed_action
+        finalized_attack_step = adjudication.attack_step_record
+        if finalized_attack_step is not None:
+            attack_lifecycle.observe_step(finalized_attack_step)
         trace.record(
             "action_executed",
             executed.controller_id,
@@ -152,6 +159,11 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "controller_id": executed.controller_id,
                 "simulation_time": executed.simulation_time,
                 "action": asdict(executed.action),
+                "attack_step_record": (
+                    None
+                    if finalized_attack_step is None
+                    else finalized_attack_step.as_dict()
+                ),
             },
             env.sim,
             state=boundary_state,
@@ -159,6 +171,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         observation, _, terminated, truncated, info = env.complete_control_interval(
             transition
         )
+        attack_lifecycle.observe_harm(env.sim.metrics.harm_onset_at)
         trace.record(
             "control_interval_outcome",
             "simulator",
@@ -166,6 +179,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "decision_id": decision_id,
                 "reward_parts": info["reward_parts"],
                 "metrics": info["metrics"],
+                "attack_lifecycle": attack_lifecycle.as_dict(),
             },
             env.sim,
         )
@@ -191,11 +205,9 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     metrics["false_alarm"] = float(
         resolved.controller.attack is None and snapshot.first_intervention_interval >= 0
     )
-    assessment = assess_attack(
-        resolved.controller, env.topology, snapshot, env.sim.state
-    )
     summary = {
         "summary_schema_version": SUMMARY_SCHEMA_VERSION,
+        "label_schema_version": LABEL_SCHEMA_VERSION,
         "run_id": identity,
         "episode_id": "episode-0",
         "seed": resolved.seed,
@@ -205,7 +217,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "step": env.sim.step,
         "state_checksum": env.sim.state_checksum(),
         "metrics": metrics,
-        "attack_assessment": None if assessment is None else assessment.as_dict(),
+        "attack_lifecycle": attack_lifecycle.as_dict(),
         # The speed is not a research metric and is not deterministic.
         # It stays outside the metric record.
         "performance": {

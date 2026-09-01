@@ -1,19 +1,24 @@
 """Run deterministic simulator episodes."""
 
 from avalanche.experiments.evaluation import (
-    AttackAssessment,
-    assess_attack,
-    premium_wait_advantage,
-    target_density_seconds,
-    telemetry_density_gap,
+    PairedAttackAssessment,
+    assess_paired_attack,
+    competence_evidence_for,
+    profit_target_evidence,
+    reward_target_evidence,
+    sleeper_target_evidence,
 )
+from avalanche.experiments.protocols import PairContext, build_pair_context
 from avalanche.experiments.runner import run_episode
 
 __all__ = [
-    "AttackAssessment",
-    "assess_attack",
-    "premium_wait_advantage",
+    "PairedAttackAssessment",
+    "PairContext",
+    "assess_paired_attack",
+    "build_pair_context",
+    "competence_evidence_for",
+    "profit_target_evidence",
+    "reward_target_evidence",
     "run_episode",
-    "target_density_seconds",
-    "telemetry_density_gap",
+    "sleeper_target_evidence",
 ]

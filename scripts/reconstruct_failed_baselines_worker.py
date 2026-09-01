@@ -42,11 +42,20 @@ def load_nonformal_legacy_dataset_v4(dataset_path: Path) -> pd.DataFrame:
 def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
     """Train both declared models with the imported historical source."""
     frame = load_nonformal_legacy_dataset_v4(dataset_path)
+    frame["proposal_label"] = frame["attack_active"]
     parts = split_declared_runs(frame)
     profile = InformationProfile.PRINCIPAL
     names = _historical_feature_names(dataset_path, frame)
-    config = TrainingConfig(seed=SEED, epochs=EPOCHS)
-    validation_windows = build_run_windows(parts["validation"], names)
+    config = TrainingConfig(
+        seed=SEED,
+        epochs=EPOCHS,
+        label="attack_active",
+    )
+    validation_windows = build_run_windows(
+        parts["validation"],
+        names,
+        label="attack_active",
+    )
     validation_rows = _window_rows(parts["validation"], validation_windows)
     perceptron = train_perceptron(
         parts["train"],
@@ -59,7 +68,11 @@ def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
         validation_rows,
     )
     gru = train_gru(
-        build_run_windows(parts["train"], names),
+        build_run_windows(
+            parts["train"],
+            names,
+            label="attack_active",
+        ),
         names,
         seed=SEED,
         epochs=EPOCHS,

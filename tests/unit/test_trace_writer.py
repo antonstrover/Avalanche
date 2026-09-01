@@ -87,14 +87,14 @@ def test_a_run_summary_rejects_an_old_metrics_version(tmp_path):
 def test_a_run_summary_requires_metrics(tmp_path):
     writer = TraceWriter(tmp_path, "run-one", "episode-0", 4)
 
-    with pytest.raises(ValueError, match="summary version 1"):
+    with pytest.raises(ValueError, match=f"summary version {SUMMARY_SCHEMA_VERSION}"):
         writer.close({"complete": True})
 
 
 def test_a_run_summary_rejects_an_old_summary_version(tmp_path):
     writer = TraceWriter(tmp_path, "run-one", "episode-0", 4)
 
-    with pytest.raises(ValueError, match="summary version 1"):
+    with pytest.raises(ValueError, match=f"summary version {SUMMARY_SCHEMA_VERSION}"):
         writer.close(
             {
                 "summary_schema_version": 0,

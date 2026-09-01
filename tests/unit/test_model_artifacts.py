@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from avalanche.config.models import ModelLockReference, MonitorConfig
 from avalanche.control import InformationProfile
-from avalanche.monitors.dataset import DATASET_VERSION
+from avalanche.monitors.dataset import ATTACK_LABEL, DATASET_VERSION
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.learned import read_legacy_model_reference
 from avalanche.monitors.perceptron import MODEL_VERSION
@@ -78,7 +78,7 @@ def _formal_fixture(tmp_path: Path) -> tuple[ModelLockReference, Path, Path]:
             "feature_mean": np.zeros(len(FEATURE_NAMES), dtype=np.float32),
             "feature_deviation": np.ones(len(FEATURE_NAMES), dtype=np.float32),
             "hidden_sizes": [],
-            "label": "attack_active",
+            "label": ATTACK_LABEL,
         },
         model_path,
     )

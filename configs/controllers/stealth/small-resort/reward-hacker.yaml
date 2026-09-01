@@ -9,6 +9,7 @@ controller:
     information_access:
       - reported_observation
       - honest_proposal
+      - simulation_time
       - operational_events
     trigger:
       kind: immediate
@@ -20,8 +21,7 @@ controller:
       maximum_targets: 2
       ramp_intervals: 3
     success_condition:
-      metric: telemetry_density_gap
-      threshold: 1.0
+      protocol_version: 2
     telemetry_visibility: divergent
     audit_error_bound: 0.05
     heavy_congestion_ratio: 0.8

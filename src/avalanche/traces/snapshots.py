@@ -17,7 +17,7 @@ from avalanche.sim.hazards import HazardEvent
 from avalanche.sim.movement import DynamicState, new_dynamic_state
 from avalanche.sim.population import SkierArrays, display_progress, empty_population
 
-SNAPSHOT_SCHEMA_VERSION = 4
+SNAPSHOT_SCHEMA_VERSION = 5
 
 _SNAPSHOT_KEYS = {
     "snapshot_schema_version",
@@ -53,6 +53,8 @@ _AUDIT_KEYS = {"measurements", "delivered"}
 _METRIC_KEYS = {
     "metrics_version",
     "group_count",
+    "edge_count",
+    "edge_references",
     "episode_duration_seconds",
     "newly_stranded_skiers",
     "cumulative_stranded_seconds",
@@ -78,6 +80,9 @@ _METRIC_KEYS = {
     "route_decision_count",
     "missing_sensor_route_decision_count",
     "missing_sensor_route_decision_counts",
+    "evacuation_capacity_trajectory",
+    "true_density_ratio_trajectory",
+    "reported_density_ratio_trajectory",
 }
 
 
@@ -203,7 +208,7 @@ def restore_snapshot(sim: MountainSim, row: dict[str, Any]) -> None:
         raise SnapshotSchemaError("the weather transition index is invalid")
 
     new_streams = _random_streams(state["random_streams"])
-    new_metrics = _metrics(state["metrics"])
+    new_metrics = _metrics(state["metrics"], sim)
     audit_state = _mapping(state["audit"], "audit state")
     _require_keys(audit_state, _AUDIT_KEYS, "audit state")
     measurements = _audit_measurements(
@@ -443,6 +448,8 @@ def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
     return {
         "metrics_version": METRICS_VERSION,
         "group_count": metrics.group_count,
+        "edge_count": metrics.edge_count,
+        "edge_references": list(metrics.edge_references),
         "episode_duration_seconds": metrics.episode_duration_seconds,
         "newly_stranded_skiers": metrics.newly_stranded_skiers,
         "cumulative_stranded_seconds": metrics.cumulative_stranded_seconds,
@@ -482,10 +489,17 @@ def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
         "missing_sensor_route_decision_counts": dict(
             metrics.missing_sensor_route_decision_counts
         ),
+        "evacuation_capacity_trajectory": list(metrics.evacuation_capacity_trajectory),
+        "true_density_ratio_trajectory": [
+            list(row) for row in metrics.true_density_ratio_trajectory
+        ],
+        "reported_density_ratio_trajectory": [
+            list(row) for row in metrics.reported_density_ratio_trajectory
+        ],
     }
 
 
-def _metrics(value: Any) -> OnlineMetrics:
+def _metrics(value: Any, sim: MountainSim) -> OnlineMetrics:
     """Validate and rebuild every online metric accumulator."""
     state = _mapping(value, "metric state")
     _require_keys(state, _METRIC_KEYS, "metric state")
@@ -495,13 +509,29 @@ def _metrics(value: Any) -> OnlineMetrics:
             f"the metrics schema version {version} is unsupported"
         )
     group_count = _integer(state["group_count"], "metric group count")
+    edge_count = _nonnegative_integer(state["edge_count"], "metric edge count")
+    assert sim.topology is not None
+    if edge_count != sim.topology.edge_count:
+        raise SnapshotSchemaError("the metric edge count does not match the topology")
     duration = _finite_float(
         state["episode_duration_seconds"], "metric episode duration"
     )
     try:
-        metrics = OnlineMetrics(group_count, duration)
+        metrics = OnlineMetrics(
+            group_count,
+            duration,
+            topology=sim.topology,
+            environment_context=sim.environment_context,
+        )
     except ValueError as error:
         raise SnapshotSchemaError(str(error)) from error
+    edge_references = state["edge_references"]
+    if (
+        not isinstance(edge_references, list)
+        or any(not isinstance(item, str) or not item for item in edge_references)
+        or tuple(edge_references) != metrics.edge_references
+    ):
+        raise SnapshotSchemaError("the metric edge references do not match")
     metrics.newly_stranded_skiers = _nonnegative_integer(
         state["newly_stranded_skiers"], "newly stranded metric"
     )
@@ -605,6 +635,27 @@ def _metrics(value: Any) -> OnlineMetrics:
         name: _nonnegative_integer(route_counts[name], "missing route channel count")
         for name in ROUTE_SENSOR_CHANNELS
     }
+    metrics.evacuation_capacity_trajectory = _metric_float_trajectory(
+        state["evacuation_capacity_trajectory"],
+        "evacuation capacity trajectory",
+    )
+    metrics.true_density_ratio_trajectory = _metric_density_trajectory(
+        state["true_density_ratio_trajectory"],
+        edge_count,
+        "true density trajectory",
+    )
+    metrics.reported_density_ratio_trajectory = _metric_density_trajectory(
+        state["reported_density_ratio_trajectory"],
+        edge_count,
+        "reported density trajectory",
+    )
+    lengths = {
+        len(metrics.evacuation_capacity_trajectory),
+        len(metrics.true_density_ratio_trajectory),
+        len(metrics.reported_density_ratio_trajectory),
+    }
+    if len(lengths) != 1:
+        raise SnapshotSchemaError("the metric trajectories must stay aligned")
     if metrics.missing_sensor_route_decision_count > metrics.route_decision_count:
         raise SnapshotSchemaError("missing route decisions exceed all route decisions")
     if any(
@@ -613,6 +664,27 @@ def _metrics(value: Any) -> OnlineMetrics:
     ):
         raise SnapshotSchemaError("a missing route channel exceeds all route decisions")
     return metrics
+
+
+def _metric_float_trajectory(value: Any, label: str) -> list[float]:
+    """Validate one nonnegative scalar metric trajectory."""
+    if not isinstance(value, list):
+        raise SnapshotSchemaError(f"the {label} must be a list")
+    return [_nonnegative_float(item, label) for item in value]
+
+
+def _metric_density_trajectory(
+    value: Any, edge_count: int, label: str
+) -> list[tuple[float, ...]]:
+    """Validate one nonnegative edge metric trajectory."""
+    if not isinstance(value, list):
+        raise SnapshotSchemaError(f"the {label} must be a list")
+    rows: list[tuple[float, ...]] = []
+    for row in value:
+        if not isinstance(row, list) or len(row) != edge_count:
+            raise SnapshotSchemaError(f"the {label} has an invalid edge shape")
+        rows.append(tuple(_nonnegative_float(item, label) for item in row))
+    return rows
 
 
 def _random_streams(value: Any) -> dict[str, np.random.Generator]:

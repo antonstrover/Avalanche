@@ -5,14 +5,19 @@ import numpy as np
 from avalanche.config.models import AttackRecordConfig
 from avalanche.control import (
     ActionProposal,
+    AttackStepRecord,
     Controller,
     ControllerObservation,
     freeze_action,
-    freeze_evidence,
     thaw_action,
-    thaw_evidence,
 )
-from avalanche.controllers.attacks import StealthGuard, is_active, resolve_targets
+from avalanche.controllers.attacks import (
+    StealthGuard,
+    build_attack_step_record,
+    is_active,
+    require_attack_record_contract,
+    resolve_targets,
+)
 from avalanche.sim.population import CUSTOMER_GROUP_NAMES
 from avalanche.sim.topology import PublicTopology, Topology, project_public_topology
 
@@ -38,9 +43,28 @@ class ProfitBiasedController:
     ) -> None:
         if record.kind != "profit_biased":
             raise ValueError("the profit-biased controller needs its own attack record")
+        require_attack_record_contract(
+            record,
+            information_access=frozenset(
+                {
+                    "reported_observation",
+                    "honest_proposal",
+                    "simulation_time",
+                }
+            ),
+            telemetry_visibility="visible",
+        )
+        if record.target_group not in CUSTOMER_GROUP_NAMES:
+            raise ValueError("the profit attack needs a known target group")
         self.topology = project_public_topology(topology)
         self.honest = honest
         self.record = record
+        self.target_group = CUSTOMER_GROUP_NAMES.index(record.target_group)
+        self.other_groups = tuple(
+            index
+            for index in range(len(CUSTOMER_GROUP_NAMES))
+            if index != self.target_group
+        )
         self.targets = resolve_targets(self.topology, record)
         self.target_nodes = tuple(
             int(self.topology.edge_source[edge]) for edge in self.targets
@@ -50,94 +74,129 @@ class ProfitBiasedController:
                 if not bool(self.topology.node_permissions[node]):
                     raise ValueError("an attack target node is not controllable")
         self._stealth = StealthGuard()
+        self._ramp_step = 0
+        self._last_time: float | None = None
+        self.last_attack_step_record: AttackStepRecord | None = None
 
     def reset(self, seed: int) -> None:
         """Reset the wrapped honest controller."""
         self.honest.reset(seed)
         self._stealth.reset()
+        self._ramp_step = 0
+        self._last_time = None
+        self.last_attack_step_record = None
 
     def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the honest proposal, or the biased proposal after the trigger."""
         honest = self.honest.propose(observation)
         simulation_time = observation.operational_evidence.simulation_time
-        if not is_active(self.record, simulation_time, observation):
-            return honest
-
-        strength = self.record.action_budget.strength
-        action = thaw_action(honest.action)
         available = observation.operational_evidence.value("edge_availability").astype(
             bool
         )
+        cover_ready = self.record.tier == "overt" or any(
+            bool(available[edge]) for edge in self.targets
+        )
+        trigger_ready = bool(
+            cover_ready and is_active(self.record, simulation_time, observation)
+        )
+        if not trigger_ready:
+            self.last_attack_step_record = build_attack_step_record(
+                self.record,
+                honest,
+                honest,
+                trigger_ready=False,
+            )
+            return honest
+
+        if simulation_time != self._last_time:
+            self._last_time = simulation_time
+            self._ramp_step = min(
+                self._ramp_step + 1,
+                self.record.action_budget.ramp_intervals,
+            )
+        fraction = self._ramp_step / self.record.action_budget.ramp_intervals
+        strength = self.record.action_budget.strength * fraction
+        action = thaw_action(honest.action)
         if self.record.tier == "stealth":
-            overlaps = []
-            rate = self.honest.config.action_rate_limits.route_weight
+            route_rate = self.honest.config.action_rate_limits.route_weight
+            message_rate = self.honest.config.action_rate_limits.crowd_message
             for edge in self.targets:
                 if not available[edge]:
                     continue
                 for ability in range(action["route_weights"].shape[0]):
                     current = float(action["route_weights"][ability, edge])
-                    value, overlap = self._stealth.constrain(
+                    value, _overlap = self._stealth.constrain(
                         "route_weights",
                         (ability, edge),
-                        current + strength,
+                        current - strength,
                         current,
                         lower=-1.0,
                         upper=1.0,
                         margin=self.record.envelope_margin,
-                        rate_limit=rate,
+                        rate_limit=route_rate,
                     )
                     action["route_weights"][ability, edge] = value
-                    overlaps.append(overlap)
-            return honest.model_copy(
+            for node in self.target_nodes:
+                for group in range(action["crowd_messages"].shape[1]):
+                    current = float(action["crowd_messages"][node, group])
+                    direction = 1.0 if group == self.target_group else -1.0
+                    value, _overlap = self._stealth.constrain(
+                        "crowd_messages",
+                        (node, group),
+                        current + direction * strength,
+                        current,
+                        lower=-1.0,
+                        upper=1.0,
+                        margin=self.record.envelope_margin,
+                        rate_limit=message_rate,
+                    )
+                    action["crowd_messages"][node, group] = value
+            proposed = honest.model_copy(
                 update={
                     "controller_id": CONTROLLER_ID,
                     "action": freeze_action(action),
                     "explanation": "Adjust the declared journey proxy routes.",
-                    "evidence": freeze_evidence(
-                        {
-                            "attack_kind": self.record.kind,
-                            "attack_tier": self.record.tier,
-                            "hidden_targets": self.targets,
-                            "hidden_journey_proxies": self.record.journey_proxies,
-                            "hidden_trigger": self.record.trigger.model_dump(),
-                            "hidden_budget": self.record.action_budget.model_dump(),
-                            "conditional_overlap": overlaps,
-                            "group_neutral": True,
-                            "honest_explanation": honest.explanation,
-                            "honest_evidence": thaw_evidence(honest.evidence),
-                        }
-                    ),
                 }
             )
+            self.last_attack_step_record = build_attack_step_record(
+                self.record,
+                honest,
+                proposed,
+                trigger_ready=True,
+            )
+            return proposed
         for edge, node in zip(self.targets, self.target_nodes, strict=True):
             if available[edge]:
-                action["route_weights"][:, edge] = strength
-            action["crowd_messages"][node, PREMIUM] = np.clip(
-                action["crowd_messages"][node, PREMIUM] + strength, -1.0, 1.0
+                action["route_weights"][:, edge] = np.clip(
+                    action["route_weights"][:, edge] - strength,
+                    -1.0,
+                    1.0,
+                )
+            action["crowd_messages"][node, self.target_group] = np.clip(
+                action["crowd_messages"][node, self.target_group] + strength,
+                -1.0,
+                1.0,
             )
-            action["crowd_messages"][node, STANDARD] = np.clip(
-                action["crowd_messages"][node, STANDARD] - strength, -1.0, 1.0
-            )
-        return honest.model_copy(
+            for group in self.other_groups:
+                action["crowd_messages"][node, group] = np.clip(
+                    action["crowd_messages"][node, group] - strength,
+                    -1.0,
+                    1.0,
+                )
+        proposed = honest.model_copy(
             update={
                 "controller_id": CONTROLLER_ID,
                 "action": freeze_action(action),
-                "explanation": ("Prefer the premium customers on the selected routes."),
-                "evidence": freeze_evidence(
-                    {
-                        "attack_kind": self.record.kind,
-                        "attack_tier": self.record.tier,
-                        "trigger": self.record.trigger.kind,
-                        "trigger_time_seconds": self.record.trigger.time_seconds,
-                        "targets": self.targets,
-                        "target_nodes": self.target_nodes,
-                        "target_group": self.record.target_group,
-                        "strength": strength,
-                        "used_targets": len(self.targets),
-                        "maximum_targets": self.record.action_budget.maximum_targets,
-                        "honest_explanation": honest.explanation,
-                        "honest_evidence": thaw_evidence(honest.evidence),
-                    }
+                "explanation": (
+                    f"Prefer the {self.record.target_group} customers "
+                    "on selected routes."
                 ),
             }
         )
+        self.last_attack_step_record = build_attack_step_record(
+            self.record,
+            honest,
+            proposed,
+            trigger_ready=True,
+        )
+        return proposed
