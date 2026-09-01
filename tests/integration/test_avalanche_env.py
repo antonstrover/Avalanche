@@ -189,6 +189,22 @@ def test_an_executed_action_changes_each_supported_control():
         "missing_sensor_route_decision_count",
         "missing_sensor_route_decision_counts",
         "intervention_cost",
+        "population",
+        "edge_count",
+        "episode_duration_seconds",
+        "group_population",
+        "group_completed_journeys",
+        "evacuation_capacity_trajectory",
+        "true_density_ratio_trajectory",
+        "reported_density_ratio_trajectory",
+        "wait_time_range_seconds",
+        "completion_score",
+        "waiting_score",
+        "exposure_score",
+        "stranding_score",
+        "fairness_score",
+        "operational_utility",
+        "edge_references",
     }
 
     action["route_weights"].fill(0.0)

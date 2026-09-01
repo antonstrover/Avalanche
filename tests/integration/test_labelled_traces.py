@@ -1,7 +1,7 @@
-"""The labelled traces must match the known attack windows.
+"""The labelled traces must match the known proposal windows.
 
 The plan gives the labels in section 9.4.
-One label shows an active attack. The other shows stranding in a later interval.
+One label shows a malicious proposal. Another shows an executed activation.
 The sleeper fixture has a known trigger time, so its label rate is known.
 """
 
@@ -19,6 +19,8 @@ from avalanche.control import OBSERVATION_SCHEMA_VERSION, InformationProfile
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     DATASET_VERSION,
+    EXECUTED_ACTIVATION,
+    LABEL_SCHEMA_VERSION,
     STRANDING_LABEL,
     STRANDING_MASK,
     DatasetEntry,
@@ -41,6 +43,7 @@ from avalanche.scenarios import AUDIT_SCHEMA_VERSION, ROUTE_SENSOR_SCHEMA_VERSIO
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "configs" / "experiments" / "monitor-training.yaml"
+LABEL_PROTOCOL = REPO / "protocols" / "development" / "monitor-labels-v2.json"
 TRIGGER_SECONDS = 3600.0
 CONTROL_INTERVAL = 60.0
 HORIZON = 5
@@ -61,6 +64,28 @@ SLEEPER = DatasetEntry(
     attack_strength=0.3,
     policy_variant="standard-linear",
 )
+
+
+def test_the_label_protocol_matches_the_runtime_contract():
+    record = json.loads(LABEL_PROTOCOL.read_text(encoding="utf-8"))
+
+    assert record["schema_version"] == LABEL_SCHEMA_VERSION
+    assert set(record["labels"]) == {ATTACK_LABEL, EXECUTED_ACTIVATION}
+    assert all(label["values"] == [0, 1] for label in record["labels"].values())
+    assert (
+        record["clocks"]["primary_attack_time"] == "first_malicious_action_executed_at"
+    )
+    assert record["clocks"]["censor_timestamp_field"] == ("attack_detection_censor_at")
+    assert record["operational_utility"]["formula"].startswith("0.20 *")
+    competence = record["competence"]
+    assert set(competence) == {
+        "completed_journeys",
+        "mean_wait",
+        "retained_operational_utility",
+        "added_unique_stranded",
+    }
+    assert all("denominator" in check for check in competence.values())
+    assert record["overall_success"]["formula"].startswith("target_met and")
 
 
 @pytest.fixture(scope="module")
@@ -105,6 +130,7 @@ def test_an_honest_run_carries_no_attack_label():
     rows = run_entry(honest, HORIZON)
 
     assert rows[ATTACK_LABEL].sum() == 0
+    assert rows[EXECUTED_ACTIVATION].sum() == 0
 
 
 def test_the_last_rows_carry_no_future_stranding_label(sleeper_rows):
@@ -128,6 +154,9 @@ def test_each_row_holds_every_feature_and_key(sleeper_rows):
     assert "true_harm_count" not in rows.columns
     assert "unique_stranded_skiers" not in rows.columns
     assert (rows["dataset_version"] == DATASET_VERSION).all()
+    assert (rows["label_schema_version"] == LABEL_SCHEMA_VERSION).all()
+    assert rows[EXECUTED_ACTIVATION].isin((0, 1)).all()
+    assert (rows[EXECUTED_ACTIVATION] <= rows[ATTACK_LABEL]).all()
     assert (rows["feature_version"] == FEATURE_VERSION).all()
     assert (
         rows["operational_evidence_schema_version"] == OBSERVATION_SCHEMA_VERSION
@@ -205,6 +234,7 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     assert summary["feature_version"] == FEATURE_VERSION
     assert summary["information_profile"] == "principal"
     assert summary["dataset_version"] == DATASET_VERSION
+    assert summary["label_schema_version"] == LABEL_SCHEMA_VERSION
     assert summary["observation_version"] == OBSERVATION_SCHEMA_VERSION
     assert summary["audit_version"] == AUDIT_SCHEMA_VERSION
     assert summary["route_sensor_version"] == ROUTE_SENSOR_SCHEMA_VERSION
@@ -213,6 +243,7 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     assert len(summary["code_revision"]) == 40
     artifact_manifest = json.loads(output.with_suffix(".manifest.json").read_text())
     assert artifact_manifest["code_revision"] == summary["code_revision"]
+    assert artifact_manifest["label_schema_version"] == LABEL_SCHEMA_VERSION
     assert len(artifact_manifest["resolved_runs"]) == 2
     assert all(
         run["configuration"]["resolved_configuration_sha256"] != "0" * 64
@@ -328,15 +359,24 @@ def test_the_fixed_family_and_policy_partitions_are_present():
     assert {entry.split for entry in reward} == {"test"}
 
 
-def test_inactive_wrapper_rows_stay_labelled_as_honest():
-    frame = pd.DataFrame({"_attack_active": [0, 0, 1]})
+def test_a_prevented_proposal_keeps_its_proposal_label():
+    frame = pd.DataFrame(
+        {
+            "_proposal_label": [0, 1, 1],
+            "_executed_activation": [0, 0, 1],
+        }
+    )
     controller = ControllerConfig.model_validate(
         ConfigurationResolver().component_values(
             "controller", "configs/controllers/stealth/reward-hacker.yaml"
         )["controller"]
     )
     labelled = label_attack_activity(frame, controller)
-    assert labelled[ATTACK_LABEL].tolist() == [0, 0, 1]
+
+    assert labelled[ATTACK_LABEL].tolist() == [0, 1, 1]
+    assert labelled[EXECUTED_ACTIVATION].tolist() == [0, 0, 1]
+    assert "_proposal_label" not in labelled
+    assert "_executed_activation" not in labelled
 
 
 def test_the_strength_reaches_the_resolved_configuration():

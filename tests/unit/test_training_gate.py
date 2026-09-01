@@ -9,8 +9,12 @@ import pytest
 from avalanche.config.models import AuditConfig, SensorPolicyConfig
 from avalanche.control import OBSERVATION_SCHEMA_VERSION, InformationProfile
 from avalanche.control.types import OPERATIONAL_SENSOR_SPECS, public_policy_identity
+from avalanche.experiments.protocols import PAIR_CONTEXT_VERSION, PairContext
 from avalanche.monitors.dataset import (
+    ATTACK_LABEL,
     DATASET_VERSION,
+    EXECUTED_ACTIVATION,
+    LABEL_SCHEMA_VERSION,
     STRANDING_LABEL,
     STRANDING_MASK,
     require_current_formal_dataset_rows,
@@ -55,6 +59,42 @@ DATASET_CHECKSUMS = {
 }
 
 
+def _with_pair_context(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add one valid complete pair context."""
+    context = PairContext(
+        pair_context_version=PAIR_CONTEXT_VERSION,
+        pair_context_sha256="1" * 64,
+        invariant_configuration_sha256="1" * 64,
+        honest_resolved_configuration_sha256="2" * 64,
+        attack_resolved_configuration_sha256="3" * 64,
+        honest_controller_sha256="4" * 64,
+        attack_controller_sha256="5" * 64,
+        attack_base_controller_sha256="4" * 64,
+        root_seed=20260825,
+        code_sha256="6" * 64,
+        mountain_sha256="7" * 64,
+        schedule_sha256="8" * 64,
+        sensor_sha256="9" * 64,
+        monitor_sha256="a" * 64,
+        policy_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+    )
+    context.validate()
+    honest = np.arange(len(frame)) < len(frame) // 2
+    frame["pair_id"] = "pair-a"
+    frame["pair_role"] = np.where(honest, "honest", "attack")
+    frame["seed"] = context.root_seed
+    frame["resolved_config_checksum"] = np.where(
+        honest,
+        context.honest_resolved_configuration_sha256,
+        context.attack_resolved_configuration_sha256,
+    )
+    frame["pair_context_checksum"] = context.pair_context_sha256
+    for field, value in context.as_dict().items():
+        frame[field] = value
+    return frame
+
+
 class RecordingEmitter:
     """Collect structured metric events for one focused test."""
 
@@ -77,15 +117,17 @@ def frame(rows: int = 80) -> pd.DataFrame:
     values = {name: np.zeros(rows, dtype=np.float32) for name in FEATURE_NAMES}
     values[SIGNAL] = labels.astype(np.float32)
     result = pd.DataFrame(values)
-    result["attack_active"] = labels
+    result[ATTACK_LABEL] = labels
+    result[EXECUTED_ACTIVATION] = labels
     result["dataset_version"] = DATASET_VERSION
+    result["label_schema_version"] = LABEL_SCHEMA_VERSION
     result["feature_version"] = FEATURE_VERSION
     result[STRANDING_LABEL] = labels
     result[STRANDING_MASK] = 1
     result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
     result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
     result["step"] = np.tile(np.arange(rows // 2), 2)
-    return _with_operational_provenance(result)
+    return _with_pair_context(_with_operational_provenance(result))
 
 
 def _with_operational_provenance(frame: pd.DataFrame) -> pd.DataFrame:
@@ -187,15 +229,17 @@ def oracle_frame(profile: InformationProfile, rows: int = 80) -> pd.DataFrame:
     values = {name: np.zeros(rows, dtype=np.float32) for name in names}
     values[names[0]] = labels.astype(np.float32)
     result = pd.DataFrame(values)
-    result["attack_active"] = labels
+    result[ATTACK_LABEL] = labels
+    result[EXECUTED_ACTIVATION] = labels
     result["dataset_version"] = DATASET_VERSION
+    result["label_schema_version"] = LABEL_SCHEMA_VERSION
     result["feature_version"] = FEATURE_VERSION
     result[STRANDING_LABEL] = labels
     result[STRANDING_MASK] = 1
     result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
     result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
     result["step"] = np.tile(np.arange(rows // 2), 2)
-    return _with_operational_provenance(result)
+    return _with_pair_context(_with_operational_provenance(result))
 
 
 def test_formal_rows_reject_an_old_operational_evidence_version():
@@ -203,6 +247,73 @@ def test_formal_rows_reject_an_old_operational_evidence_version():
     values["operational_evidence_schema_version"] = OBSERVATION_SCHEMA_VERSION - 1
 
     with pytest.raises(ValueError, match="operational evidence version"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_an_old_label_schema():
+    values = frame()
+    values["label_schema_version"] = LABEL_SCHEMA_VERSION - 1
+
+    with pytest.raises(ValueError, match="label schema version"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_accept_one_complete_pair_context():
+    require_current_formal_dataset_rows(frame(), name="training")
+
+
+def test_formal_rows_reject_a_missing_pair_context_field():
+    values = frame().drop(columns=["monitor_sha256"])
+
+    with pytest.raises(ValueError, match="miss current dataset fields"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_an_old_pair_context_version():
+    values = frame()
+    values["pair_context_version"] = PAIR_CONTEXT_VERSION - 1
+
+    with pytest.raises(ValueError, match="pair context version"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_a_changed_pair_context_checksum():
+    values = frame()
+    values["pair_context_checksum"] = "d" * 64
+
+    with pytest.raises(ValueError, match="pair context checksum"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_a_changed_pair_root_seed():
+    values = frame()
+    values["seed"] = 20260826
+
+    with pytest.raises(ValueError, match="changes its root seed"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_context_changes_inside_one_pair():
+    values = frame()
+    values.loc[0, "schedule_sha256"] = "d" * 64
+
+    with pytest.raises(ValueError, match="changes its pair context"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_an_incomplete_pair():
+    values = frame()
+    values["pair_role"] = "honest"
+
+    with pytest.raises(ValueError, match="pair pair-a is incomplete"):
+        require_current_formal_dataset_rows(values, name="training")
+
+
+def test_formal_rows_reject_a_changed_member_config_digest():
+    values = frame()
+    values.loc[values["pair_role"] == "attack", "resolved_config_checksum"] = "2" * 64
+
+    with pytest.raises(ValueError, match="changes its resolved config digest"):
         require_current_formal_dataset_rows(values, name="training")
 
 
@@ -406,7 +517,7 @@ def test_formal_rows_reject_stranding_with_a_false_timestamp_delay():
                 "sample_time": 60.0,
                 "report_time": 60.0,
                 "provenance_id": "controller_visible_operational_event",
-                "attack_active": False,
+                "proposal_label": False,
             },
             "public event provenance",
         ),

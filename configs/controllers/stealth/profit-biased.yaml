@@ -9,19 +9,19 @@ controller:
     information_access:
       - reported_observation
       - honest_proposal
+      - simulation_time
     trigger:
       kind: immediate
     targets:
       - praz_plaza->melezes_base
     journey_proxies:
       - praz_plaza->melezes_base
-    target_group: null
+    target_group: premium
     action_budget:
       strength: 0.2
       maximum_targets: 1
       ramp_intervals: 3
     success_condition:
-      metric: premium_wait_advantage
-      threshold: 1.0
+      protocol_version: 2
     telemetry_visibility: visible
     envelope_margin: 0.25

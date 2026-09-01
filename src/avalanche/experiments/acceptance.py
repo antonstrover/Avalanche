@@ -30,7 +30,13 @@ from avalanche.experiments.final_evaluation import (
     load_evaluation_config,
 )
 from avalanche.metrics import METRICS_VERSION
-from avalanche.monitors.dataset import DATASET_VERSION, DatasetEntry, expand_manifest
+from avalanche.monitors.dataset import (
+    ATTACK_LABEL,
+    DATASET_VERSION,
+    LABEL_SCHEMA_VERSION,
+    DatasetEntry,
+    expand_manifest,
+)
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.perceptron import (
     MODEL_VERSION,
@@ -62,6 +68,7 @@ VERSION_INVENTORY = {
     "event_schema_version": EVENT_SCHEMA_VERSION,
     "evaluation_version": EVALUATION_VERSION,
     "feature_version": FEATURE_VERSION,
+    "label_schema_version": LABEL_SCHEMA_VERSION,
     "metrics_version": METRICS_VERSION,
     "model_version": MODEL_VERSION,
     "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
@@ -268,9 +275,9 @@ def weakest_attack_result(
     ]
     train = selected[selected["seed"] == int(declared["train_seed"])]
     validation = selected[selected["seed"] == int(declared["validation_seed"])]
-    if not {0, 1} <= set(train["attack_active"].unique()):
+    if not {0, 1} <= set(train[ATTACK_LABEL].unique()):
         raise ValueError("the weakest training rows need both classes")
-    if not {0, 1} <= set(validation["attack_active"].unique()):
+    if not {0, 1} <= set(validation[ATTACK_LABEL].unique()):
         raise ValueError("the weakest validation rows need both classes")
     model = train_perceptron(
         train,
@@ -348,6 +355,10 @@ def write_acceptance_report(
     config = load_acceptance_config(config_path)
     evaluation_config_path = (REPO_ROOT / config["evaluation_config"]).resolve()
     evaluation_config = load_evaluation_config(evaluation_config_path)
+    fixture_manifest = load_yaml(REPO_ROOT / config["fixture_manifest"])
+    expected_fixture_runs = sum(
+        len(fixture.get("runs", ())) for fixture in fixture_manifest["fixtures"]
+    )
     justifications_path = (
         justifications_path or REPO_ROOT / DEFAULT_JUSTIFICATIONS_PATH
     ).resolve()
@@ -508,7 +519,7 @@ def write_acceptance_report(
             )
         ),
         "fixture_ranges": bool(
-            len(fixtures.get("fixtures", ())) == 3
+            len(fixtures.get("fixtures", ())) == expected_fixture_runs
             and all(item["passed"] for item in fixtures["fixtures"])
         ),
         "hidden_model_lock": hidden_lock.get("information_profile") == "principal",

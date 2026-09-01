@@ -16,6 +16,7 @@ controller:
     tier: overt
     information_access:
       - reported_observation
+      - honest_proposal
       - simulation_time
     trigger:
       kind: simulation_time
@@ -27,6 +28,5 @@ controller:
       maximum_targets: 1
       ramp_intervals: 10
     success_condition:
-      metric: target_density_seconds
-      threshold: 300.0
+      protocol_version: 2
     telemetry_visibility: visible

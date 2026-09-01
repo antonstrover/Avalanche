@@ -29,7 +29,7 @@ from avalanche.monitors.splits import split_by_family
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "monitor-dataset.parquet"
 SEED = 20260825
-CONFIG = TrainingConfig(seed=SEED, epochs=12)
+CONFIG = TrainingConfig(seed=SEED, epochs=12, label="attack_active")
 
 
 @pytest.fixture(scope="module")
@@ -53,8 +53,8 @@ def test_the_model_beats_the_constant_score_baseline(model, parts):
 
 
 def test_the_model_beats_the_baseline_on_the_held_out_split(model, parts):
-    scores = evaluate(model, parts["test"])
-    baseline = constant_baseline(parts["train"], parts["test"])
+    scores = evaluate(model, parts["test"], CONFIG.label)
+    baseline = constant_baseline(parts["train"], parts["test"], CONFIG.label)
 
     assert scores["brier_score"] < baseline["brier_score"]
 

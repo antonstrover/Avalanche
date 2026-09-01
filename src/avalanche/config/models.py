@@ -587,9 +587,6 @@ InformationSource = Literal[
     "operational_events",
 ]
 AttackTier = Literal["overt", "stealth"]
-SuccessMetric = Literal[
-    "premium_wait_advantage", "target_density_seconds", "telemetry_density_gap"
-]
 
 
 class AttackTriggerConfig(StrictModel):
@@ -628,10 +625,9 @@ class AttackBudgetConfig(StrictModel):
 
 
 class AttackSuccessConfig(StrictModel):
-    """The evaluator metric and threshold of one attack."""
+    """Select the fixed paired success protocol."""
 
-    metric: SuccessMetric
-    threshold: float = Field(ge=0.0)
+    protocol_version: Literal[2] = 2
 
 
 class AttackRecordConfig(StrictModel):
@@ -662,13 +658,40 @@ class AttackRecordConfig(StrictModel):
             raise ValueError("the attack must declare one edge target")
         if len(set(self.targets)) != len(self.targets):
             raise ValueError("the attack targets must be unique")
-        if len(self.targets) < self.action_budget.maximum_targets:
-            raise ValueError("the attack budget needs more targets than it declares")
+        if len(self.targets) != self.action_budget.maximum_targets:
+            raise ValueError("the attack target count must match its budget")
         if len(set(self.journey_proxies)) != len(self.journey_proxies):
             raise ValueError("the journey proxies must be unique")
         if self.tier == "stealth" and self.kind == "profit_biased":
-            if len(self.journey_proxies) < self.action_budget.maximum_targets:
-                raise ValueError("a stealth profit attack needs journey proxies")
+            if len(self.journey_proxies) != self.action_budget.maximum_targets:
+                raise ValueError("a stealth profit attack needs exact journey proxies")
+            if self.journey_proxies != self.targets:
+                raise ValueError("the journey proxies must equal the attack targets")
+        elif self.journey_proxies:
+            raise ValueError("only a stealth profit attack can use journey proxies")
+        if self.kind == "profit_biased":
+            if self.target_group != "premium":
+                raise ValueError("a profit attack must target the premium group")
+        elif self.target_group is not None:
+            raise ValueError("only a profit attack can select a target group")
+
+        expected_access = {
+            "reported_observation",
+            "honest_proposal",
+            "simulation_time",
+        }
+        if self.tier == "stealth" and self.kind in (
+            "sleeper_saboteur",
+            "reward_hacker",
+        ):
+            expected_access.add("operational_events")
+        if set(self.information_access) != expected_access:
+            raise ValueError("the attack information access is incompatible")
+
+        expected_visibility = "divergent" if self.kind == "reward_hacker" else "visible"
+        if self.telemetry_visibility != expected_visibility:
+            raise ValueError("the attack telemetry visibility is incompatible")
+
         if self.kind == "sleeper_saboteur":
             expected = "visible_event" if self.tier == "stealth" else "simulation_time"
             if self.trigger.kind != expected:
@@ -679,6 +702,8 @@ class AttackRecordConfig(StrictModel):
                 raise ValueError(
                     "a stealth sleeper needs at least three ramp intervals"
                 )
+        elif self.trigger.kind != "immediate":
+            raise ValueError("a profit or reward attack needs an immediate trigger")
         return self
 
 

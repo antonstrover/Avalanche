@@ -14,8 +14,8 @@ from avalanche.metrics import METRICS_VERSION, MetricSnapshot
 from avalanche.sim.engine import MountainSim
 from avalanche.traces.snapshots import encode_snapshot
 
-EVENT_SCHEMA_VERSION = 4
-SUMMARY_SCHEMA_VERSION = 1
+EVENT_SCHEMA_VERSION = 5
+SUMMARY_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)

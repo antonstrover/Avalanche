@@ -26,23 +26,24 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "premium-resort.yam
 TARGET = "fork->base_exit"
 SEED = 20260824
 STRENGTH = 1.0
-THRESHOLD = 60.0
 
 
 def attack_record(**changes: object) -> AttackRecordConfig:
     """Return the profit-biased attack record of the fixture."""
     values: dict[str, object] = {
         "kind": "profit_biased",
-        "information_access": ("reported_observation", "honest_proposal"),
+        "information_access": (
+            "reported_observation",
+            "honest_proposal",
+            "simulation_time",
+        ),
         "trigger": AttackTriggerConfig(kind="immediate"),
         "targets": (TARGET,),
         "target_group": "premium",
         "action_budget": AttackBudgetConfig(
             strength=STRENGTH, maximum_targets=1, ramp_intervals=4
         ),
-        "success_condition": AttackSuccessConfig(
-            metric="premium_wait_advantage", threshold=THRESHOLD
-        ),
+        "success_condition": AttackSuccessConfig(),
         "telemetry_visibility": "visible",
     }
     values.update(changes)
@@ -126,15 +127,25 @@ def build_environment(config: ControllerConfig) -> AvalancheEnv:
     return env
 
 
-def test_the_wrapper_keeps_the_honest_proposal_before_the_trigger(topology):
-    trigger = AttackTriggerConfig(kind="simulation_time", time_seconds=600.0)
-    config = controller_config(trigger=trigger)
+def test_a_zero_strength_proposal_is_not_malicious(topology):
+    config = controller_config(
+        action_budget=AttackBudgetConfig(
+            strength=0.0,
+            maximum_targets=1,
+            ramp_intervals=4,
+        )
+    )
     env = build_environment(config)
     controller = build_controller(config, topology)
-    honest = HonestController(topology)
 
-    observation = env.controller_observation()
-    assert controller.propose(observation) == honest.propose(observation)
+    controller.propose(replace_operational_observation(env.controller_observation()))
+    record = controller.last_attack_step_record
+
+    assert record is not None
+    assert record.trigger_ready
+    assert record.proposal_label == 0
+    assert record.honest_action_sha256 == record.proposed_action_sha256
+    assert record.malicious_delta.entries == ()
 
 
 def test_the_wrapper_changes_only_its_budgeted_fields(topology):
@@ -149,9 +160,10 @@ def test_the_wrapper_changes_only_its_budgeted_fields(topology):
     edge = resolve_edge(topology, TARGET)
     node = int(topology.edge_source[edge])
 
-    assert np.all(biased["route_weights"][:, edge] == np.float32(STRENGTH))
-    assert biased["crowd_messages"][node, PREMIUM] == np.float32(STRENGTH)
-    assert biased["crowd_messages"][node, STANDARD] == np.float32(-STRENGTH)
+    first_strength = STRENGTH / 4
+    assert np.all(biased["route_weights"][:, edge] == np.float32(-first_strength))
+    assert biased["crowd_messages"][node, PREMIUM] == np.float32(first_strength)
+    assert biased["crowd_messages"][node, STANDARD] == np.float32(-first_strength)
 
     biased["route_weights"][:, edge] = plain["route_weights"][:, edge]
     biased["crowd_messages"][node, :] = plain["crowd_messages"][node, :]
@@ -159,22 +171,67 @@ def test_the_wrapper_changes_only_its_budgeted_fields(topology):
         np.testing.assert_array_equal(biased[name], values, err_msg=name)
 
 
-def test_the_proposal_records_its_identity_and_evidence(topology):
+def test_the_evaluator_record_keeps_the_delta_out_of_proposal_evidence(topology):
     config = controller_config()
     env = build_environment(config)
     controller = build_controller(config, topology)
+    honest = HonestController(topology)
+    observation = replace_operational_observation(env.controller_observation())
 
-    proposal = controller.propose(env.controller_observation())
+    proposal = controller.propose(observation)
     evidence = thaw_evidence(proposal.evidence)
+    honest_evidence = thaw_evidence(honest.propose(observation).evidence)
+    record = controller.last_attack_step_record
 
     assert proposal.controller_id == "profit-biased"
-    assert evidence["attack_kind"] == "profit_biased"
-    assert evidence["trigger"] == "immediate"
-    assert evidence["target_group"] == "premium"
-    assert evidence["strength"] == STRENGTH
-    assert evidence["used_targets"] == 1
-    assert evidence["maximum_targets"] == 1
-    assert evidence["targets"] == [resolve_edge(topology, TARGET)]
+    assert evidence == honest_evidence
+    assert "attack_step_record" not in evidence
+    assert "attack_kind" not in evidence
+    assert "proposal_label" not in evidence
+    assert record is not None
+    payload = record.as_dict()
+    assert payload["trigger_ready"]
+    assert payload["proposal_label"] == 1
+    assert payload["honest_action_sha256"] != payload["proposed_action_sha256"]
+    assert set(payload["affected_channels"]) == {
+        "route_weights",
+        "crowd_messages",
+    }
+    assert payload["malicious_delta"]["entries"]
+    assert "_honest_base_action" not in payload
+
+
+def test_each_ramp_boundary_changes_the_declared_strength(topology):
+    config = controller_config()
+    env = build_environment(config)
+    controller = build_controller(config, topology)
+    edge = resolve_edge(topology, TARGET)
+    values = []
+
+    for interval in range(4):
+        observation = replace_operational_observation(
+            env.controller_observation(),
+            simulation_time=interval * 60.0,
+        )
+        proposal = controller.propose(observation)
+        values.append(float(proposal.action.route_weights[0][edge]))
+
+    assert values == pytest.approx([-0.25, -0.5, -0.75, -1.0])
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {"information_access": ("reported_observation", "honest_proposal")},
+            "information access",
+        ),
+        ({"telemetry_visibility": "hidden"}, "telemetry visibility"),
+    ],
+)
+def test_the_profit_contract_rejects_unsupported_declared_access(changes, message):
+    with pytest.raises(ValueError, match=message):
+        attack_record(**changes)
 
 
 def test_the_immediate_wrapper_bootstrap_passes_strict_validation(topology):

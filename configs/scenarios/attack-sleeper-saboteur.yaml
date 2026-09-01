@@ -23,6 +23,16 @@ scenario:
     stranded_after_seconds: 300.0
   failures:
     schedule: []
+  operational_events:
+    schema_version: 1
+    enabled: true
+    kind_filter: capacity_restriction
+    matched_periods_seconds: [3600]
+    maximum_offset_seconds: 0
+    minimum_duration_seconds: 900
+    maximum_duration_seconds: 900
+    minimum_severity: 0.5
+    maximum_severity: 0.5
   audits:
     schema_version: 2
     edge_fraction: 0.1

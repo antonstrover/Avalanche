@@ -5,9 +5,12 @@ One recording monitor sits on the normal monitor path. It writes the same
 feature vector that the learned monitor reads at run time, so the training
 features and the run features cannot differ.
 
-Each row carries two labels. One label shows an active attack. The other label
-shows new stranding in a later control interval.
+Each row carries three evaluator fields. The proposal label marks a malicious
+delta. The execution field records whether that delta survives adjudication.
+The future label shows new stranding in a later control interval.
 """
+
+from __future__ import annotations
 
 import hashlib
 import json
@@ -19,7 +22,7 @@ from dataclasses import dataclass
 from math import ceil
 from pathlib import Path
 from time import perf_counter
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
@@ -50,7 +53,6 @@ from avalanche.control.types import (
     VISIBLE_FAILURE_CAPACITY,
     public_policy_identity,
 )
-from avalanche.controllers.attacks import is_active
 from avalanche.controllers.factory import (
     build_controller,
     build_fallback,
@@ -69,10 +71,15 @@ from avalanche.observability import MetricEmitter, MetricEvent
 from avalanche.scenarios import AUDIT_SCHEMA_VERSION, ROUTE_SENSOR_SCHEMA_VERSION
 from avalanche.traces import BufferedParquetWriter, ParquetWriteProgress
 
-ATTACK_LABEL = "attack_active"
+if TYPE_CHECKING:
+    from avalanche.experiments.protocols import PairContext
+
+ATTACK_LABEL = "proposal_label"
+EXECUTED_ACTIVATION = "executed_activation"
+LABEL_SCHEMA_VERSION = 2
 STRANDING_LABEL = "stranding_in_horizon"
 STRANDING_MASK = "stranding_label_known"
-DATASET_VERSION = 6
+DATASET_VERSION = 7
 LEGACY_DATASET_FIXTURE_VERSION = 4
 LEGACY_DATASET_FEATURE_VERSION = 2
 OBSOLETE_FORMAL_DATASET_FIELDS = frozenset(
@@ -401,6 +408,7 @@ class ResolvedDatasetEntry:
 
     entry: DatasetEntry
     resolved: ResolvedConfig
+    pair_context: PairContext | None = None
 
 
 @dataclass(frozen=True)
@@ -417,10 +425,15 @@ def require_current_formal_dataset_rows(
     name: str,
 ) -> None:
     """Reject rows outside the current formal dataset schema."""
+    from avalanche.experiments.protocols import PAIR_CONTEXT_FIELDS
+
     required = {
+        ATTACK_LABEL,
+        EXECUTED_ACTIVATION,
         STRANDING_LABEL,
         STRANDING_MASK,
         "dataset_version",
+        "label_schema_version",
         "feature_version",
         "operational_evidence_schema_version",
         "control_interval_seconds",
@@ -433,6 +446,12 @@ def require_current_formal_dataset_rows(
         "audit_provenance",
         "public_event_provenance",
         "stranding_provenance",
+        "pair_id",
+        "pair_role",
+        "seed",
+        "resolved_config_checksum",
+        "pair_context_checksum",
+        *PAIR_CONTEXT_FIELDS,
     }
     if not required <= set(frame):
         raise ValueError(f"the {name} rows miss current dataset fields")
@@ -440,8 +459,16 @@ def require_current_formal_dataset_rows(
         raise ValueError(f"the {name} rows contain an obsolete harm field")
     if set(frame["dataset_version"]) != {DATASET_VERSION}:
         raise ValueError(f"the {name} rows have an invalid dataset version")
+    if set(frame["label_schema_version"]) != {LABEL_SCHEMA_VERSION}:
+        raise ValueError(f"the {name} rows have an invalid label schema version")
     if set(frame["feature_version"]) != {FEATURE_VERSION}:
         raise ValueError(f"the {name} rows have an invalid feature version")
+    for column in (ATTACK_LABEL, EXECUTED_ACTIVATION):
+        if frame[column].isna().any() or not frame[column].isin((0, 1)).all():
+            raise ValueError(f"the {name} rows have an invalid {column}")
+    if (frame[EXECUTED_ACTIVATION] > frame[ATTACK_LABEL]).any():
+        raise ValueError(f"the {name} rows activate an unlabelled proposal")
+    _require_pair_contexts(frame, name)
     if set(frame["operational_evidence_schema_version"]) != {
         OBSERVATION_SCHEMA_VERSION
     }:
@@ -449,6 +476,39 @@ def require_current_formal_dataset_rows(
             f"the {name} rows have an invalid operational evidence version"
         )
     _require_operational_provenance(frame, name)
+
+
+def _require_pair_contexts(frame: pd.DataFrame, name: str) -> None:
+    """Reject incomplete or inconsistent formal pair contexts."""
+    from avalanche.experiments.protocols import PAIR_CONTEXT_FIELDS, PairContext
+
+    valid_pair_ids = frame["pair_id"].map(
+        lambda value: isinstance(value, str) and bool(value)
+    )
+    if not valid_pair_ids.all():
+        raise ValueError(f"the {name} rows have an invalid pair identity")
+    for pair_id, rows in frame.groupby("pair_id", sort=False):
+        if set(rows["pair_role"]) != {"honest", "attack"}:
+            raise ValueError(f"the {name} pair {pair_id} is incomplete")
+        if any(rows[field].nunique(dropna=False) != 1 for field in PAIR_CONTEXT_FIELDS):
+            raise ValueError(f"the {name} pair {pair_id} changes its pair context")
+        context = PairContext.from_mapping(rows.iloc[0])
+        if not rows["pair_context_checksum"].eq(context.pair_context_sha256).all():
+            raise ValueError(
+                f"the {name} pair {pair_id} has an invalid pair context checksum"
+            )
+        if not rows["seed"].eq(context.root_seed).all():
+            raise ValueError(f"the {name} pair {pair_id} changes its root seed")
+        expected_digests = {
+            "honest": context.honest_resolved_configuration_sha256,
+            "attack": context.attack_resolved_configuration_sha256,
+        }
+        for role, expected in expected_digests.items():
+            member_rows = rows.loc[rows["pair_role"] == role]
+            if not member_rows["resolved_config_checksum"].eq(expected).all():
+                raise ValueError(
+                    f"the {name} pair {pair_id} changes its resolved config digest"
+                )
 
 
 def _require_operational_provenance(frame: pd.DataFrame, name: str) -> None:
@@ -836,19 +896,25 @@ def label_future_stranding(rows: pd.DataFrame, horizon: int) -> pd.DataFrame:
 def label_attack_activity(
     rows: pd.DataFrame, controller: ControllerConfig
 ) -> pd.DataFrame:
-    """Create attack labels from privileged run configuration."""
+    """Publish evaluator labels from recorded proposal differences."""
     labelled = rows.copy()
-    if "_attack_active" in labelled.columns:
-        labelled[ATTACK_LABEL] = labelled.pop("_attack_active").astype(int)
+    if "_proposal_label" in labelled.columns:
+        if "_executed_activation" not in labelled.columns:
+            raise ValueError("the proposal labels need execution outcomes")
+        labelled[ATTACK_LABEL] = labelled.pop("_proposal_label").astype(int)
+        labelled[EXECUTED_ACTIVATION] = labelled.pop("_executed_activation").astype(int)
+        if not labelled[ATTACK_LABEL].isin((0, 1)).all():
+            raise ValueError("the proposal labels must be binary")
+        if not labelled[EXECUTED_ACTIVATION].isin((0, 1)).all():
+            raise ValueError("the execution outcomes must be binary")
+        if (labelled[EXECUTED_ACTIVATION] > labelled[ATTACK_LABEL]).any():
+            raise ValueError("execution needs a malicious proposal")
         return labelled
     if controller.attack is None:
         labelled[ATTACK_LABEL] = 0
+        labelled[EXECUTED_ACTIVATION] = 0
         return labelled
-    labelled[ATTACK_LABEL] = [
-        int(is_active(controller.attack, float(simulation_time)))
-        for simulation_time in labelled["simulation_time"]
-    ]
-    return labelled
+    raise ValueError("an attack dataset needs evaluator lifecycle labels")
 
 
 def run_entry(
@@ -910,24 +976,32 @@ def _run_resolved_entry(
 
     simulation_times: list[float] = []
     evaluator_unique_stranded: list[float] = []
-    attack_active: list[int] = []
+    proposal_labels: list[int] = []
+    executed_activations: list[int] = []
     terminated = False
     truncated = False
     try:
         while not truncated:
             proposal = controller.propose(env.controller_observation())
+            attack_step_record = getattr(controller, "last_attack_step_record", None)
+            if resolved.controller.attack is not None and attack_step_record is None:
+                raise RuntimeError("the attack wrapper must record every proposal")
             evaluator = env.evaluator_observation(proposal)
             simulation_times.append(float(proposal.simulation_time))
             evaluator_unique_stranded.append(
                 float(evaluator.evaluator_truth.unique_stranded_skiers)
             )
-            attack_active.append(
-                int(
-                    resolved.controller.attack is not None
-                    and proposal.controller_id != "honest"
-                )
+            proposal_labels.append(
+                0 if attack_step_record is None else attack_step_record.proposal_label
             )
-            _, _, terminated, truncated, _ = env.step_proposal(proposal)
+            _, _, terminated, truncated, info = env.step_proposal(
+                proposal,
+                attack_step_record=attack_step_record,
+            )
+            finalized = info["adjudication"].attack_step_record
+            executed_activations.append(
+                0 if finalized is None else int(finalized.executed_activation)
+            )
     finally:
         monitor.flush_semantic_metrics()
 
@@ -953,17 +1027,26 @@ def _run_resolved_entry(
     frame.insert(13, "attack_tier", entry.attack_tier)
     frame.insert(14, "holdout_reasons", ",".join(entry.holdout_reasons))
     frame.insert(15, "dataset_version", DATASET_VERSION)
-    frame.insert(16, "feature_version", FEATURE_VERSION)
-    frame.insert(17, "policy_version", resolved.controller.policy_version)
-    frame.insert(18, "information_profile", profile.value)
-    frame.insert(19, "resolved_config_checksum", _resolved_checksum(resolved))
+    frame.insert(16, "label_schema_version", LABEL_SCHEMA_VERSION)
+    frame.insert(17, "feature_version", FEATURE_VERSION)
+    frame.insert(18, "policy_version", resolved.controller.policy_version)
+    frame.insert(19, "information_profile", profile.value)
+    frame.insert(20, "resolved_config_checksum", _resolved_checksum(resolved))
     frame.insert(
-        20,
+        21,
         "pair_context_checksum",
-        pair_context_checksum(entry, resolved=resolved),
+        (
+            pair_context_checksum(entry, resolved=resolved)
+            if selected.pair_context is None
+            else selected.pair_context.pair_context_sha256
+        ),
     )
+    if selected.pair_context is not None:
+        for field, value in selected.pair_context.as_dict().items():
+            frame[field] = value
     frame["_evaluator_unique_stranded_skiers"] = evaluator_unique_stranded
-    frame["_attack_active"] = attack_active
+    frame["_proposal_label"] = proposal_labels
+    frame["_executed_activation"] = executed_activations
     frame = label_attack_activity(frame, resolved.controller)
     return label_future_stranding(frame, horizon)
 
@@ -1531,8 +1614,10 @@ def resolve_dataset_entries(
     entries: Sequence[DatasetEntry],
 ) -> tuple[ResolvedDatasetEntry, ...]:
     """Resolve every dataset entry before execution starts."""
-    _validate_pairs(entries)
-    return tuple(ResolvedDatasetEntry(entry, resolve_entry(entry)) for entry in entries)
+    selected = tuple(
+        ResolvedDatasetEntry(entry, resolve_entry(entry)) for entry in entries
+    )
+    return _bind_pair_contexts(selected)
 
 
 def generate_resolved_dataset_entries(
@@ -1814,18 +1899,45 @@ def _parquet_frame_callback(
     return write
 
 
-def _validate_pairs(entries: Sequence[DatasetEntry]) -> None:
-    """Reject an incomplete pair or a changed external context."""
-    paired = [entry for entry in entries if entry.pair_id]
-    groups: dict[str, list[DatasetEntry]] = {}
-    for entry in paired:
-        groups.setdefault(entry.pair_id, []).append(entry)
+def _bind_pair_contexts(
+    entries: Sequence[ResolvedDatasetEntry],
+) -> tuple[ResolvedDatasetEntry, ...]:
+    """Build one complete context for each resolved dataset pair."""
+    from avalanche.experiments.protocols import build_pair_context, canonical_sha256
+
+    groups: dict[str, list[ResolvedDatasetEntry]] = {}
+    for selected in entries:
+        if selected.entry.pair_id:
+            groups.setdefault(selected.entry.pair_id, []).append(selected)
+    contexts: dict[str, PairContext] = {}
     for pair_id, group in groups.items():
-        if {entry.pair_role for entry in group} != {"honest", "attack"}:
+        by_role = {selected.entry.pair_role: selected for selected in group}
+        if len(group) != 2 or set(by_role) != {"honest", "attack"}:
             raise ValueError(f"the dataset pair {pair_id} is incomplete")
-        checksums = {pair_context_checksum(entry) for entry in group}
-        if len(checksums) != 1:
-            raise ValueError(f"the dataset pair {pair_id} changes external context")
+        honest = by_role["honest"].resolved
+        attack = by_role["attack"].resolved
+        model_lock = honest.monitor.model_lock
+        artifact_sha256 = canonical_sha256(
+            {
+                "model_lock": (
+                    None if model_lock is None else model_lock.model_dump(mode="json")
+                )
+            }
+        )
+        contexts[pair_id] = build_pair_context(
+            honest,
+            attack,
+            code_revision=_code_revision(),
+            artifact_sha256=artifact_sha256,
+        )
+    return tuple(
+        ResolvedDatasetEntry(
+            selected.entry,
+            selected.resolved,
+            contexts.get(selected.entry.pair_id),
+        )
+        for selected in entries
+    )
 
 
 def pair_context_checksum(
@@ -1833,30 +1945,21 @@ def pair_context_checksum(
     *,
     resolved: ResolvedConfig | None = None,
 ) -> str:
-    """Return the paired weather, failure, demand, event, and policy identity."""
-    values = (resolved or resolve_entry(entry)).model_dump(mode="json")
-    for field in (
-        "controller",
-        "monitor",
-        "provenance",
-        "resolved_configuration_sha256",
-        "scientific_configuration_sha256",
-    ):
-        values.pop(field)
-    canonical = json.dumps(
-        {"resolved": values, "policy_variant": entry.policy_variant},
-        sort_keys=True,
-        separators=(",", ":"),
+    """Return the complete invariant identity for one pair member."""
+    from avalanche.experiments.protocols import (
+        canonical_sha256,
+        invariant_configuration,
     )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+
+    configuration = resolved or resolve_entry(entry)
+    return canonical_sha256(invariant_configuration(configuration))
 
 
 def _resolved_checksum(resolved: ResolvedConfig) -> str:
     """Return the complete resolved configuration checksum."""
-    canonical = json.dumps(
-        resolved.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    from avalanche.experiments.protocols import resolved_configuration_sha256
+
+    return resolved_configuration_sha256(resolved)
 
 
 def _write_manifest_summary(
@@ -1881,11 +1984,15 @@ def _write_manifest_summary(
                 "run_id": run_id(resolved),
                 "checksum": hashlib.sha256(canonical.encode()).hexdigest(),
                 "configuration": json.loads(canonical),
+                "pair_context": (
+                    None if value.pair_context is None else value.pair_context.as_dict()
+                ),
             }
         )
     known_stranding = frame.loc[frame[STRANDING_MASK] == 1, STRANDING_LABEL]
     summary = {
         "dataset_version": DATASET_VERSION,
+        "label_schema_version": LABEL_SCHEMA_VERSION,
         "feature_names": list(feature_names_for(information_profile)),
         "feature_version": FEATURE_VERSION,
         "policy_version": HONEST_POLICY_VERSION,
@@ -1959,6 +2066,7 @@ def load_dataset_fixture(
         raise ValueError(recovery) from error
     expected = {
         "dataset_version": DATASET_VERSION,
+        "label_schema_version": LABEL_SCHEMA_VERSION,
         "feature_version": FEATURE_VERSION,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
@@ -2044,6 +2152,7 @@ def validate_generated_dataset(
     expected_features = list(feature_names_for(profile))
     expected = {
         "dataset_version": DATASET_VERSION,
+        "label_schema_version": LABEL_SCHEMA_VERSION,
         "feature_version": FEATURE_VERSION,
         "information_profile": profile.value,
         "feature_names": expected_features,
@@ -2134,6 +2243,7 @@ def _write_fixture_metadata(
     relative_source = source_path.resolve().relative_to(REPO_ROOT.resolve())
     metadata = {
         "dataset_version": DATASET_VERSION,
+        "label_schema_version": LABEL_SCHEMA_VERSION,
         "feature_version": FEATURE_VERSION,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(information_profile)),

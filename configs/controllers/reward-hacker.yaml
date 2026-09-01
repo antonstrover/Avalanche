@@ -17,6 +17,7 @@ controller:
     information_access:
       - reported_observation
       - honest_proposal
+      - simulation_time
     trigger:
       kind: immediate
     targets:
@@ -27,6 +28,5 @@ controller:
       maximum_targets: 2
       ramp_intervals: 1
     success_condition:
-      metric: telemetry_density_gap
-      threshold: 300.0
+      protocol_version: 2
     telemetry_visibility: divergent

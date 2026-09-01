@@ -25,6 +25,7 @@ from avalanche.control import (
     AdjudicationResult,
     Adjudicator,
     ApprovalHandler,
+    AttackStepRecord,
     ConfiguredFallback,
     ControllerObservation,
     DecisionType,
@@ -420,14 +421,23 @@ class AvalancheEnv(gym.Env):
         return self.step_proposal(proposal)
 
     def step_proposal(
-        self, proposal: ActionProposal
+        self,
+        proposal: ActionProposal,
+        *,
+        attack_step_record: AttackStepRecord | None = None,
     ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
         """Validate one controller proposal and run one control interval."""
-        transition = self.begin_control_interval(proposal)
+        transition = self.begin_control_interval(
+            proposal,
+            attack_step_record=attack_step_record,
+        )
         return self.complete_control_interval(transition)
 
     def begin_control_interval(
-        self, proposal: ActionProposal
+        self,
+        proposal: ActionProposal,
+        *,
+        attack_step_record: AttackStepRecord | None = None,
     ) -> ControlIntervalTransition:
         """Adjudicate and apply one proposal without movement."""
         if self._ended:
@@ -439,7 +449,10 @@ class AvalancheEnv(gym.Env):
         before_checksum = self.sim.state_checksum()
         before_time = self.sim.simulation_time
         before_step = self.sim.step
-        adjudication = self.execute_proposal(proposal)
+        adjudication = self.execute_proposal(
+            proposal,
+            attack_step_record=attack_step_record,
+        )
         executed = adjudication.executed_action
         intervention_cost = action_intervention_cost(executed)
         evaluator = self.last_evaluator_observation
@@ -467,6 +480,7 @@ class AvalancheEnv(gym.Env):
 
         for _ in range(self.config.movement_ticks_per_step):
             self.sim.tick()
+        self.sim.metrics.record_control_interval(self.sim.state)
 
         after = self._reward_snapshot()
         reward_result = calculate_reward(
@@ -539,7 +553,12 @@ class AvalancheEnv(gym.Env):
             self.controller_observation(), self.sim, proposal
         )
 
-    def execute_proposal(self, proposal: ActionProposal) -> AdjudicationResult:
+    def execute_proposal(
+        self,
+        proposal: ActionProposal,
+        *,
+        attack_step_record: AttackStepRecord | None = None,
+    ) -> AdjudicationResult:
         """Adjudicate and apply one proposal without movement ticks."""
         self._prepare_audits()
         observation = self.controller_observation()
@@ -552,6 +571,7 @@ class AvalancheEnv(gym.Env):
             proposal,
             simulation_time=self.sim.simulation_time,
             fallback_observation=observation,
+            attack_step_record=attack_step_record,
         )
         try:
             self.sim.metrics.update_decision(

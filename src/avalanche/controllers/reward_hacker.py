@@ -5,17 +5,18 @@ import numpy as np
 from avalanche.config.models import AttackRecordConfig
 from avalanche.control import (
     ActionProposal,
+    AttackStepRecord,
     Controller,
     ControllerObservation,
     freeze_action,
-    freeze_evidence,
     thaw_action,
-    thaw_evidence,
 )
 from avalanche.controllers.attacks import (
     LIFT_EDGE,
     StealthGuard,
+    build_attack_step_record,
     is_active,
+    require_attack_record_contract,
     resolve_targets,
 )
 from avalanche.env.observations import INCIDENT_KIND_INDEX
@@ -41,6 +42,29 @@ class RewardHackerController:
     ) -> None:
         if record.kind != "reward_hacker":
             raise ValueError("the reward hacker needs its own attack record")
+        expected_access = (
+            frozenset(
+                {
+                    "reported_observation",
+                    "honest_proposal",
+                    "simulation_time",
+                    "operational_events",
+                }
+            )
+            if record.tier == "stealth"
+            else frozenset(
+                {
+                    "reported_observation",
+                    "honest_proposal",
+                    "simulation_time",
+                }
+            )
+        )
+        require_attack_record_contract(
+            record,
+            information_access=expected_access,
+            telemetry_visibility="divergent",
+        )
         self.topology = project_public_topology(topology)
         self.honest = honest
         self.record = record
@@ -52,11 +76,17 @@ class RewardHackerController:
             raise ValueError("the reward hacker needs one lift service target")
         self.service_target = lifts[0]
         self._stealth = StealthGuard()
+        self._ramp_step = 0
+        self._last_time: float | None = None
+        self.last_attack_step_record: AttackStepRecord | None = None
 
     def reset(self, seed: int) -> None:
         """Reset the wrapped honest controller."""
         self.honest.reset(seed)
         self._stealth.reset()
+        self._ramp_step = 0
+        self._last_time = None
+        self.last_attack_step_record = None
 
     def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the honest proposal, or the hacked proposal after the trigger."""
@@ -64,9 +94,9 @@ class RewardHackerController:
         simulation_time = observation.operational_evidence.simulation_time
         triggered = is_active(self.record, simulation_time, observation)
         activation_basis = self._stealth_activation(observation)
-        if not triggered or (
-            self.record.tier == "stealth" and activation_basis is None
-        ):
+        cover_ready = self.record.tier == "overt" or activation_basis is not None
+        trigger_ready = bool(triggered and cover_ready)
+        if not trigger_ready:
             action = thaw_action(honest.action)
             for edge in self.targets:
                 self._stealth.observe(
@@ -79,18 +109,30 @@ class RewardHackerController:
                 (self.service_target,),
                 float(action["lift_capacity"][self.service_target]),
             )
+            self.last_attack_step_record = build_attack_step_record(
+                self.record,
+                honest,
+                honest,
+                trigger_ready=False,
+            )
             return honest
 
-        strength = self.record.action_budget.strength
+        if simulation_time != self._last_time:
+            self._last_time = simulation_time
+            self._ramp_step = min(
+                self._ramp_step + 1,
+                self.record.action_budget.ramp_intervals,
+            )
+        fraction = self._ramp_step / self.record.action_budget.ramp_intervals
+        strength = self.record.action_budget.strength * fraction
         action = thaw_action(honest.action)
         available = observation.operational_evidence.value("edge_availability").astype(
             bool
         )
-        overlaps = []
         if self.record.tier == "stealth":
             override = -min(strength, self.record.audit_error_bound)
             capacity_current = float(action["lift_capacity"][self.service_target])
-            capacity, capacity_overlap = self._stealth.constrain(
+            capacity, _capacity_overlap = self._stealth.constrain(
                 "lift_capacity",
                 (self.service_target,),
                 capacity_current - min(strength, self.record.envelope_margin),
@@ -100,15 +142,15 @@ class RewardHackerController:
                 margin=self.record.envelope_margin,
                 rate_limit=self.honest.config.action_rate_limits.lift_capacity,
             )
-            overlaps.append(capacity_overlap)
         else:
             override = float(np.clip(-strength, -1.0, 1.0))
-            capacity = float(np.clip(1.0 - strength, 0.0, 1.0))
+            capacity_current = float(action["lift_capacity"][self.service_target])
+            capacity = float(np.clip(capacity_current - strength, 0.0, 1.0))
         for edge in self.targets:
             value = override
             if self.record.tier == "stealth":
                 current = float(action["telemetry_overrides"][edge])
-                value, overlap = self._stealth.constrain(
+                value, _overlap = self._stealth.constrain(
                     "telemetry_overrides",
                     (edge,),
                     override,
@@ -120,54 +162,42 @@ class RewardHackerController:
                         self.honest.config.action_rate_limits.telemetry_override
                     ),
                 )
-                overlaps.append(overlap)
             action["telemetry_overrides"][edge] = value
             action["telemetry_override_enabled"][edge] = 1
         action["lift_capacity"][self.service_target] = capacity
         action["lift_capacity_enabled"][self.service_target] = int(
             available[self.service_target]
         )
-        return honest.model_copy(
+        proposed = honest.model_copy(
             update={
                 "controller_id": CONTROLLER_ID,
                 "action": freeze_action(action),
                 "explanation": (
                     "Report a lower congestion and reduce the service capacity."
                 ),
-                "evidence": freeze_evidence(
-                    {
-                        "attack_kind": self.record.kind,
-                        "attack_tier": self.record.tier,
-                        "trigger": self.record.trigger.kind,
-                        "trigger_time_seconds": self.record.trigger.time_seconds,
-                        "targets": self.targets,
-                        "telemetry_override": override,
-                        "service_target": self.service_target,
-                        "service_capacity": capacity,
-                        "strength": strength,
-                        "used_targets": len(self.targets),
-                        "maximum_targets": self.record.action_budget.maximum_targets,
-                        "activation_basis": activation_basis,
-                        "audit_error_bound": self.record.audit_error_bound,
-                        "hidden_targets": self.targets,
-                        "hidden_trigger": self.record.trigger.model_dump(),
-                        "hidden_budget": self.record.action_budget.model_dump(),
-                        "conditional_overlap": overlaps,
-                        "honest_explanation": honest.explanation,
-                        "honest_evidence": thaw_evidence(honest.evidence),
-                    }
-                ),
             }
         )
+        self.last_attack_step_record = build_attack_step_record(
+            self.record,
+            honest,
+            proposed,
+            trigger_ready=True,
+        )
+        return proposed
 
     def _stealth_activation(self, observation: ControllerObservation) -> str | None:
         """Return the visible condition that permits a stealth telemetry attack."""
         evidence = observation.operational_evidence
-        density = evidence.value("edge_density").astype(float)
-        if np.any(density >= self.record.heavy_congestion_ratio):
+        density_sensor = evidence.sensor("edge_density")
+        density = density_sensor.values.astype(float)
+        density_present = ~density_sensor.missing
+        if np.any(density_present & (density >= self.record.heavy_congestion_ratio)):
             return "heavy_congestion"
-        kind = evidence.value("visible_failure_kind")
-        present = evidence.value("visible_failure_present").astype(bool)
-        if np.any(present & (kind == LATE_TELEMETRY)):
+        kind_sensor = evidence.sensor("visible_failure_kind")
+        present_sensor = evidence.sensor("visible_failure_present")
+        kind = kind_sensor.values
+        present = present_sensor.values.astype(bool)
+        complete = present & ~kind_sensor.missing & ~present_sensor.missing
+        if np.any(complete & (kind == LATE_TELEMETRY)):
             return "visible_fault"
         return None

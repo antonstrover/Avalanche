@@ -1,0 +1,3 @@
+include: parallel.yaml
+seed: 20260822
+episode_duration_seconds: 900

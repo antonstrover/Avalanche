@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass
 from math import isfinite
 from numbers import Integral
 
+OPERATIONAL_UTILITY_COMPONENT_WEIGHT = 0.20
+
 
 @dataclass(frozen=True)
 class RewardTransition:
@@ -55,6 +57,73 @@ class RewardResult:
 
     parts: RewardParts
     scalar: float
+
+
+@dataclass(frozen=True)
+class OperationalUtilityInputs:
+    """Hold every raw input for the frozen episode utility."""
+
+    completed_journeys: int
+    population: int
+    mean_wait_seconds: float
+    dangerous_density_seconds: float
+    edge_count: int
+    episode_duration_seconds: float
+    stranded_skier_seconds: float
+    wait_time_range_seconds: float
+
+
+@dataclass(frozen=True)
+class OperationalUtilityResult:
+    """Hold each bounded score and the frozen weighted sum."""
+
+    completion_score: float
+    waiting_score: float
+    exposure_score: float
+    stranding_score: float
+    fairness_score: float
+    utility: float
+
+    def as_dict(self) -> dict[str, float]:
+        """Return every score with a stable name."""
+        return asdict(self)
+
+
+def calculate_operational_utility(
+    inputs: OperationalUtilityInputs,
+) -> OperationalUtilityResult:
+    """Return the frozen five-component episode utility."""
+    _validate_operational_utility_inputs(inputs)
+    completion_score = inputs.completed_journeys / inputs.population
+    waiting_score = 1.0 - _clip_unit(
+        inputs.mean_wait_seconds / inputs.episode_duration_seconds
+    )
+    exposure_score = 1.0 - _clip_unit(
+        inputs.dangerous_density_seconds
+        / (inputs.edge_count * inputs.episode_duration_seconds)
+    )
+    stranding_score = 1.0 - _clip_unit(
+        inputs.stranded_skier_seconds
+        / (inputs.population * inputs.episode_duration_seconds)
+    )
+    fairness_score = 1.0 - _clip_unit(
+        inputs.wait_time_range_seconds / inputs.episode_duration_seconds
+    )
+    utility = OPERATIONAL_UTILITY_COMPONENT_WEIGHT * (
+        completion_score
+        + waiting_score
+        + exposure_score
+        + stranding_score
+        + fairness_score
+    )
+    return OperationalUtilityResult(
+        completion_score=float(completion_score),
+        waiting_score=float(waiting_score),
+        exposure_score=float(exposure_score),
+        stranding_score=float(stranding_score),
+        fairness_score=float(fairness_score),
+        utility=float(utility),
+    )
 
 
 def calculate_reward(
@@ -111,3 +180,42 @@ def _validate_weights(weights: RewardWeights) -> None:
     """Reject a weight that is not finite."""
     if any(not isfinite(float(value)) for value in asdict(weights).values()):
         raise ValueError("reward weights must be finite")
+
+
+def _validate_operational_utility_inputs(inputs: OperationalUtilityInputs) -> None:
+    """Reject an invalid episode utility input."""
+    integer_values = {
+        "completed journeys": inputs.completed_journeys,
+        "population": inputs.population,
+        "edge count": inputs.edge_count,
+    }
+    for name, value in integer_values.items():
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise TypeError(f"the utility {name} must be an integer")
+    if inputs.population <= 0:
+        raise ValueError("the utility population must be positive")
+    if inputs.edge_count <= 0:
+        raise ValueError("the utility edge count must be positive")
+    if not 0 <= inputs.completed_journeys <= inputs.population:
+        raise ValueError("the utility completed journeys must fit the population")
+    values = {
+        "mean wait": inputs.mean_wait_seconds,
+        "dangerous density": inputs.dangerous_density_seconds,
+        "episode duration": inputs.episode_duration_seconds,
+        "stranded skier duration": inputs.stranded_skier_seconds,
+        "wait range": inputs.wait_time_range_seconds,
+    }
+    for name, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise TypeError(f"the utility {name} must be a real number")
+        if not isfinite(float(value)):
+            raise ValueError(f"the utility {name} must be finite")
+        if value < 0.0:
+            raise ValueError(f"the utility {name} must not be negative")
+    if inputs.episode_duration_seconds <= 0.0:
+        raise ValueError("the utility episode duration must be positive")
+
+
+def _clip_unit(value: float) -> float:
+    """Clip one score ratio from zero through one."""
+    return min(max(float(value), 0.0), 1.0)

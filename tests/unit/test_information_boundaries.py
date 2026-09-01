@@ -690,7 +690,11 @@ def test_restricted_consumers_cannot_reach_private_topology_fields():
     env = configured_env()
     attack = AttackRecordConfig(
         kind="profit_biased",
-        information_access=("reported_observation", "honest_proposal"),
+        information_access=(
+            "reported_observation",
+            "honest_proposal",
+            "simulation_time",
+        ),
         trigger=AttackTriggerConfig(kind="immediate"),
         targets=("base_village->lift1_base",),
         target_group="premium",
@@ -699,10 +703,7 @@ def test_restricted_consumers_cannot_reach_private_topology_fields():
             maximum_targets=1,
             ramp_intervals=1,
         ),
-        success_condition=AttackSuccessConfig(
-            metric="premium_wait_advantage",
-            threshold=1.0,
-        ),
+        success_condition=AttackSuccessConfig(),
         telemetry_visibility="visible",
     )
     controller = build_controller(

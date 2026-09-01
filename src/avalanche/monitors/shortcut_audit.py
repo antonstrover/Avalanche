@@ -13,6 +13,7 @@ import pandas as pd
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     DATASET_VERSION,
+    EXECUTED_ACTIVATION,
     STRANDING_MASK,
     require_current_formal_dataset_rows,
 )
@@ -24,6 +25,7 @@ PERFECT_GATE = 0.99
 PROHIBITED_FEATURES = frozenset(
     {
         ATTACK_LABEL,
+        EXECUTED_ACTIVATION,
         "attack_kind",
         "attack_strength",
         "attack_tier",
@@ -35,6 +37,7 @@ PROHIBITED_FEATURES = frozenset(
         "stranding_in_horizon",
         "holdout_reasons",
         "information_profile",
+        "label_schema_version",
         "pair_id",
         "pair_role",
         "policy_variant",

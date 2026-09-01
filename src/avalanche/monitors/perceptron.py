@@ -29,7 +29,7 @@ from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.observability import MetricEmitter, MetricEvent
 
 MODEL_VERSION = 3
-ATTACK_LABEL = "attack_active"
+ATTACK_LABEL = "proposal_label"
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,7 @@ Two adjacent time steps of one run must never fall into different parts.
 import pandas as pd
 import pytest
 
+from avalanche.monitors.dataset import ATTACK_LABEL
 from avalanche.monitors.splits import (
     DECLARED_SPLITS,
     SPLIT_NAMES,
@@ -31,7 +32,7 @@ def make_frame(families=FAMILIES, runs_each: int = 2, steps: int = 5) -> pd.Data
                         "run_id": f"{family}-{run}",
                         "scenario_family": family,
                         "step": step,
-                        "attack_active": step % 2,
+                        ATTACK_LABEL: step % 2,
                     }
                 )
     return pd.DataFrame(rows)

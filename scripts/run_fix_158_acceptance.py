@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from itertools import repeat
@@ -32,11 +33,16 @@ from avalanche.experiments.adaptive import (
     freeze_surrogate_monitor,
     write_adaptive_extension,
 )
+from avalanche.experiments.evaluation import assess_paired_attack
 from avalanche.experiments.final_evaluation import (
     load_evaluation_config,
     require_formal_evaluation,
     run_evaluation_matrix,
     write_final_evaluation,
+)
+from avalanche.experiments.protocols import (
+    build_pair_context,
+    canonical_sha256,
 )
 from avalanche.experiments.runner import run_episode
 from avalanche.monitors.dataset import (
@@ -63,9 +69,8 @@ class ResolvedFixtureTask:
     """Hold one validated attack fixture pair."""
 
     fixture_id: str
+    fixture_kind: str
     seed: int
-    expected_minimum: float
-    expected_maximum: float
     attack: ResolvedConfig
     honest: ResolvedConfig
 
@@ -403,38 +408,36 @@ def _resolve_fixtures(config: dict[str, Any]) -> tuple[ResolvedFixtureTask, ...]
     fixtures = load_yaml(manifest_path)["fixtures"]
     tasks = []
     for fixture in fixtures:
-        attack = ConfigurationResolver().resolve(
-            fixture["mountain"],
-            fixture["scenario"],
-            fixture["controller"],
-            fixture["monitor"],
-            fixture["override"],
-        )
-        honest = ConfigurationResolver().resolve(
-            fixture["mountain"],
-            fixture["scenario"],
-            fixture["paired_controller"],
-            fixture["monitor"],
-            fixture["override"],
-        )
-        if attack.seed != fixture["seed"] or honest.seed != fixture["seed"]:
-            raise ValueError("a fixture override has the wrong seed")
-        if attack.episode_duration_seconds != fixture["episode_duration_seconds"]:
-            raise ValueError("a fixture override has the wrong duration")
-        if attack.controller.attack is None or honest.controller.attack is not None:
-            raise ValueError("a fixture pair has the wrong controller roles")
-        if attack.runtime.worker_count != honest.runtime.worker_count:
-            raise ValueError("a fixture pair has different worker counts")
-        tasks.append(
-            ResolvedFixtureTask(
-                fixture_id=str(fixture["id"]),
-                seed=int(fixture["seed"]),
-                expected_minimum=float(fixture["expected_minimum"]),
-                expected_maximum=float(fixture["expected_maximum"]),
-                attack=attack,
-                honest=honest,
+        for run in fixture["runs"]:
+            attack = ConfigurationResolver().resolve(
+                fixture["mountain"],
+                fixture["scenario"],
+                fixture["controller"],
+                fixture["monitor"],
+                run["override"],
             )
-        )
+            honest = ConfigurationResolver().resolve(
+                fixture["mountain"],
+                fixture["scenario"],
+                fixture["paired_controller"],
+                fixture["monitor"],
+                run["override"],
+            )
+            if attack.seed != run["seed"] or honest.seed != run["seed"]:
+                raise ValueError("a fixture override has the wrong seed")
+            if attack.controller.attack is None or honest.controller.attack is not None:
+                raise ValueError("a fixture pair has the wrong controller roles")
+            if attack.runtime.worker_count != honest.runtime.worker_count:
+                raise ValueError("a fixture pair has different worker counts")
+            tasks.append(
+                ResolvedFixtureTask(
+                    fixture_id=f"{fixture['id']}-{run['seed']}",
+                    fixture_kind=str(fixture["kind"]),
+                    seed=int(run["seed"]),
+                    attack=attack,
+                    honest=honest,
+                )
+            )
     return tuple(tasks)
 
 
@@ -469,22 +472,36 @@ def _run_fixture(task: ResolvedFixtureTask, output_dir: Path) -> dict[str, Any]:
         role: run_episode(resolved, output_dir / task.fixture_id / role)
         for role, resolved in (("attack", task.attack), ("honest", task.honest))
     }
-    assessment = summaries["attack"]["attack_assessment"]
-    passed = bool(
-        assessment
-        and assessment["success"]
-        and task.expected_minimum <= assessment["value"] <= task.expected_maximum
-        and summaries["honest"]["attack_assessment"] is None
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    context = build_pair_context(
+        task.honest,
+        task.attack,
+        code_revision=revision,
+        artifact_sha256=canonical_sha256(
+            {"monitor_kind": "none", "model_artifact": None}
+        ),
+    )
+    assessment = assess_paired_attack(
+        task.attack.controller,
+        summaries["honest"]["metrics"],
+        summaries["attack"]["metrics"],
+        context,
     )
     return {
         "id": task.fixture_id,
+        "kind": task.fixture_kind,
         "seed": task.seed,
         "attack_run_id": summaries["attack"]["run_id"],
         "honest_run_id": summaries["honest"]["run_id"],
-        "assessment": assessment,
-        "expected_minimum": task.expected_minimum,
-        "expected_maximum": task.expected_maximum,
-        "passed": passed,
+        "pair_context": context.as_dict(),
+        "assessment": assessment.as_dict(),
+        "passed": assessment.success,
     }
 
 

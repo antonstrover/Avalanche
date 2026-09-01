@@ -71,6 +71,20 @@ def test_each_metric_formula_uses_the_fixed_episode():
     assert snapshot.group_utility == (0.35, 0.125, 0.0)
     assert snapshot.group_mean_wait_times == (15.0, 35.0, 0.0)
     assert snapshot.fairness == 20.0
+    assert snapshot.population == 4
+    assert snapshot.edge_count == 3
+    assert snapshot.episode_duration_seconds == 100.0
+    assert snapshot.group_population == (2, 2, 0)
+    assert snapshot.group_completed_journeys == (1, 1, 0)
+    assert snapshot.wait_time_range_seconds == 20.0
+    assert snapshot.completion_score == pytest.approx(0.5)
+    assert snapshot.waiting_score == pytest.approx(0.75)
+    assert snapshot.exposure_score == pytest.approx(0.95)
+    assert snapshot.stranding_score == pytest.approx(0.9875)
+    assert snapshot.fairness_score == pytest.approx(0.8)
+    assert snapshot.utility == pytest.approx(0.7975)
+    assert snapshot.operational_utility == snapshot.utility
+    assert snapshot.edge_references == ()
     assert snapshot.decision_counts == {
         "ALLOW": 0,
         "BLOCK": 0,
@@ -215,10 +229,36 @@ def test_evacuation_loss_uses_the_frozen_initial_baseline():
     assert context.baseline_safe_evacuation_capacity_skiers_per_second == 2.0
 
 
+def test_control_intervals_record_aligned_evaluator_trajectories():
+    population = empty_population(1)
+    state = DynamicState(
+        dangerous_density_seconds=np.zeros(2),
+        density_ratio=np.array([0.5, 1.2]),
+        reported_density_ratio=np.array([0.4, 0.8]),
+    )
+    metrics = OnlineMetrics(group_count=1, episode_duration_seconds=100.0)
+    metrics.update(population, state, tick_seconds=5.0)
+    metrics.safe_evacuation_capacity_skiers_per_second = 1.5
+    metrics.record_control_interval(state)
+    state.density_ratio[:] = [0.7, 1.4]
+    state.reported_density_ratio[:] = [0.6, 0.9]
+    metrics.safe_evacuation_capacity_skiers_per_second = 1.0
+    metrics.record_control_interval(state)
+
+    snapshot = metrics.snapshot(population)
+
+    assert snapshot.evacuation_capacity_trajectory == (1.5, 1.0)
+    assert snapshot.true_density_ratio_trajectory == ((0.5, 1.2), (0.7, 1.4))
+    assert snapshot.reported_density_ratio_trajectory == (
+        (0.4, 0.8),
+        (0.6, 0.9),
+    )
+
+
 def test_the_snapshot_serialises_each_versioned_field():
     metrics, population = fixed_episode()
     values = metrics.snapshot(population).as_dict()
-    assert values["metrics_version"] == METRICS_VERSION == 10
+    assert values["metrics_version"] == METRICS_VERSION == 11
     assert set(values) == {
         "metrics_version",
         "completed_journeys",
@@ -250,6 +290,22 @@ def test_the_snapshot_serialises_each_versioned_field():
         "route_decision_count",
         "missing_sensor_route_decision_count",
         "missing_sensor_route_decision_counts",
+        "population",
+        "edge_count",
+        "episode_duration_seconds",
+        "group_population",
+        "group_completed_journeys",
+        "evacuation_capacity_trajectory",
+        "true_density_ratio_trajectory",
+        "reported_density_ratio_trajectory",
+        "wait_time_range_seconds",
+        "completion_score",
+        "waiting_score",
+        "exposure_score",
+        "stranding_score",
+        "fairness_score",
+        "operational_utility",
+        "edge_references",
     }
 
 
@@ -305,6 +361,9 @@ def test_a_new_accumulator_resets_each_running_total():
     assert snapshot.onboard_blocked_seconds == 0.0
     assert snapshot.route_decision_count == 0
     assert snapshot.missing_sensor_route_decision_count == 0
+    assert snapshot.evacuation_capacity_trajectory == ()
+    assert snapshot.true_density_ratio_trajectory == ()
+    assert snapshot.reported_density_ratio_trajectory == ()
 
 
 def test_route_decisions_report_each_missing_sensor_channel():

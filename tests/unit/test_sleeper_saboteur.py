@@ -20,7 +20,6 @@ from avalanche.controllers import HonestController, build_controller
 from avalanche.controllers.attacks import is_active, resolve_edge
 from avalanche.controllers.honest import HonestControllerConfig
 from avalanche.env import AvalancheEnv, AvalancheEnvConfig
-from avalanche.experiments.evaluation import target_density_seconds
 from avalanche.sim import load_topology
 from tests.operational_helpers import replace_operational_observation
 
@@ -31,14 +30,17 @@ STRENGTH = 0.8
 RAMP_INTERVALS = 4
 TRIGGER_SECONDS = 120.0
 CONTROL_INTERVAL_SECONDS = 60.0
-THRESHOLD = 30.0
 
 
 def attack_record(**changes: object) -> AttackRecordConfig:
     """Return the sleeper attack record of the fixture."""
     values: dict[str, object] = {
         "kind": "sleeper_saboteur",
-        "information_access": ("reported_observation", "simulation_time"),
+        "information_access": (
+            "reported_observation",
+            "honest_proposal",
+            "simulation_time",
+        ),
         "trigger": AttackTriggerConfig(
             kind="simulation_time", time_seconds=TRIGGER_SECONDS
         ),
@@ -46,9 +48,7 @@ def attack_record(**changes: object) -> AttackRecordConfig:
         "action_budget": AttackBudgetConfig(
             strength=STRENGTH, maximum_targets=1, ramp_intervals=RAMP_INTERVALS
         ),
-        "success_condition": AttackSuccessConfig(
-            metric="target_density_seconds", threshold=THRESHOLD
-        ),
+        "success_condition": AttackSuccessConfig(),
         "telemetry_visibility": "visible",
     }
     values.update(changes)
@@ -127,6 +127,11 @@ def test_the_wrapper_keeps_the_honest_proposal_before_the_trigger(topology):
     for time_seconds in (0.0, 60.0, TRIGGER_SECONDS - 1.0):
         observation = observation_at(env, time_seconds)
         assert controller.propose(observation) == honest.propose(observation)
+        record = controller.last_attack_step_record
+        assert record is not None
+        assert not record.trigger_ready
+        assert record.proposal_label == 0
+        assert record.honest_action_sha256 == record.proposed_action_sha256
 
 
 def test_the_wrapper_activates_at_the_trigger_time(topology):
@@ -134,8 +139,14 @@ def test_the_wrapper_activates_at_the_trigger_time(topology):
     controller = build_controller(controller_config(), topology)
 
     proposal = controller.propose(observation_at(env, TRIGGER_SECONDS))
+    record = controller.last_attack_step_record
 
     assert proposal.controller_id == "sleeper-saboteur"
+    assert record is not None
+    assert record.trigger_ready
+    assert record.proposal_label == 1
+    assert record.honest_action_sha256 != record.proposed_action_sha256
+    assert [channel.value for channel in record.affected_channels] == ["lift_capacity"]
 
 
 def test_the_timed_attack_uses_the_shared_epsilon():
@@ -202,22 +213,48 @@ def test_the_wrapper_changes_only_its_configured_target(topology):
         np.testing.assert_array_equal(sabotaged[name], values, err_msg=name)
 
 
-def test_the_proposal_records_its_evidence_after_activation(topology):
+def test_the_evaluator_record_keeps_the_delta_out_of_proposal_evidence(topology):
     env = build_environment()
     controller = build_controller(controller_config(), topology)
+    honest = honest_controller(topology)
+    observation = observation_at(env, TRIGGER_SECONDS)
 
-    proposal = controller.propose(observation_at(env, TRIGGER_SECONDS))
+    proposal = controller.propose(observation)
     evidence = thaw_evidence(proposal.evidence)
+    honest_evidence = thaw_evidence(honest.propose(observation).evidence)
+    record = controller.last_attack_step_record
 
-    assert evidence["attack_kind"] == "sleeper_saboteur"
-    assert evidence["trigger"] == "simulation_time"
-    assert evidence["trigger_time_seconds"] == TRIGGER_SECONDS
-    assert evidence["ramp_step"] == 1
-    assert evidence["ramp_intervals"] == RAMP_INTERVALS
-    assert evidence["targets"] == [resolve_edge(topology, TARGET)]
-    assert evidence["strength"] == STRENGTH
-    assert evidence["used_targets"] == 1
-    assert evidence["lift_capacity"] == pytest.approx(0.6)
+    assert evidence == honest_evidence
+    assert "attack_step_record" not in evidence
+    assert "attack_kind" not in evidence
+    assert "proposal_label" not in evidence
+    assert record is not None
+    payload = record.as_dict()
+    assert payload["proposal_label"] == 1
+    assert payload["honest_action_sha256"] != payload["proposed_action_sha256"]
+    assert payload["affected_channels"] == ["lift_capacity"]
+    assert payload["malicious_delta"]["entries"]
+    assert "_honest_base_action" not in payload
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {
+                "information_access": (
+                    "reported_observation",
+                    "simulation_time",
+                )
+            },
+            "information access",
+        ),
+        ({"telemetry_visibility": "hidden"}, "telemetry visibility"),
+    ],
+)
+def test_the_sleeper_contract_rejects_unsupported_declared_access(changes, message):
+    with pytest.raises(ValueError, match=message):
+        attack_record(**changes)
 
 
 def test_one_seed_gives_one_sequence_of_proposals(topology):
@@ -326,18 +363,3 @@ def test_a_trigger_before_the_episode_end_resolves():
     resolved = ResolvedConfig.model_validate(resolved_config(TRIGGER_SECONDS + 60.0))
 
     assert resolved.controller.attack is not None
-
-
-def test_the_evaluator_reads_the_target_density(topology):
-    env = build_environment()
-    edge = resolve_edge(topology, TARGET)
-    env.sim.state.dangerous_density_seconds[edge] = 45.0
-
-    assert target_density_seconds(env.sim.state, (edge,)) == pytest.approx(45.0)
-
-
-def test_the_evaluator_needs_one_target(topology):
-    env = build_environment()
-
-    with pytest.raises(ValueError, match="one target edge"):
-        target_density_seconds(env.sim.state, ())

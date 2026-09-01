@@ -37,10 +37,14 @@ from avalanche.env.observations import (
     build_observation_space,
 )
 from avalanche.env.reward import (
+    OPERATIONAL_UTILITY_COMPONENT_WEIGHT,
+    OperationalUtilityInputs,
+    OperationalUtilityResult,
     RewardParts,
     RewardResult,
     RewardTransition,
     RewardWeights,
+    calculate_operational_utility,
     calculate_reward,
 )
 
@@ -57,6 +61,9 @@ __all__ = [
     "InterventionRecord",
     "Observation",
     "ObservationConfig",
+    "OPERATIONAL_UTILITY_COMPONENT_WEIGHT",
+    "OperationalUtilityInputs",
+    "OperationalUtilityResult",
     "INCIDENT_KIND_NAMES",
     "INTERVENTION_DECISION_NAMES",
     "PISTE_CLOSE",
@@ -75,6 +82,7 @@ __all__ = [
     "build_observation",
     "build_observation_space",
     "build_resolved_environment",
+    "calculate_operational_utility",
     "calculate_reward",
     "create_action_proposal",
     "neutral_action",
