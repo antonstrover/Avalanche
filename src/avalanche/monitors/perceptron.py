@@ -100,6 +100,7 @@ def train_perceptron(
     config: TrainingConfig | None = None,
     *,
     feature_names: tuple[str, ...] | None = None,
+    feature_version: int = FEATURE_VERSION,
     emitter: MetricEmitter | None = None,
     stage_id: str = "perceptron-training",
 ) -> TrainedModel:
@@ -212,7 +213,7 @@ def train_perceptron(
     model.metadata = {
         "model_version": MODEL_VERSION,
         "model_kind": "perceptron",
-        "feature_version": FEATURE_VERSION,
+        "feature_version": feature_version,
         "information_profile": profile.value,
         "label": config.label,
         "train_rows": int(len(train)),

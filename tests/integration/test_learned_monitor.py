@@ -55,7 +55,7 @@ SEED = 20260825
 @pytest.fixture(scope="module")
 def model_reference(tmp_path_factory) -> ModelLockReference:
     """Train one small model and save it with its calibration."""
-    frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE)
+    frame = load_nonformal_legacy_dataset_v4_fixture(FIXTURE).rows
     parts, assignment = split_by_family(frame, seed=SEED)
     config = TrainingConfig(seed=SEED, epochs=8)
     model = train_perceptron(parts["train"], parts["validation"], config)

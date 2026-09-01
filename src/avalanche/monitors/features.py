@@ -1,7 +1,7 @@
 """Build versioned feature profiles for the learned process monitor."""
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -235,7 +235,9 @@ class FeatureExtractor:
             )
         )
         if self.profile is InformationProfile.ORACLE_TRUE_STATE:
-            blocks.append(_true_state_oracle_block(observation))
+            blocks.append(
+                _true_state_oracle_block(cast(EvaluatorObservation, observation))
+            )
         prediction = self.rule_monitor.predict(observation, proposal, history)
         blocks.extend(
             (

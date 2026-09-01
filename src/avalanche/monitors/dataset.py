@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from math import ceil
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -894,7 +894,7 @@ def _run_resolved_entry(
         profile=profile,
     )
     monitor = RecordingMonitor(
-        AllowMonitor(),
+        cast(Monitor, AllowMonitor()),
         extractor,
         rows,
         emitter=emitter,
@@ -1982,10 +1982,19 @@ def load_dataset_fixture(
     return frame
 
 
+@dataclass(frozen=True)
+class LegacyDatasetFixture:
+    """Hold validated rows and their historical feature schema."""
+
+    rows: pd.DataFrame
+    feature_names: tuple[str, ...]
+    feature_version: int
+
+
 def load_nonformal_legacy_dataset_v4_fixture(
     dataset_path: Path,
     metadata_path: Path | None = None,
-) -> pd.DataFrame:
+) -> LegacyDatasetFixture:
     """Load one historical fixture for nonformal regression tests only."""
     metadata_path = metadata_path or dataset_path.with_suffix(".metadata.json")
     recovery = "restore the historical monitor fixture from version control"
@@ -2014,7 +2023,11 @@ def load_nonformal_legacy_dataset_v4_fixture(
         or not set(feature_names) <= set(frame)
     ):
         raise ValueError(recovery)
-    return frame
+    return LegacyDatasetFixture(
+        rows=frame,
+        feature_names=tuple(feature_names),
+        feature_version=int(metadata["feature_version"]),
+    )
 
 
 def validate_generated_dataset(
