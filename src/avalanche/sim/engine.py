@@ -800,8 +800,12 @@ class MountainSim:
                     )
                 },
                 "precursors": {
-                    "reported_density_ratio": self.state.reported_density_ratio,
-                    "reported_hazard_score": self.state.hazard_score,
+                    "reported_density_ratio": sensors["edge_density"].values,
+                    "reported_hazard_score": (
+                        sensors["edge_density"].values
+                        + self.hazard_config.weather_risk_weight
+                        * sensors["edge_weather_risk"].values
+                    ),
                 },
                 "reported_stranding": tuple(
                     {

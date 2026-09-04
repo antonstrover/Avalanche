@@ -113,7 +113,7 @@ DETERMINISTIC_SUMMARY_FIELDS = (
     "truncated",
     "simulation_time",
     "step",
-    "state_checksum",
+    "physical_state_checksum",
     "metrics",
     "attack_lifecycle",
     "information_profile",

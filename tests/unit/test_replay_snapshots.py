@@ -123,6 +123,18 @@ def test_reported_snapshot_has_no_exact_status(tmp_path):
     assert not replay["executable"]
 
 
+def test_reported_snapshot_excludes_true_precursor_arrays(tmp_path):
+    """Keep true hazard arrays outside the reported replay identity."""
+    resolved = resolved_config(tmp_path / "config")
+    env, _, _ = running_components(resolved)
+    reported = env.sim.physical_state_checksum("reported")
+
+    env.sim.state.hazard_score += 1.0
+    env.sim.state.early_indicator[:] = True
+
+    assert env.sim.physical_state_checksum("reported") == reported
+
+
 def test_evaluator_snapshot_has_exact_physical_fields(tmp_path):
     """Include the exact per-skier display fields only for evaluators."""
     resolved = resolved_config(tmp_path / "config")
