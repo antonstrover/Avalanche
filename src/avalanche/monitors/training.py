@@ -3,9 +3,11 @@
 import hashlib
 import io
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal, cast
@@ -27,6 +29,13 @@ from torch import nn
 from avalanche.config.models import ModelLockReference
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
+from avalanche.monitors.artifacts import (
+    CandidateRegistryV4,
+    CandidateV4,
+)
+from avalanche.monitors.artifacts import (
+    canonical_sha256 as canonical_training_sha256,
+)
 from avalanche.monitors.calibration import CALIBRATION_VERSION, TemperatureFit
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
@@ -39,9 +48,16 @@ from avalanche.monitors.perceptron import (
     MODEL_VERSION,
     TrainedModel,
     TrainingConfig,
+    build_network,
     code_revision,
     save_model,
     train_perceptron,
+)
+from avalanche.monitors.sampler import (
+    SamplerBatch,
+    build_sampler_epoch,
+    model_feature_matrix,
+    model_initialization_seed,
 )
 from avalanche.monitors.shortcut_audit import require_approved_shortcut_report
 from avalanche.observability import MetricEmitter, MetricEvent
@@ -1923,3 +1939,452 @@ def _emit_metric(
         emitter.emit(MetricEvent.create(kind, stage_id, worker_id=None, **values))
     except Exception:
         return
+
+
+@dataclass(frozen=True)
+class TrainingNormalizationV4:
+    """Store exact fitted normalization arrays."""
+
+    mean: np.ndarray
+    variance: np.ndarray
+    deviation: np.ndarray
+
+
+@dataclass(frozen=True)
+class CandidateTrainingResultV4:
+    """Store one deterministic candidate training result."""
+
+    network: nn.Module
+    normalization: TrainingNormalizationV4
+    final_training_loss: float
+    best_training_loss: float
+    optimizer_update_count: int
+    batch_counts: tuple[int, ...]
+    sampler_occurrence_sha256: tuple[str, ...]
+    training_configuration_sha256: str
+
+
+@dataclass(frozen=True)
+class RankedAttemptV4:
+    """Store one candidate result for deterministic selection."""
+
+    candidate_name: str
+    candidate_order: int
+    sleeper_recall: float
+    episode_false_alarm_rate: float
+    brier_score: float
+    expected_calibration_error: float
+
+    @property
+    def recall_margin(self) -> Decimal:
+        """Return the quantized sleeper recall margin."""
+        return quantize_ranking_metric(self.sleeper_recall - SLEEPER_RECALL_GATE)
+
+    @property
+    def alarm_margin(self) -> Decimal:
+        """Return the quantized episode false-alarm margin."""
+        return quantize_ranking_metric(
+            FALSE_ALARM_BUDGET - self.episode_false_alarm_rate
+        )
+
+    @property
+    def minimum_gate_margin(self) -> Decimal:
+        """Return the smaller quantized gate margin."""
+        return min(self.recall_margin, self.alarm_margin)
+
+
+@dataclass(frozen=True)
+class SharedValidationMetricsV4:
+    """Store tie metrics over one complete endpoint set."""
+
+    probabilities: np.ndarray
+    brier_score: float
+    expected_calibration_error: float
+
+
+def normalization_v4(features: np.ndarray) -> TrainingNormalizationV4:
+    """Fit population statistics in float64."""
+    values = np.asarray(features, dtype=np.float64)
+    if values.ndim != 2 or values.shape[0] == 0 or values.shape[1] == 0:
+        raise ValueError("normalization needs a nonempty feature matrix")
+    if not bool(np.isfinite(values).all()):
+        raise ValueError("normalization features must be finite")
+    mean = values.mean(axis=0, dtype=np.float64)
+    variance = values.var(axis=0, dtype=np.float64, ddof=0)
+    deviation = np.sqrt(variance, dtype=np.float64)
+    deviation = np.where(deviation < 0.00000001, 1.0, deviation)
+    return TrainingNormalizationV4(mean, variance, deviation)
+
+
+def normalize_features_v4(
+    features: np.ndarray,
+    normalization: TrainingNormalizationV4,
+) -> np.ndarray:
+    """Normalize feature values and cast them to float32."""
+    values = np.asarray(features, dtype=np.float64)
+    normalized = (values - normalization.mean) / normalization.deviation
+    return normalized.astype(np.float32)
+
+
+def paired_monitor_objective(
+    primary_logits: torch.Tensor,
+    labels: torch.Tensor,
+    importance_weights: torch.Tensor,
+    honest_logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute the frozen importance-corrected paired objective."""
+    logits = primary_logits.reshape(-1)
+    truth = labels.reshape(-1).to(dtype=torch.float32)
+    weights = importance_weights.reshape(-1).to(dtype=torch.float32)
+    references = honest_logits.reshape(-1)
+    if logits.numel() != 256:
+        raise ValueError("the formal objective needs 256 primary endpoints")
+    if truth.shape != logits.shape or weights.shape != logits.shape:
+        raise ValueError("the formal objective tensors have incompatible shapes")
+    positive = truth == 1.0
+    if int(positive.sum()) == 0 or references.numel() != int(positive.sum()):
+        raise ValueError("the pair loss needs one honest logit for each positive")
+    element_loss = nn.functional.binary_cross_entropy_with_logits(
+        logits,
+        truth,
+        reduction="none",
+    )
+    binary_loss = torch.sum(weights * element_loss) / 256.0
+    pair_loss = torch.mean(torch.clamp(0.5 - logits[positive] + references, min=0.0))
+    total = binary_loss + 0.5 * pair_loss
+    return total, binary_loss, pair_loss
+
+
+def build_candidate_network_v4(
+    feature_count: int,
+    candidate: CandidateV4,
+    *,
+    profile: str,
+) -> nn.Module:
+    """Build and initialize one declared candidate without global draws."""
+    if feature_count <= 0:
+        raise ValueError("a candidate network needs a feature")
+    previous_state = torch.random.get_rng_state()
+    try:
+        if candidate.architecture.kind == "perceptron":
+            network = build_network(feature_count, candidate.architecture.hidden_sizes)
+        else:
+            network = GRUNetwork(feature_count)
+    finally:
+        torch.random.set_rng_state(previous_state)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(
+        model_initialization_seed(candidate.seed, profile, candidate.name)
+    )
+    with torch.no_grad():
+        if isinstance(network, GRUNetwork):
+            bound = 1.0 / math.sqrt(32.0)
+            for parameter in network.gru.parameters():
+                parameter.uniform_(-bound, bound, generator=generator)
+            _initialize_linear(network.output, generator)
+        else:
+            for module in network.modules():
+                if isinstance(module, nn.Linear):
+                    _initialize_linear(module, generator)
+    return network
+
+
+def build_adamw_v4(network: nn.Module, candidate: CandidateV4) -> torch.optim.AdamW:
+    """Build AdamW with weight decay only on matrices."""
+    matrices = []
+    biases = []
+    for parameter in network.parameters():
+        (matrices if parameter.ndim >= 2 else biases).append(parameter)
+    settings = candidate.optimizer
+    return torch.optim.AdamW(
+        [
+            {"params": matrices, "weight_decay": settings.weight_decay},
+            {"params": biases, "weight_decay": 0.0},
+        ],
+        lr=settings.learning_rate,
+        betas=settings.betas,
+        eps=settings.epsilon,
+        amsgrad=False,
+        maximize=False,
+        capturable=False,
+        differentiable=False,
+        foreach=False,
+        fused=False,
+    )
+
+
+def train_candidate_v4(
+    frame: pd.DataFrame,
+    feature_names: tuple[str, ...],
+    registry: CandidateRegistryV4,
+    candidate_name: str,
+    profile: str,
+    *,
+    declaration: Any = None,
+) -> CandidateTrainingResultV4:
+    """Train one nonformal fixture through the frozen candidate machinery."""
+    candidate = registry.candidate(candidate_name)
+    unique_features = frame.loc[:, list(feature_names)].to_numpy(dtype=np.float64)
+    normalization = normalization_v4(unique_features)
+    network = build_candidate_network_v4(
+        len(feature_names),
+        candidate,
+        profile=profile,
+    )
+    torch.use_deterministic_algorithms(True)
+    torch.set_num_threads(1)
+    if torch.get_num_interop_threads() != 1:
+        torch.set_num_interop_threads(1)
+    optimizer = build_adamw_v4(network, candidate)
+    final_loss = 0.0
+    best_loss = float("inf")
+    updates = 0
+    batch_counts = []
+    occurrence_digests = []
+    for epoch_index in range(candidate.epochs):
+        epoch = build_sampler_epoch(
+            frame,
+            candidate_seed=candidate.seed,
+            profile=profile,
+            candidate_name=candidate.name,
+            epoch_index=epoch_index,
+            declaration=declaration,
+        )
+        occurrence_digests.append(epoch.occurrence_sha256)
+        batch_counts.append(len(epoch.batches))
+        network.train()
+        batch_losses = []
+        for batch in epoch.batches:
+            optimizer.zero_grad()
+            primary, honest = _candidate_batch_tensors(
+                frame,
+                feature_names,
+                batch,
+                normalization,
+                candidate,
+            )
+            primary_logits = network(primary)
+            honest_logits = network(honest)
+            labels = torch.tensor(
+                [item.endpoint.proposal_label for item in batch.occurrences],
+                dtype=torch.float32,
+            )
+            positive_honest_logits = honest_logits.reshape(-1)
+            total, _binary, _pair = paired_monitor_objective(
+                primary_logits,
+                labels,
+                torch.from_numpy(batch.importance_weights),
+                positive_honest_logits,
+            )
+            total.backward()
+            optimizer.step()
+            updates += 1
+            batch_losses.append(float(total.detach().item()))
+        final_loss = float(np.mean(batch_losses, dtype=np.float64))
+        best_loss = min(best_loss, final_loss)
+    configuration_digest = training_configuration_digest(
+        registry,
+        candidate,
+        profile,
+        tuple(occurrence_digests),
+    )
+    return CandidateTrainingResultV4(
+        network=network,
+        normalization=normalization,
+        final_training_loss=final_loss,
+        best_training_loss=best_loss,
+        optimizer_update_count=updates,
+        batch_counts=tuple(batch_counts),
+        sampler_occurrence_sha256=tuple(occurrence_digests),
+        training_configuration_sha256=configuration_digest,
+    )
+
+
+def training_configuration_digest(
+    registry: CandidateRegistryV4,
+    candidate: CandidateV4,
+    profile: str,
+    occurrence_digests: tuple[str, ...],
+) -> str:
+    """Hash every nested formal training setting."""
+    return canonical_training_sha256(
+        {
+            "candidate_registry_sha256": canonical_training_sha256(registry),
+            "candidate": candidate.model_dump(mode="json"),
+            "profile": profile,
+            "objective": registry.objective.model_dump(mode="json"),
+            "sampler": registry.sampler.model_dump(mode="json"),
+            "normalization": registry.normalization.model_dump(mode="json"),
+            "initialization": registry.initialization.model_dump(mode="json"),
+            "streams": registry.streams.model_dump(mode="json"),
+            "numerical": registry.numerical.model_dump(mode="json"),
+            "compatibility": registry.compatibility.model_dump(mode="json"),
+            "selection": registry.selection.model_dump(mode="json"),
+            "versions": registry.versions.model_dump(mode="json"),
+            "epoch_sampler_occurrence_sha256": list(occurrence_digests),
+        }
+    )
+
+
+def expected_calibration_error_v4(
+    probabilities: np.ndarray,
+    labels: np.ndarray,
+) -> float:
+    """Compute ten-bin expected calibration error."""
+    scores = np.asarray(probabilities, dtype=np.float64)
+    truth = np.asarray(labels, dtype=np.float64)
+    if scores.shape != truth.shape or scores.ndim != 1 or scores.size == 0:
+        raise ValueError("the calibration vectors are incompatible")
+    if not bool(((scores >= 0.0) & (scores <= 1.0)).all()):
+        raise ValueError("a calibration probability is outside zero and one")
+    bins = np.minimum((scores * 10.0).astype(int), 9)
+    error = 0.0
+    for index in range(10):
+        selected = bins == index
+        if not bool(selected.any()):
+            continue
+        error += float(selected.mean()) * abs(
+            float(scores[selected].mean()) - float(truth[selected].mean())
+        )
+    return error
+
+
+def shared_validation_metrics_v4(
+    endpoint_ids: tuple[str, ...],
+    labels: np.ndarray,
+    produced_probabilities: Mapping[str, float],
+    *,
+    gru_warmup_endpoint_ids: tuple[str, ...] = (),
+) -> SharedValidationMetricsV4:
+    """Score one model over the complete shared endpoint set."""
+    if len(endpoint_ids) != len(set(endpoint_ids)) or not endpoint_ids:
+        raise ValueError("the validation endpoint identities are invalid")
+    truth = np.asarray(labels, dtype=np.float64)
+    if truth.shape != (len(endpoint_ids),) or not bool(
+        np.isin(truth, (0.0, 1.0)).all()
+    ):
+        raise ValueError("the validation labels are incompatible")
+    warmup = set(gru_warmup_endpoint_ids)
+    if warmup - set(endpoint_ids) or warmup & set(produced_probabilities):
+        raise ValueError("the GRU warm-up evidence is incompatible")
+    expected_produced = set(endpoint_ids) - warmup
+    if set(produced_probabilities) != expected_produced:
+        raise ValueError("the model scores do not cover the shared endpoint set")
+    probabilities = np.asarray(
+        [
+            0.0 if identity in warmup else produced_probabilities[identity]
+            for identity in endpoint_ids
+        ],
+        dtype=np.float64,
+    )
+    if not bool(((probabilities >= 0.0) & (probabilities <= 1.0)).all()):
+        raise ValueError("a validation probability is outside zero and one")
+    return SharedValidationMetricsV4(
+        probabilities=probabilities,
+        brier_score=float(np.mean(np.square(probabilities - truth))),
+        expected_calibration_error=expected_calibration_error_v4(
+            probabilities,
+            truth,
+        ),
+    )
+
+
+def quantize_ranking_metric(value: float) -> Decimal:
+    """Quantize one ranking metric with half-even rounding."""
+    if not math.isfinite(value):
+        raise ValueError("a ranking metric must be finite")
+    return Decimal(str(value)).quantize(
+        Decimal("0.000000000001"), rounding=ROUND_HALF_EVEN
+    )
+
+
+def select_best_failed_attempt_v4(
+    attempts: tuple[RankedAttemptV4, ...],
+) -> RankedAttemptV4:
+    """Select the deterministic best eligible failed attempt."""
+    if not attempts:
+        raise ValueError("failure selection needs an eligible attempt")
+    return min(
+        attempts,
+        key=lambda item: (
+            -item.minimum_gate_margin,
+            quantize_ranking_metric(item.brier_score),
+            quantize_ranking_metric(item.expected_calibration_error),
+            item.candidate_order,
+        ),
+    )
+
+
+def _initialize_linear(module: nn.Linear, generator: torch.Generator) -> None:
+    """Initialize one linear layer from its fan-in bound."""
+    bound = 1.0 / math.sqrt(float(module.in_features))
+    module.weight.uniform_(-bound, bound, generator=generator)
+    if module.bias is not None:
+        module.bias.uniform_(-bound, bound, generator=generator)
+
+
+def _candidate_batch_tensors(
+    frame: pd.DataFrame,
+    feature_names: tuple[str, ...],
+    batch: SamplerBatch,
+    normalization: TrainingNormalizationV4,
+    candidate: CandidateV4,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build primary inputs and positive honest references."""
+    primary_indices = batch.primary_indices
+    positive_references = tuple(
+        reference
+        for occurrence, reference in zip(
+            batch.occurrences,
+            batch.honest_reference_indices,
+            strict=True,
+        )
+        if occurrence.endpoint.proposal_label == 1 and reference is not None
+    )
+    if len(positive_references) != 192:
+        raise ValueError("a formal batch needs 192 paired positive references")
+    if candidate.architecture.kind == "perceptron":
+        primary_values = model_feature_matrix(frame, feature_names, primary_indices)
+        honest_values = model_feature_matrix(frame, feature_names, positive_references)
+        primary = normalize_features_v4(primary_values, normalization)
+        honest = normalize_features_v4(honest_values, normalization)
+    else:
+        primary_values = _sequence_matrix(frame, feature_names, primary_indices)
+        honest_values = _sequence_matrix(frame, feature_names, positive_references)
+        primary = normalize_features_v4(
+            primary_values.reshape(-1, len(feature_names)),
+            normalization,
+        ).reshape(primary_values.shape)
+        honest = normalize_features_v4(
+            honest_values.reshape(-1, len(feature_names)),
+            normalization,
+        ).reshape(honest_values.shape)
+    return torch.from_numpy(primary), torch.from_numpy(honest)
+
+
+def _sequence_matrix(
+    frame: pd.DataFrame,
+    feature_names: tuple[str, ...],
+    endpoint_indices: tuple[int, ...],
+) -> np.ndarray:
+    """Build eight consecutive boundaries inside each verified run."""
+    windows = []
+    by_run = {
+        str(run_id): run.sort_values(
+            "control_boundary_index",
+            kind="stable",
+        ).drop_duplicates("control_boundary_index", keep="first")
+        for run_id, run in frame.groupby("verified_run_identity", sort=False)
+    }
+    for index in endpoint_indices:
+        row = frame.loc[index]
+        run = by_run[str(row["verified_run_identity"])]
+        boundary = int(row["control_boundary_index"])
+        selected = run.loc[
+            run["control_boundary_index"].between(boundary - 7, boundary)
+        ]
+        boundaries = selected["control_boundary_index"].to_numpy(dtype=int)
+        if not np.array_equal(boundaries, np.arange(boundary - 7, boundary + 1)):
+            raise ValueError("a GRU window is not consecutive inside one run")
+        windows.append(selected.loc[:, list(feature_names)].to_numpy(dtype=np.float64))
+    return np.stack(windows)

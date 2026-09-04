@@ -14,6 +14,7 @@ import pandas as pd
 
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
+from avalanche.monitors.artifacts import CandidateV4, load_candidate_registry
 from avalanche.monitors.dataset import validate_generated_dataset
 from avalanche.monitors.perceptron import TrainingConfig
 from avalanche.monitors.training import train_locked_monitor
@@ -30,11 +31,14 @@ DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "models" / "monitor-principal"
 def build_parser() -> argparse.ArgumentParser:
     """Build the locked training command arguments."""
     parser = argparse.ArgumentParser(prog="train_monitor")
-    parser.add_argument("rows", type=Path)
-    parser.add_argument("shortcut_report", type=Path)
+    parser.add_argument("rows", type=Path, nargs="?")
+    parser.add_argument("shortcut_report", type=Path, nargs="?")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--seed", type=int, default=20260825)
-    parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--formal-campaign", type=Path)
+    parser.add_argument("--candidate-registry", type=Path)
+    parser.add_argument("--candidate-name")
     parser.add_argument(
         "--information-profile",
         choices=[profile.value for profile in InformationProfile],
@@ -51,9 +55,35 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Train one locked monitor from the fixed dataset splits."""
     args = build_parser().parse_args(argv)
+    if args.formal_campaign is not None:
+        if any(
+            value is not None
+            for value in (
+                args.rows,
+                args.shortcut_report,
+                args.seed,
+                args.epochs,
+                args.candidate_registry,
+                args.candidate_name,
+            )
+        ):
+            raise ValueError("a formal campaign rejects command-line training settings")
+        raise RuntimeError("the formal dataset handoff is not available")
+    if args.rows is None or args.shortcut_report is None:
+        raise ValueError("legacy training needs rows and a shortcut report")
+    seed = 20260825 if args.seed is None else args.seed
+    epochs = 60 if args.epochs is None else args.epochs
+    candidate = resolve_registry_candidate(
+        args.candidate_registry,
+        args.candidate_name,
+        seed=args.seed,
+        epochs=args.epochs,
+    )
+    if candidate is not None:
+        raise ValueError("a registry candidate must run through the campaign command")
     profile = InformationProfile(args.information_profile)
     stage_id = f"monitor-{profile.value.replace('_', '-')}"
-    aggregator = _training_aggregator(stage_id, profile, args.epochs)
+    aggregator = _training_aggregator(stage_id, profile, epochs)
     session = ObservabilitySession(
         aggregator=aggregator,
         enabled=False if args.no_progress else None,
@@ -63,11 +93,11 @@ def main(argv: list[str] | None = None) -> int:
         MetricEvent.create(
             "run_config",
             stage_id,
-            seed=args.seed,
+            seed=seed,
             dataset=str(args.rows),
             model=str(args.output),
             information_profile=profile.value,
-            epochs=args.epochs,
+            epochs=epochs,
             training_configuration="batch=256, learning-rate=0.001",
         )
     )
@@ -101,8 +131,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.shortcut_report,
                 args.output,
                 config=TrainingConfig(
-                    seed=args.seed,
-                    epochs=args.epochs,
+                    seed=seed,
+                    epochs=epochs,
                     information_profile=profile.value,
                 ),
                 dataset_checksums=checksums,
@@ -113,6 +143,23 @@ def main(argv: list[str] | None = None) -> int:
             _fail_running_stages(session, stage_id, error)
             raise
     return 0
+
+
+def resolve_registry_candidate(
+    registry_path: Path | None,
+    candidate_name: str | None,
+    *,
+    seed: int | None,
+    epochs: int | None,
+) -> CandidateV4 | None:
+    """Resolve formal settings only from the frozen registry."""
+    if registry_path is None and candidate_name is None:
+        return None
+    if registry_path is None or candidate_name is None:
+        raise ValueError("formal training needs one registry and candidate")
+    if seed is not None or epochs is not None:
+        raise ValueError("formal training rejects seed and epoch overrides")
+    return load_candidate_registry(registry_path).candidate(candidate_name)
 
 
 def _training_aggregator(

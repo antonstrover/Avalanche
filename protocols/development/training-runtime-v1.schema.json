@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/antonstrover/Avalanche/protocols/development/training-runtime-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runtime_version",
+    "platform",
+    "libraries",
+    "threads",
+    "deterministic_algorithms",
+    "dtypes"
+  ],
+  "properties": {
+    "runtime_version": {"const": 1},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operating_system_name",
+        "operating_system_version",
+        "operating_system_build",
+        "machine_architecture",
+        "cpu_brand"
+      ],
+      "properties": {
+        "operating_system_name": {"type": "string", "minLength": 1},
+        "operating_system_version": {"type": "string", "minLength": 1},
+        "operating_system_build": {"type": "string", "minLength": 1},
+        "machine_architecture": {"type": "string", "minLength": 1},
+        "cpu_brand": {"type": "string", "minLength": 1}
+      }
+    },
+    "libraries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_version",
+        "pytorch_version",
+        "numpy_version",
+        "blas_version",
+        "uv_lock_sha256"
+      ],
+      "properties": {
+        "python_version": {"type": "string", "minLength": 1},
+        "pytorch_version": {"type": "string", "minLength": 1},
+        "numpy_version": {"type": "string", "minLength": 1},
+        "blas_version": {"type": "string", "minLength": 1},
+        "uv_lock_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "threads": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["torch_intraop", "torch_interop", "environment"],
+      "properties": {
+        "torch_intraop": {"const": 1},
+        "torch_interop": {"const": 1},
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS"
+          ],
+          "properties": {
+            "OMP_NUM_THREADS": {"const": "1"},
+            "MKL_NUM_THREADS": {"const": "1"},
+            "OPENBLAS_NUM_THREADS": {"const": "1"},
+            "VECLIB_MAXIMUM_THREADS": {"const": "1"}
+          }
+        }
+      }
+    },
+    "deterministic_algorithms": {"const": true},
+    "dtypes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "normalization_statistics", "normalized_features"],
+      "properties": {
+        "model": {"const": "float32"},
+        "normalization_statistics": {"const": "float64"},
+        "normalized_features": {"const": "float32"}
+      }
+    }
+  }
+}
