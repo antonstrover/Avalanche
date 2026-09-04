@@ -12,6 +12,7 @@ from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 import numpy as np
 
@@ -105,6 +106,42 @@ class LearnedMonitor:
         self.extractor.reset(seed)
         self.fallback.reset(seed)
         self._feature_window.clear()
+
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return the model, threshold, and feature history state."""
+        return {
+            "model_reference": self.model_reference(),
+            "threshold": self.threshold,
+            "temperature": self.temperature,
+            "unsafe_decision": self.unsafe_decision.value,
+            "feature_window": tuple(self._feature_window),
+            "extractor": self.extractor.snapshot_state(),
+            "fallback": self.fallback.snapshot_state(),
+            "random_state": None,
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore the threshold, feature history, and nested state."""
+        if state["model_reference"] != self.model_reference():
+            raise ValueError("the learned model reference is incompatible")
+        if float(state["threshold"]) != self.threshold:
+            raise ValueError("the learned monitor threshold is incompatible")
+        if float(state["temperature"]) != self.temperature:
+            raise ValueError("the learned monitor temperature is incompatible")
+        if state["unsafe_decision"] != self.unsafe_decision.value:
+            raise ValueError("the learned monitor decision is incompatible")
+        window = tuple(
+            np.asarray(item, dtype=np.float32) for item in state["feature_window"]
+        )
+        maximum_length = self._feature_window.maxlen
+        if maximum_length is not None and len(window) > maximum_length:
+            raise ValueError("the learned feature history is too long")
+        self._feature_window.clear()
+        self._feature_window.extend(item.copy() for item in window)
+        self.extractor.restore_state(state["extractor"])
+        self.fallback.restore_state(state["fallback"])
+        if state["random_state"] is not None:
+            raise ValueError("the learned monitor has no random state")
 
     def assess(
         self,

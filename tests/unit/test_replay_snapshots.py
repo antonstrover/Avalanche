@@ -1,178 +1,405 @@
-"""Check the version three display replay snapshot."""
+"""Check separate physical replay and continuation snapshots."""
 
-import json
+import copy
+import hashlib
 from pathlib import Path
 
-import numpy as np
 import pytest
 
-from avalanche.config.models import PopulationConfig
-from avalanche.metrics import METRICS_VERSION
-from avalanche.sim import MountainSim, display_progress
-from avalanche.sim.engine import STREAM_NAMES
+from avalanche.config import ResolvedConfig
+from avalanche.control import (
+    ApprovalChoice,
+    ApprovalRequest,
+    ApprovalResponse,
+    DecisionType,
+    MonitorDecision,
+    SimulatedApprover,
+)
+from avalanche.controllers import build_controller
+from avalanche.controllers.attacks import AttackLifecycle
+from avalanche.controllers.factory import build_fallback
+from avalanche.env import AvalancheEnv, build_resolved_environment
+from avalanche.monitors import build_monitor
 from avalanche.traces import (
-    SNAPSHOT_SCHEMA_VERSION,
+    CONTINUATION_ARTIFACT_TYPE,
+    CONTINUATION_SCHEMA_VERSION,
+    PHYSICAL_REPLAY_ARTIFACT_TYPE,
+    PHYSICAL_REPLAY_SCHEMA_VERSION,
     SnapshotSchemaError,
-    encode_snapshot,
+    encode_continuation_snapshot,
+    encode_physical_replay_snapshot,
+    load_continuation_snapshot,
+    load_legacy_display_snapshot,
+    load_physical_replay_snapshot,
+    restore_continuation_snapshot,
     restore_snapshot,
+    write_continuation_snapshot,
 )
-from avalanche.traces.snapshots import _random_streams
-
-FIXTURE = (
-    Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
-)
-SEED = 612
+from avalanche.traces.checksums import canonical_messagepack, named_checksum
+from tests.configuration import resolve_test_configuration
 
 
-def populated_simulator() -> MountainSim:
-    """Return one simulator with moving skiers."""
-    sim = MountainSim(FIXTURE)
-    sim.reset(
-        SEED,
-        {
-            "population": PopulationConfig(
-                skier_count=24,
-                arrival_window_seconds=0.0,
-                compliance_mean=0.5,
-                compliance_spread=0.0,
-            ),
-            "tick_seconds": 5.0,
-            "episode_duration_seconds": 120.0,
+def resolved_config(root: Path) -> ResolvedConfig:
+    """Return one short formal episode configuration."""
+    return resolve_test_configuration(
+        root,
+        mountain="configs/mountain/small.yaml",
+        scenario="configs/scenarios/default.yaml",
+        controller="configs/controllers/small-resort/honest.yaml",
+        monitor="configs/monitors/none.yaml",
+        changes={
+            "scenario": {
+                "intervals": {
+                    "movement_tick_seconds": 5.0,
+                    "control_interval_seconds": 5.0,
+                },
+                "snapshot_interval_seconds": 5.0,
+            }
+        },
+        override={
+            "population": {"skier_count": 8},
+            "episode_duration_seconds": 15.0,
         },
     )
-    for _ in range(3):
-        sim.tick()
-    return sim
 
 
-def snapshot(sim: MountainSim) -> dict:
-    """Encode one test snapshot."""
-    return encode_snapshot(
-        sim,
+def running_components(
+    resolved: ResolvedConfig,
+) -> tuple[AvalancheEnv, object, AttackLifecycle]:
+    """Return one reset environment and its executable components."""
+    env = build_resolved_environment(resolved)
+    controller = build_controller(resolved.controller, env.topology)
+    fallback = build_fallback(
+        resolved.fallback.policy,
+        resolved.controller,
+        env.topology,
+    )
+    monitor = build_monitor(resolved.monitor, resolved.controller, env.topology)
+    env.configure_adjudicator(
+        monitor,
+        fallback,
+        SimulatedApprover(ApprovalChoice(resolved.approval.simulated_choice)),
+        resolved.approval.timeout_seconds,
+    )
+    controller.reset(resolved.seed)
+    env.reset(seed=resolved.seed)
+    return env, controller, AttackLifecycle()
+
+
+def continuation(root: Path) -> tuple[ResolvedConfig, dict]:
+    """Return one snapshot after a complete control interval."""
+    resolved = resolved_config(root)
+    env, controller, lifecycle = running_components(resolved)
+    proposal = controller.propose(env.controller_observation())
+    env.step_proposal(proposal)
+    return resolved, encode_continuation_snapshot(
+        env,
+        controller,
+        resolved,
+        attack_lifecycle=lifecycle,
+        trace_state={"sequence": 1, "snapshot_cadence": 5.0},
+        runtime_state={"next_snapshot_time": 10.0},
+    )
+
+
+def test_reported_snapshot_has_no_exact_status(tmp_path):
+    """Keep per-skier truth out of the reported replay view."""
+    resolved = resolved_config(tmp_path / "config")
+    env, _, _ = running_components(resolved)
+    row = encode_physical_replay_snapshot(
+        env.sim,
+        view_kind="reported",
         run_id="run-one",
         episode_id="episode-0",
-        seed=SEED,
     )
+    replay = load_physical_replay_snapshot(row)
+
+    assert row["artifact_type"] == PHYSICAL_REPLAY_ARTIFACT_TYPE
+    assert row["schema_version"] == PHYSICAL_REPLAY_SCHEMA_VERSION
+    assert row["view_kind"] == "reported"
+    assert "population" not in replay["state"]
+    assert "status" not in replay["state"]
+    assert "physical_state_checksum" in row
+    assert "state_checksum" not in row
+    assert not replay["executable"]
 
 
-def array_entries(row: dict) -> dict[str, dict]:
-    """Index each encoded array by its name."""
-    return {entry["name"]: entry for entry in row["arrays"]}
+def test_reported_snapshot_excludes_true_precursor_arrays(tmp_path):
+    """Keep true hazard arrays outside the reported replay identity."""
+    resolved = resolved_config(tmp_path / "config")
+    env, _, _ = running_components(resolved)
+    reported = env.sim.physical_state_checksum("reported")
+
+    env.sim.state.hazard_score += 1.0
+    env.sim.state.early_indicator[:] = True
+
+    assert env.sim.physical_state_checksum("reported") == reported
 
 
-def test_version_three_derives_display_progress():
-    """Encode bounded progress without persisting formal travel state."""
-    sim = populated_simulator()
-    row = snapshot(sim)
-    arrays = array_entries(row)
+def test_evaluator_snapshot_has_exact_physical_fields(tmp_path):
+    """Include the exact per-skier display fields only for evaluators."""
+    resolved = resolved_config(tmp_path / "config")
+    env, _, _ = running_components(resolved)
+    row = encode_physical_replay_snapshot(
+        env.sim,
+        view_kind="evaluator",
+        run_id="run-one",
+        episode_id="episode-0",
+    )
+    replay = load_physical_replay_snapshot(row)
 
-    assert row["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
-    assert "population.progress" in arrays
-    assert "population.required_travel_seconds" not in arrays
-    assert "population.remaining_travel_seconds" not in arrays
-    assert "population.first_stranded_at" not in arrays
-    assert "population.ever_stranded" not in arrays
-    progress = np.frombuffer(arrays["population.progress"]["data"], dtype="<f8")
-    np.testing.assert_array_equal(progress, display_progress(sim.population))
-    assert np.all((progress >= 0.0) & (progress <= 1.0))
-
-
-def test_version_three_keeps_the_display_population_array_names():
-    """Keep the old display array contract until its owned migration."""
-    arrays = array_entries(snapshot(populated_simulator()))
-    population_names = {
-        name.removeprefix("population.")
-        for name in arrays
-        if name.startswith("population.")
-    }
-
-    assert population_names == {
+    assert set(replay["state"]["population"]) == {
         "location_kind",
         "location_index",
-        "progress",
-        "destination",
-        "ability",
-        "risk_tolerance",
-        "group",
-        "compliance",
+        "required_travel_seconds",
+        "remaining_travel_seconds",
         "status",
-        "wait_time",
-        "journey_time",
-        "blocked_time",
-        "arrival_time",
-        "queue_ticket",
     }
 
 
-def test_the_snapshot_records_portable_types_and_shapes():
-    """Keep each version three array portable."""
-    row = snapshot(populated_simulator())
+def test_physical_replay_cannot_resume(tmp_path):
+    """Reject execution restoration from both replay views."""
+    resolved = resolved_config(tmp_path / "config")
+    env, _, _ = running_components(resolved)
+    before = env.sim.physical_state_checksum()
 
-    assert all(
-        set(entry) == {"name", "dtype", "shape", "data"} for entry in row["arrays"]
-    )
-    assert {entry["dtype"] for entry in row["arrays"]} <= {
-        "uint8",
-        "int8",
-        "int32-le",
-        "int64-le",
-        "float64-le",
-    }
-    assert all(isinstance(entry["shape"], list) for entry in row["arrays"])
-
-
-def test_the_snapshot_records_each_non_array_state_group():
-    """Keep each existing version three state group."""
-    state = json.loads(snapshot(populated_simulator())["state_json"])
-
-    assert set(state) == {
-        "population",
-        "weather",
-        "hazard_events",
-        "active_failures",
-        "active_operational_event_ids",
-        "audit",
-        "metrics",
-        "random_streams",
-    }
-    assert state["metrics"]["metrics_version"] == METRICS_VERSION
-
-
-def test_the_snapshot_round_trips_each_appended_random_stream():
-    sim = populated_simulator()
-    state = json.loads(snapshot(sim)["state_json"])
-
-    restored = _random_streams(state["random_streams"])
-
-    assert set(restored) == set(STREAM_NAMES)
-    for name in ("operational_sensor", "audit_missing"):
-        assert (
-            restored[name].bit_generator.state == sim.streams[name].bit_generator.state
+    for view_kind in ("reported", "evaluator"):
+        row = encode_physical_replay_snapshot(
+            env.sim,
+            view_kind=view_kind,
+            run_id="run-one",
+            episode_id="episode-0",
         )
-        expected = np.random.default_rng()
-        expected.bit_generator.state = sim.streams[name].bit_generator.state
-        np.testing.assert_array_equal(restored[name].random(8), expected.random(8))
+        with pytest.raises(SnapshotSchemaError, match="display-only"):
+            restore_snapshot(env.sim, row)
+
+    assert env.sim.physical_state_checksum() == before
 
 
-def test_version_three_rejects_formal_state_restoration():
-    """Do not guess remaining travel seconds from derived progress."""
-    original = populated_simulator()
-    target = MountainSim(FIXTURE)
-    target.reset(SEED)
-    before = target.state_checksum()
+def test_continuation_restores_every_simulator_array(tmp_path):
+    """Restore the exact simulator state into new components."""
+    resolved, snapshot = continuation(tmp_path / "config")
+    restored = restore_continuation_snapshot(snapshot, resolved=resolved)
+    env = restored["environment"]
 
+    assert env.sim.physical_state_checksum("reported") == named_checksum(
+        env.sim.physical_replay_state("reported"),
+        allow_nonfinite=True,
+    )
+    assert env.sim.physical_state_checksum("evaluator") == named_checksum(
+        env.sim.physical_replay_state("evaluator"),
+        allow_nonfinite=True,
+    )
+    assert snapshot["artifact_type"] == CONTINUATION_ARTIFACT_TYPE
+    assert snapshot["schema_version"] == CONTINUATION_SCHEMA_VERSION
+    assert "continuation_checksum" in snapshot
+    assert "physical_state_checksum" not in snapshot
+    assert "artifact_sha256" not in snapshot
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        "simulator",
+        "environment",
+        "controller",
+        "monitor",
+        "fallback",
+        "approval",
+        "adjudicator",
+        "feature_extractor",
+        "attack_lifecycle",
+        "trace",
+        "runtime",
+        "references",
+        "compatibility",
+    ],
+)
+def test_each_continuation_section_is_tamper_evident(tmp_path, section):
+    """Reject an independent change to every continuation section."""
+    resolved, snapshot = continuation(tmp_path / section)
+    tampered = copy.deepcopy(snapshot)
+    tampered[section]["tampered"] = True
+
+    with pytest.raises(SnapshotSchemaError, match="checksum"):
+        restore_continuation_snapshot(tampered, resolved=resolved)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("simulator", "random_streams", "audit"),
+        ("monitor", "state"),
+        ("simulator", "route_sensor"),
+        ("environment", "control_history"),
+    ],
+)
+def test_future_state_tampering_fails(tmp_path, path):
+    """Reject tampering in a known future-influencing state owner."""
+    resolved, snapshot = continuation(tmp_path / path[-1])
+    tampered = copy.deepcopy(snapshot)
+    target = tampered
+    for name in path[:-1]:
+        target = target[name]
+    name = path[-1]
+    target[name] = {"original": target[name], "tampered": True}
+
+    with pytest.raises(SnapshotSchemaError, match="checksum"):
+        restore_continuation_snapshot(tampered, resolved=resolved)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "python_version",
+        "numpy_version",
+        "bit_generator_class",
+        "code_revision",
+        "protocol_digests",
+    ],
+)
+def test_runtime_compatibility_rejection_table(tmp_path, field):
+    """Reject every recorded runtime or code identity mismatch."""
+    resolved, snapshot = continuation(tmp_path / field)
+    tampered = copy.deepcopy(snapshot)
+    if field == "protocol_digests":
+        tampered["compatibility"][field]["test"] = "0" * 64
+    else:
+        tampered["compatibility"][field] = "incompatible"
+    tampered["continuation_checksum"] = named_checksum(
+        tampered,
+        allow_nonfinite=True,
+    )
+
+    with pytest.raises(SnapshotSchemaError, match="compatibility"):
+        restore_continuation_snapshot(tampered, resolved=resolved)
+
+
+def test_file_sha_fails_before_parse(tmp_path):
+    """Check the expected file identity before MessagePack parsing."""
+    resolved = resolved_config(tmp_path / "config")
+    path = tmp_path / "bad.avalanche-continuation.msgpack"
+    path.write_bytes(b"not canonical MessagePack")
+
+    with pytest.raises(SnapshotSchemaError, match="artifact SHA-256"):
+        load_continuation_snapshot(
+            path,
+            expected_artifact_sha256="0" * 64,
+            resolved=resolved,
+        )
+
+
+def test_continuation_file_uses_three_identity_boundaries(tmp_path):
+    """Keep the logical and exact file identities in separate records."""
+    resolved, snapshot = continuation(tmp_path / "config")
+    path = tmp_path / "state.avalanche-continuation.msgpack"
+    manifest = write_continuation_snapshot(path, snapshot)
+    loaded = load_continuation_snapshot(
+        path,
+        expected_artifact_sha256=manifest["artifact_sha256"],
+        resolved=resolved,
+    )
+
+    assert loaded["continuation_checksum"] == snapshot["continuation_checksum"]
+    assert manifest["artifact_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert "artifact_sha256" not in loaded
+
+
+def test_cross_type_load_is_rejected(tmp_path):
+    """Reject each snapshot type at the other loader boundary."""
+    resolved, snapshot = continuation(tmp_path / "config")
+    env, _, _ = running_components(resolved)
+    replay = encode_physical_replay_snapshot(
+        env.sim,
+        view_kind="evaluator",
+        run_id="run-one",
+        episode_id="episode-0",
+    )
+    with pytest.raises(SnapshotSchemaError):
+        load_physical_replay_snapshot(snapshot)
+
+    path = tmp_path / "replay.avalanche-continuation.msgpack"
+    content = canonical_messagepack(replay, allow_nonfinite=True)
+    path.write_bytes(content)
+    with pytest.raises(SnapshotSchemaError):
+        load_continuation_snapshot(
+            path,
+            expected_artifact_sha256=hashlib.sha256(content).hexdigest(),
+            resolved=resolved,
+        )
+
+
+@pytest.mark.parametrize("version", [3, 4, 5])
+def test_legacy_display_rows_remain_non_executable(tmp_path, version):
+    """Keep each supported legacy display adapter outside formal state."""
+    row = {
+        "snapshot_schema_version": version,
+        "state_checksum": "legacy-display-identity",
+        "arrays": [],
+    }
+    loaded = load_legacy_display_snapshot(row)
+
+    assert not loaded["formal"]
+    assert not loaded["executable"]
     with pytest.raises(SnapshotSchemaError, match="display-only"):
-        restore_snapshot(target, snapshot(original))
-
-    assert target.state_checksum() == before
+        restore_snapshot(object(), row)
 
 
-def test_an_unsupported_snapshot_version_is_rejected():
-    """Reject an unknown snapshot version before its type check."""
-    target = MountainSim(FIXTURE)
-    target.reset(SEED)
-    row = snapshot(populated_simulator())
-    row["snapshot_schema_version"] += 1
+def test_a_wrong_continuation_extension_is_rejected_after_parse(tmp_path):
+    """Reject a valid continuation carried by the wrong artifact extension."""
+    resolved, snapshot = continuation(tmp_path / "config")
+    content = canonical_messagepack(snapshot, allow_nonfinite=True)
+    path = tmp_path / "state.msgpack"
+    path.write_bytes(content)
 
-    with pytest.raises(SnapshotSchemaError, match="unsupported"):
-        restore_snapshot(target, row)
+    with pytest.raises(SnapshotSchemaError, match="extension"):
+        load_continuation_snapshot(
+            path,
+            expected_artifact_sha256=hashlib.sha256(content).hexdigest(),
+            resolved=resolved,
+        )
+
+
+@pytest.mark.parametrize("phase", ["before", "during", "after"])
+def test_pending_approval_state_restores_at_each_phase(tmp_path, phase):
+    """Restore the relative approval deadline around a pending request."""
+    resolved = resolved_config(tmp_path / phase)
+    env, controller, lifecycle = running_components(resolved)
+    proposal = controller.propose(env.controller_observation())
+    decision = MonitorDecision(
+        risk_score=0.8,
+        decision=DecisionType.ESCALATE,
+        reason_codes=("test_escalation",),
+    )
+    request = ApprovalRequest(
+        decision_id="decision-one",
+        proposal=proposal,
+        decision=decision,
+        safe_fallback=proposal.action,
+        predicted_result=(),
+        deadline_epoch_seconds=9_999_999.0,
+    )
+    if phase == "during":
+        env.adjudicator.pending_approval = request
+        env.adjudicator.pending_approval_remaining_seconds = 12.5
+    if phase == "after":
+        env.adjudicator.last_approval_response = ApprovalResponse(ApprovalChoice.BLOCK)
+    snapshot = encode_continuation_snapshot(
+        env,
+        controller,
+        resolved,
+        attack_lifecycle=lifecycle,
+        trace_state={},
+        runtime_state={},
+    )
+    state = snapshot["adjudicator"]["state"]
+    if phase == "during":
+        assert state["pending_approval"]["deadline_epoch_seconds"] is None
+    restored = restore_continuation_snapshot(snapshot, resolved=resolved)
+    adjudicator = restored["environment"].adjudicator
+
+    assert (adjudicator.pending_approval is not None) == (phase == "during")
+    assert adjudicator.pending_approval_remaining_seconds == (
+        12.5 if phase == "during" else None
+    )
+    assert (adjudicator.last_approval_response is not None) == (phase == "after")

@@ -19,6 +19,9 @@ from avalanche.config import (
     load_yaml,
 )
 from avalanche.config.models import PopulationConfig
+from avalanche.control import ApprovalChoice, SimulatedApprover
+from avalanche.controllers import build_controller
+from avalanche.controllers.attacks import AttackLifecycle
 from avalanche.controllers.factory import build_fallback
 from avalanche.env import build_resolved_environment, neutral_action
 from avalanche.experiments import run_episode as write_episode
@@ -35,6 +38,10 @@ from avalanche.monitors.perceptron import (
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import LocationKind, MountainSim, population_from_starts
 from avalanche.sim.engine import STREAM_NAMES
+from avalanche.traces import (
+    encode_continuation_snapshot,
+    restore_continuation_snapshot,
+)
 from tests.configuration import resolve_test_configuration
 
 FIXTURE = (
@@ -106,7 +113,7 @@ DETERMINISTIC_SUMMARY_FIELDS = (
     "truncated",
     "simulation_time",
     "step",
-    "state_checksum",
+    "physical_state_checksum",
     "metrics",
     "attack_lifecycle",
     "information_profile",
@@ -146,7 +153,7 @@ def run(seed: int) -> list[str]:
     checksums = []
     for _ in range(TICK_COUNT):
         sim.tick()
-        checksums.append(sim.state_checksum())
+        checksums.append(sim.physical_state_checksum())
     return checksums
 
 
@@ -339,7 +346,7 @@ def failure_recovery_run(seed: int) -> tuple[list[dict[str, Any]], tuple[tuple, 
         sim.tick()
         timeline.append(
             (
-                sim.state_checksum(),
+                sim.physical_state_checksum(),
                 tuple(int(value) for value in pop.status),
                 tuple(float(value) for value in pop.queue_no_route_blocked_seconds),
                 tuple(float(value) for value in pop.onboard_blocked_seconds),
@@ -925,3 +932,120 @@ def test_active_learned_monitor_runs_keep_each_simulated_result(tmp_path):
         assert summary["performance"]["performance_version"] == 1
         assert summary["performance"]["monitor_latency_seconds_sum"] > 0.0
         assert summary["performance"]["intervention_latency_seconds_sum"] > 0.0
+
+
+def test_continuation_matches_uninterrupted_episode_bit_for_bit(tmp_path):
+    """Match later decisions and state after a mid-episode restoration."""
+    resolved = resolve_test_configuration(
+        tmp_path / "config",
+        mountain="configs/mountain/small.yaml",
+        scenario="configs/scenarios/default.yaml",
+        controller="configs/controllers/small-resort/honest.yaml",
+        monitor="configs/monitors/none.yaml",
+        changes={
+            "scenario": {
+                "intervals": {
+                    "movement_tick_seconds": 5.0,
+                    "control_interval_seconds": 5.0,
+                },
+                "snapshot_interval_seconds": 5.0,
+            },
+        },
+        override={
+            "population": {"skier_count": 32},
+            "episode_duration_seconds": 15.0,
+        },
+    )
+    environment = build_resolved_environment(resolved)
+    controller = build_controller(resolved.controller, environment.topology)
+    fallback = build_fallback(
+        resolved.fallback.policy,
+        resolved.controller,
+        environment.topology,
+    )
+    monitor = build_monitor(
+        resolved.monitor,
+        resolved.controller,
+        environment.topology,
+    )
+    environment.configure_adjudicator(
+        monitor,
+        fallback,
+        SimulatedApprover(ApprovalChoice(resolved.approval.simulated_choice)),
+        resolved.approval.timeout_seconds,
+    )
+    controller.reset(resolved.seed)
+    environment.reset(seed=resolved.seed)
+    lifecycle = AttackLifecycle()
+
+    first = controller.propose(environment.controller_observation())
+    environment.step_proposal(first)
+    midpoint = encode_continuation_snapshot(
+        environment,
+        controller,
+        resolved,
+        attack_lifecycle=lifecycle,
+        trace_state={"sequence": 1},
+        runtime_state={"next_snapshot_time": 10.0},
+    )
+    restored = restore_continuation_snapshot(midpoint, resolved=resolved)
+    resumed_environment = restored["environment"]
+    resumed_controller = restored["controller"]
+    resumed_lifecycle = restored["attack_lifecycle"]
+
+    uninterrupted_events = []
+    resumed_events = []
+    while not environment._ended:
+        proposal = controller.propose(environment.controller_observation())
+        _, reward, terminated, truncated, info = environment.step_proposal(proposal)
+        decision = info["monitor_decision"].model_dump(mode="json")
+        decision.pop("latency_seconds")
+        uninterrupted_events.append(
+            (
+                proposal.model_dump(mode="json"),
+                decision,
+                reward,
+                terminated,
+                truncated,
+                environment.sim.physical_state_checksum(),
+            )
+        )
+        resumed_proposal = resumed_controller.propose(
+            resumed_environment.controller_observation()
+        )
+        _, reward, terminated, truncated, info = resumed_environment.step_proposal(
+            resumed_proposal
+        )
+        decision = info["monitor_decision"].model_dump(mode="json")
+        decision.pop("latency_seconds")
+        resumed_events.append(
+            (
+                resumed_proposal.model_dump(mode="json"),
+                decision,
+                reward,
+                terminated,
+                truncated,
+                resumed_environment.sim.physical_state_checksum(),
+            )
+        )
+
+    assert resumed_events == uninterrupted_events
+    final_trace = {"sequence": 3}
+    final_runtime = {"next_snapshot_time": 20.0}
+    uninterrupted = encode_continuation_snapshot(
+        environment,
+        controller,
+        resolved,
+        attack_lifecycle=lifecycle,
+        trace_state=final_trace,
+        runtime_state=final_runtime,
+    )
+    resumed = encode_continuation_snapshot(
+        resumed_environment,
+        resumed_controller,
+        resolved,
+        attack_lifecycle=resumed_lifecycle,
+        trace_state=final_trace,
+        runtime_state=final_runtime,
+    )
+    assert resumed["continuation_checksum"] == uninterrupted["continuation_checksum"]

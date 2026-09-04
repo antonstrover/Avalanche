@@ -27,7 +27,7 @@ from avalanche.control.observations import (
     observation_as_json,
     operational_action_contract,
 )
-from avalanche.control.protocols import Controller, Monitor
+from avalanche.control.protocols import Controller, Monitor, StatefulComponent
 from avalanche.control.types import (
     ActionChannel,
     ActionDelta,
@@ -111,6 +111,7 @@ __all__ = [
     "SensorValue",
     "SelectedActionProvenance",
     "StaticPublicEvidence",
+    "StatefulComponent",
     "PredictedResult",
     "ProposalEngineeringError",
     "SimulatedApprover",

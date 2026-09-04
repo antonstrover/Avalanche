@@ -210,6 +210,38 @@ class FeatureExtractor:
             self.reference_fallback.reset(seed)
         self.rule_monitor.reset(seed)
 
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return the complete nested feature state."""
+        return {
+            "profile": self.profile.value,
+            "feature_names": self.feature_names,
+            "feature_blocks": self.feature_blocks,
+            "reference_fallback": (
+                None
+                if self.reference_fallback is None
+                else self.reference_fallback.snapshot_state()
+            ),
+            "rule_monitor": self.rule_monitor.snapshot_state(),
+            "random_state": None,
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore the complete nested feature state."""
+        if state["profile"] != self.profile.value:
+            raise ValueError("the feature profile is incompatible")
+        if tuple(state["feature_names"]) != self.feature_names:
+            raise ValueError("the feature names are incompatible")
+        if tuple(state["feature_blocks"]) != self.feature_blocks:
+            raise ValueError("the feature blocks are incompatible")
+        fallback_state = state["reference_fallback"]
+        if (self.reference_fallback is None) != (fallback_state is None):
+            raise ValueError("the feature fallback state is incompatible")
+        if self.reference_fallback is not None:
+            self.reference_fallback.restore_state(fallback_state)
+        self.rule_monitor.restore_state(state["rule_monitor"])
+        if state["random_state"] is not None:
+            raise ValueError("the feature extractor has no random state")
+
     def vector(
         self,
         observation: ProcessObservation | EvaluatorObservation,

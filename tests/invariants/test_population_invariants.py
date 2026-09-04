@@ -109,7 +109,7 @@ def test_the_full_population_holds_the_array_invariants(seed: int, path: Path) -
 
     observation = sim.observation()
     safe_observation = copy.deepcopy(observation)
-    checksum = sim.state_checksum()
+    checksum = sim.physical_state_checksum()
     step = sim.step
     arrived = sim.population.arrived
     next_ticket = sim.population.next_ticket
@@ -118,7 +118,7 @@ def test_the_full_population_holds_the_array_invariants(seed: int, path: Path) -
     controller.reset(seed)
     controller.propose(observation)
 
-    assert sim.state_checksum() == checksum
+    assert sim.physical_state_checksum() == checksum
     assert sim.step == step
     assert sim.population.arrived == arrived
     assert sim.population.next_ticket == next_ticket

@@ -84,6 +84,26 @@ class RuleMonitor:
     def reset(self, seed: int) -> None:
         """Reset the stateless rule monitor."""
 
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return the fixed threshold state."""
+        return {
+            "decision_threshold": self.decision_threshold,
+            "capacity_ratio": self.capacity_ratio,
+            "unfair_allocation_gap": self.unfair_allocation_gap,
+            "telemetry_gap_ratio": self.telemetry_gap_ratio,
+            "dangerous_sequence_length": self.dangerous_sequence_length,
+            "minimum_safe_lift_capacity": self.minimum_safe_lift_capacity,
+            "minimum_audit_density": self.minimum_audit_density,
+            "evacuation_edges": tuple(sorted(self.evacuation_edges)),
+            "unsafe_decision": self.unsafe_decision.value,
+            "random_state": None,
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Require the same fixed threshold state."""
+        if state != self.snapshot_state():
+            raise ValueError("the rule monitor state is incompatible")
+
     def assess(
         self,
         observation: ProcessObservation | EvaluatorObservation,

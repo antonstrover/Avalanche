@@ -1,7 +1,7 @@
 """Propose deterministic actions for safe resort operation."""
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 
@@ -10,6 +10,12 @@ from avalanche.control import (
     ControllerObservation,
     freeze_action,
     freeze_evidence,
+)
+from avalanche.control.state import (
+    action_from_state,
+    action_state,
+    proposal_from_state,
+    proposal_state,
 )
 from avalanche.controllers.policies import (
     POLICY_SPECS,
@@ -110,6 +116,33 @@ class HonestController:
         self.selected_policy_variant = select_policy_variant(
             seed, self.config.policy_variant
         )
+
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return every future controller value."""
+        return {
+            "seed": self._seed,
+            "last_action": action_state(freeze_action(self._last_action)),
+            "last_proposal_time": self._last_proposal_time,
+            "last_proposal": proposal_state(self._last_proposal),
+            "selected_policy_variant": self.selected_policy_variant,
+            "random_state": None,
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore every future controller value."""
+        from avalanche.control import thaw_action
+
+        self._seed = int(state["seed"])
+        self._last_action = thaw_action(action_from_state(state["last_action"]))
+        value = state["last_proposal_time"]
+        self._last_proposal_time = None if value is None else float(value)
+        self._last_proposal = proposal_from_state(state["last_proposal"])
+        selected = str(state["selected_policy_variant"])
+        if selected not in POLICY_SPECS:
+            raise ValueError("the controller policy variant is invalid")
+        self.selected_policy_variant = cast(PolicyVariant, selected)
+        if state["random_state"] is not None:
+            raise ValueError("the honest controller has no random state")
 
     def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return one action from the current reported state."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,10 +13,14 @@ import pyarrow.parquet as pq
 
 from avalanche.metrics import METRICS_VERSION, MetricSnapshot
 from avalanche.sim.engine import MountainSim
-from avalanche.traces.snapshots import encode_snapshot
+from avalanche.traces.snapshots import (
+    EVALUATOR_REPLAY_FILENAME,
+    REPORTED_REPLAY_FILENAME,
+    encode_physical_replay_snapshot,
+)
 
 EVENT_SCHEMA_VERSION = 5
-SUMMARY_SCHEMA_VERSION = 2
+SUMMARY_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,7 @@ class EventState:
     @classmethod
     def capture(cls, sim: MountainSim) -> EventState:
         """Capture the current simulator state identity."""
-        return cls(sim.simulation_time, sim.step, sim.state_checksum())
+        return cls(sim.simulation_time, sim.step, sim.physical_state_checksum())
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,14 @@ class TraceWriter:
         self.seed = seed
         self.events: list[EventRecord] = []
         self.metric_rows: list[dict[str, Any]] = []
-        self.snapshot_rows: list[dict[str, Any]] = []
+        self.reported_snapshot_rows: list[dict[str, Any]] = []
+        self.evaluator_snapshot_rows: list[dict[str, Any]] = []
+        self.continuation_artifacts: list[dict[str, str]] = []
+
+    @property
+    def snapshot_rows(self) -> list[dict[str, Any]]:
+        """Return the evaluator rows for the former local interface."""
+        return self.evaluator_snapshot_rows
 
     def record(
         self,
@@ -110,15 +122,72 @@ class TraceWriter:
         )
 
     def record_snapshot(self, sim: MountainSim) -> None:
-        """Buffer one typed replay snapshot."""
-        self.snapshot_rows.append(
-            encode_snapshot(
+        """Buffer separate reported and evaluator replay views."""
+        self.reported_snapshot_rows.append(
+            encode_physical_replay_snapshot(
                 sim,
+                view_kind="reported",
                 run_id=self.run_id,
                 episode_id=self.episode_id,
-                seed=self.seed,
             )
         )
+        self.evaluator_snapshot_rows.append(
+            encode_physical_replay_snapshot(
+                sim,
+                view_kind="evaluator",
+                run_id=self.run_id,
+                episode_id=self.episode_id,
+            )
+        )
+
+    def record_continuation_artifact(self, record: dict[str, str]) -> None:
+        """Add one externally checksummed continuation artifact."""
+        self.continuation_artifacts.append(dict(record))
+
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return every buffered trace and writer position."""
+        return {
+            "run_id": self.run_id,
+            "episode_id": self.episode_id,
+            "seed": self.seed,
+            "events": tuple(event.as_dict() for event in self.events),
+            "metric_rows": tuple(self.metric_rows),
+            "reported_snapshot_rows": tuple(self.reported_snapshot_rows),
+            "evaluator_snapshot_rows": tuple(self.evaluator_snapshot_rows),
+            "continuation_artifacts": tuple(self.continuation_artifacts),
+            "output_append_positions": {
+                "events": len(self.events),
+                "metrics": len(self.metric_rows),
+                "reported_replay": len(self.reported_snapshot_rows),
+                "evaluator_replay": len(self.evaluator_snapshot_rows),
+            },
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore trace buffers before appending resumed output."""
+        identity = (state["run_id"], state["episode_id"], int(state["seed"]))
+        if identity != (self.run_id, self.episode_id, self.seed):
+            raise ValueError("the trace writer identity is incompatible")
+        self.events = [EventRecord(**item) for item in state["events"]]
+        self.metric_rows = [dict(item) for item in state["metric_rows"]]
+        self.reported_snapshot_rows = [
+            dict(item) for item in state["reported_snapshot_rows"]
+        ]
+        self.evaluator_snapshot_rows = [
+            dict(item) for item in state["evaluator_snapshot_rows"]
+        ]
+        self.continuation_artifacts = [
+            dict(item) for item in state["continuation_artifacts"]
+        ]
+        positions = state["output_append_positions"]
+        actual = {
+            "events": len(self.events),
+            "metrics": len(self.metric_rows),
+            "reported_replay": len(self.reported_snapshot_rows),
+            "evaluator_replay": len(self.evaluator_snapshot_rows),
+        }
+        if positions != actual:
+            raise ValueError("the trace writer positions are inconsistent")
 
     def close(
         self, summary: dict[str, Any], model_reference: dict[str, Any] | None = None
@@ -148,9 +217,11 @@ class TraceWriter:
         pq.write_table(
             pa.Table.from_pylist(self.metric_rows), self.output_dir / "metrics.parquet"
         )
+        reported_path = self.output_dir / REPORTED_REPLAY_FILENAME
+        evaluator_path = self.output_dir / EVALUATOR_REPLAY_FILENAME
+        pq.write_table(pa.Table.from_pylist(self.reported_snapshot_rows), reported_path)
         pq.write_table(
-            pa.Table.from_pylist(self.snapshot_rows),
-            self.output_dir / "snapshots.parquet",
+            pa.Table.from_pylist(self.evaluator_snapshot_rows), evaluator_path
         )
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
@@ -163,3 +234,24 @@ class TraceWriter:
         (self.output_dir / "model-reference.json").write_text(
             json.dumps(model_reference, indent=2, sort_keys=True), encoding="utf-8"
         )
+        replay_artifacts = [
+            _artifact_record("physical_replay_reported", reported_path),
+            _artifact_record("physical_replay_evaluator", evaluator_path),
+        ]
+        manifest = {
+            "artifact_manifest_version": 1,
+            "artifacts": [*replay_artifacts, *self.continuation_artifacts],
+        }
+        (self.output_dir / "artifact-manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+
+def _artifact_record(artifact_type: str, path: Path) -> dict[str, str]:
+    """Return one exact persisted file identity."""
+    return {
+        "artifact_type": artifact_type,
+        "path": path.name,
+        "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }

@@ -249,6 +249,33 @@ class RecordingMonitor:
         self.inner.reset(seed)
         self.extractor.reset(seed)
 
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return each future recorder and monitor value."""
+        inner_snapshot = getattr(self.inner, "snapshot_state", None)
+        if inner_snapshot is None:
+            raise TypeError("the inner monitor must expose continuation state")
+        return {
+            "inner": inner_snapshot(),
+            "extractor": self.extractor.snapshot_state(),
+            "rows": tuple(self.rows),
+            "fallback_attempts": self._fallback_attempts,
+            "oracle_fallbacks": self._oracle_fallbacks,
+            "random_state": None,
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore each future recorder and monitor value."""
+        inner_restore = getattr(self.inner, "restore_state", None)
+        if inner_restore is None:
+            raise TypeError("the inner monitor must restore continuation state")
+        inner_restore(state["inner"])
+        self.extractor.restore_state(state["extractor"])
+        self.rows[:] = [dict(row) for row in state["rows"]]
+        self._fallback_attempts = int(state["fallback_attempts"])
+        self._oracle_fallbacks = int(state["oracle_fallbacks"])
+        if state["random_state"] is not None:
+            raise ValueError("the recording monitor has no random state")
+
     def assess(
         self,
         observation: ProcessObservation | EvaluatorObservation,

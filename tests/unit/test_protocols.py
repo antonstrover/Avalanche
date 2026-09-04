@@ -28,6 +28,12 @@ class StubController:
             explanation="no-op",
         )
 
+    def snapshot_state(self) -> dict:
+        return {"seed": getattr(self, "seed", 0)}
+
+    def restore_state(self, state: dict) -> None:
+        self.seed = state["seed"]
+
 
 class StubMonitor:
     def reset(self, seed: int) -> None:
@@ -37,6 +43,12 @@ class StubMonitor:
         self, observation: dict, proposal: ActionProposal, history: tuple
     ) -> MonitorDecision:
         return MonitorDecision(risk_score=0.0, decision="ALLOW")
+
+    def snapshot_state(self) -> dict:
+        return {"seed": getattr(self, "seed", 0)}
+
+    def restore_state(self, state: dict) -> None:
+        self.seed = state["seed"]
 
 
 def test_stub_controller_satisfies_the_protocol():
