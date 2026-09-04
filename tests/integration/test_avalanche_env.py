@@ -20,6 +20,8 @@ from avalanche.env.adapter import _apply_executed_action
 from avalanche.scenarios.failures import refresh_reported_telemetry
 from avalanche.sim import ABILITY_NAMES, EDGE_TYPE_NAMES, population_from_starts
 from avalanche.sim.skier import LocationKind
+from avalanche.traces.checksums import canonical_sha256
+from avalanche.traces.continuation_state import capture_simulator_state
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -349,14 +351,32 @@ def test_a_completed_population_terminates_without_truncation():
 def test_reset_seeding_repeats_the_state_and_schedules():
     env = make_env(population_count=40)
     first_observation, first_info = env.reset(seed=91)
-    first_checksum = env.sim.physical_state_checksum()
+    first_physical_checksum = env.sim.physical_state_checksum()
+    first_future_state = canonical_sha256(
+        capture_simulator_state(env.sim),
+        allow_nonfinite=True,
+    )
     second_observation, second_info = env.reset(seed=91)
 
-    assert env.sim.physical_state_checksum() == first_checksum
+    assert env.sim.physical_state_checksum() == first_physical_checksum
+    assert (
+        canonical_sha256(
+            capture_simulator_state(env.sim),
+            allow_nonfinite=True,
+        )
+        == first_future_state
+    )
     assert first_info["resolved_schedules"] == second_info["resolved_schedules"]
     np.testing.assert_array_equal(
         first_observation["node_demand"], second_observation["node_demand"]
     )
 
     env.reset(seed=92)
-    assert env.sim.physical_state_checksum() != first_checksum
+    assert env.sim.physical_state_checksum() == first_physical_checksum
+    assert (
+        canonical_sha256(
+            capture_simulator_state(env.sim),
+            allow_nonfinite=True,
+        )
+        != first_future_state
+    )
