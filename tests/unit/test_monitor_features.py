@@ -22,10 +22,15 @@ from avalanche.env import AvalancheEnv, AvalancheEnvConfig
 from avalanche.monitors.features import (
     FEATURE_COUNT,
     FEATURE_NAMES,
+    FEATURE_REGISTRIES,
     FEATURE_VERSION,
     HISTORY_LENGTH,
+    MASTER_FEATURE_REGISTRY,
+    PROFILE_CATEGORIES,
     FeatureExtractor,
+    FeatureProfile,
     feature_names_for,
+    feature_registry_for,
 )
 from avalanche.monitors.rules import RuleMonitor
 
@@ -52,6 +57,7 @@ def make_context(
     history_entries: int = 0,
     profile: InformationProfile = InformationProfile.PRINCIPAL,
     feature_blocks: tuple[str, ...] | None = None,
+    feature_profile: FeatureProfile = FeatureProfile.PRINCIPAL_FULL,
 ):
     """Return one real observation, one proposal, and one extractor."""
     env = AvalancheEnv(
@@ -80,6 +86,7 @@ def make_context(
         RuleMonitor(env.topology),
         profile,
         feature_blocks,
+        feature_profile,
     )
     extractor.reset(SEED)
     history = tuple(
@@ -135,7 +142,7 @@ def test_a_short_history_pads_and_a_long_history_truncates(entries):
 def test_the_principal_profile_excludes_prohibited_features():
     prohibited = ("identical", "remaining_time", "true_", "harm", "simulation_time")
 
-    assert FEATURE_VERSION == 4
+    assert FEATURE_VERSION == 3
     assert all(part not in name for name in FEATURE_NAMES for part in prohibited)
 
 
@@ -145,7 +152,7 @@ def test_the_fallback_oracle_uses_distances_without_exact_equality():
     )
     values = extractor.vector(observation, proposal, history)
     names = feature_names_for(InformationProfile.ORACLE_FALLBACK)
-    distance_names = [name for name in names if name.startswith("oracle_fallback")]
+    distance_names = [name for name in names if name.startswith("fallback_oracle")]
 
     assert distance_names
     assert all(values[names.index(name)] == 0.0 for name in distance_names)
@@ -166,19 +173,55 @@ def test_each_information_profile_has_one_fixed_schema(profile):
 def test_the_true_state_oracle_separates_harm_from_density():
     names = feature_names_for(InformationProfile.ORACLE_TRUE_STATE)
 
-    assert "oracle_unique_stranded_skiers" in names
-    assert "oracle_dangerous_density_active_fraction" in names
+    assert "true_state_oracle_unique_stranded_skiers" in names
+    assert "true_state_oracle_dangerous_density_active_fraction" in names
     assert all("harm_count" not in name for name in names)
 
 
-def test_an_ablation_zeros_each_excluded_block_during_extraction():
+def test_each_projection_returns_only_its_declared_columns():
     observation, proposal, complete, history = make_context("small-resort.yaml")
-    _, _, ablated, _ = make_context("small-resort.yaml", feature_blocks=("action",))
+    _, _, proposal_only, _ = make_context(
+        "small-resort.yaml",
+        feature_profile=FeatureProfile.PROPOSAL_ONLY,
+    )
     complete_values = complete.vector(observation, proposal, history)
-    ablated_values = ablated.vector(observation, proposal, history)
-    action = np.asarray([name.startswith("action_") for name in FEATURE_NAMES])
-    assert np.array_equal(ablated_values[action], complete_values[action])
-    assert np.count_nonzero(ablated_values[~action]) == 0
+    proposal_values = proposal_only.vector(observation, proposal, history)
+    indexes = [FEATURE_NAMES.index(name) for name in proposal_only.feature_names]
+    assert np.array_equal(proposal_values, complete_values[indexes])
+    assert proposal_values.shape == (len(proposal_only.feature_names),)
+
+
+def test_every_feature_has_one_complete_provenance_contract():
+    for feature in MASTER_FEATURE_REGISTRY.features:
+        assert feature.category
+        assert feature.source_fields
+        assert feature.transformation
+        assert feature.units
+        assert feature.provenance_constraints
+        assert feature.timestamp_rule
+        assert feature.missingness_rule
+        assert feature.allowed_profiles
+        assert feature.source_categories
+        assert feature.interaction == (len(feature.source_categories) > 1)
+
+
+def test_each_profile_uses_only_its_allowed_source_categories():
+    assert set(FEATURE_REGISTRIES) == set(FeatureProfile)
+    for profile, registry in FEATURE_REGISTRIES.items():
+        allowed = {category.value for category in PROFILE_CATEGORIES[profile]}
+        assert all(
+            set(feature.source_categories) <= allowed for feature in registry.features
+        )
+        assert registry.master_feature_registry_sha256 == MASTER_FEATURE_REGISTRY.sha256
+        assert registry.sha256 == feature_registry_for(profile).sha256
+
+
+def test_no_history_removes_each_executed_history_interaction():
+    registry = feature_registry_for(FeatureProfile.NO_HISTORY)
+    assert all(
+        "executed-history" not in feature.source_categories
+        for feature in registry.features
+    )
 
 
 def test_the_principal_profile_contains_each_context_measure():

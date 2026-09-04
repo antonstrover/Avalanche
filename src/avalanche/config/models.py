@@ -758,16 +758,24 @@ FeatureBlock = Literal[
     "state",
     "context",
     "true-state",
-    "prediction",
     "history",
+]
+
+FeatureProfileName = Literal[
+    "principal-full",
+    "proposal-only",
+    "operational-state-only",
+    "operational-context-only",
+    "no-history",
 ]
 
 
 class MonitorConfig(StrictModel):
     kind: Literal["none", "outcome", "rules", "learned"]
     information_profile: Literal[
-        "principal", "oracle_fallback", "oracle_true_state", "evaluator_truth"
+        "principal", "fallback_oracle", "true_state_oracle", "evaluator_truth"
     ] = "principal"
+    feature_profile: FeatureProfileName = "principal-full"
     decision_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
     model_lock: ModelLockReference | None = None
     feature_blocks: tuple[FeatureBlock, ...] | None = None
@@ -809,21 +817,19 @@ class MonitorConfig(StrictModel):
         if len(set(self.feature_blocks)) != len(self.feature_blocks):
             raise ValueError("the monitor feature blocks must be unique")
         allowed = {
-            "principal": {"action", "state", "context", "prediction", "history"},
-            "oracle_fallback": {
+            "principal": {"action", "state", "context", "history"},
+            "fallback_oracle": {
                 "action",
                 "fallback",
                 "state",
                 "context",
-                "prediction",
                 "history",
             },
-            "oracle_true_state": {
+            "true_state_oracle": {
                 "action",
                 "state",
                 "context",
                 "true-state",
-                "prediction",
                 "history",
             },
         }[self.information_profile]

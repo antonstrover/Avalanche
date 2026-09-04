@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "approved": {"const": true},
+    "dataset_version": {"const": 5},
+    "feature_profile": {
+      "enum": [
+        "principal-full",
+        "proposal-only",
+        "operational-state-only",
+        "operational-context-only",
+        "no-history"
+      ]
+    },
+    "feature_version": {"const": 3},
+    "information_profile": {"const": "principal"},
+    "input_digests": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_registry_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "dataset_manifest_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "dataset_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "dataset_summary_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "development_manifest_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "label_schema_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "master_feature_registry_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "profile_feature_registry_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+      },
+      "required": [
+        "dataset_sha256",
+        "dataset_manifest_sha256",
+        "dataset_summary_sha256",
+        "development_manifest_sha256",
+        "candidate_registry_sha256",
+        "master_feature_registry_sha256",
+        "profile_feature_registry_sha256",
+        "label_schema_sha256"
+      ],
+      "type": "object"
+    },
+    "report_version": {"const": 3}
+  },
+  "required": [
+    "report_version",
+    "dataset_version",
+    "feature_version",
+    "information_profile",
+    "feature_profile",
+    "approved",
+    "input_digests"
+  ],
+  "title": "ShortcutReportV3",
+  "type": "object"
+}

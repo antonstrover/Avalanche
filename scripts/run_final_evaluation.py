@@ -53,7 +53,7 @@ def load_model_references(path: Path) -> dict[str, ModelLockReference]:
     if value.get("model_references_version") != 1:
         raise ValueError("the model reference manifest version is incompatible")
     raw = value.get("references")
-    required = {"principal", "oracle-fallback", "oracle-true-state"}
+    required = {"principal", "fallback_oracle", "true_state_oracle"}
     if not isinstance(raw, Mapping) or set(raw) != required:
         raise ValueError("the final evaluation needs three model references")
     return {

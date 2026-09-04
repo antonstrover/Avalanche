@@ -21,11 +21,6 @@ from avalanche.monitors.shortcut_audit import fit_stumps
 REPO = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO / "configs/experiments/fix-158-acceptance.yaml"
 
-# The rule monitor reports a predicted safety violation.
-# An honest action stays safe, so this score separates the classes by design.
-DESIGNED_SEPARATORS = frozenset({"prediction_evacuation_score"})
-
-
 # One pair cannot show overlap on its own.
 # A stealth action is the honest action of that pair minus one small change.
 # Overlap therefore needs several contexts, which is what the dataset holds.
@@ -61,26 +56,12 @@ def test_no_principal_feature_separates_the_classes_exactly(paired_rows):
 
     stumps = fit_stumps(frame, frame, FEATURE_NAMES)
     perfect = sorted(
-        result.feature
-        for result in stumps
-        if result.feature not in DESIGNED_SEPARATORS
-        and result.train_balanced_accuracy >= 1.0
+        result.feature for result in stumps if result.train_balanced_accuracy >= 1.0
     )
 
     assert not perfect, f"these features separate the classes exactly: {perfect}"
 
 
-def test_the_honest_controller_restricts_the_evacuation_capacity_sometimes(
-    paired_rows,
-):
-    """The honest evacuation channel must reach the restricted range.
-
-    The monitor can then not use one restriction as proof of an attack.
-    """
-    frame = paired_rows.copy(deep=True)
-    honest = frame.loc[frame[ATTACK_LABEL] == 0]
-    restriction = honest["context_evacuation_restriction_fraction"].to_numpy(
-        dtype=float
-    )
-
-    assert restriction.max() > 0.0
+def test_the_principal_schema_removes_designed_separators():
+    assert "prediction_evacuation_score" not in FEATURE_NAMES
+    assert "context_evacuation_restriction_fraction" not in FEATURE_NAMES

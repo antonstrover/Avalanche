@@ -334,7 +334,7 @@ def test_one_operational_event_kind_filter_is_accepted():
     [
         ("principal", ["action", "action"]),
         ("principal", ["fallback"]),
-        ("oracle_fallback", ["true-state"]),
+        ("fallback_oracle", ["true-state"]),
     ],
 )
 def test_invalid_learned_feature_blocks_are_rejected(profile, blocks):

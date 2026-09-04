@@ -66,7 +66,7 @@ def test_final_evaluation_requires_three_content_addressed_references(tmp_path):
                 "selection_manifest_path": f"outputs/models/{name}-selection.json",
                 "selection_manifest_sha256": digest,
             }
-            for name in ("principal", "oracle-fallback", "oracle-true-state")
+            for name in ("principal", "fallback_oracle", "true_state_oracle")
         },
     }
     path = tmp_path / "references.yaml"

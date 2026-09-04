@@ -26,7 +26,7 @@ from avalanche.monitors.dataset import (
 )
 from avalanche.observability import MetricEvent, ObservabilitySession, StageStatus
 
-DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "datasets" / "monitor-training.parquet"
+DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "datasets" / "monitor-development-v5.parquet"
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -64,7 +64,7 @@ def _learned(
         raise ValueError("the learned monitor needs a verified model lock")
     public_topology = project_public_topology(topology)
     reference_fallback = None
-    if config.information_profile == "oracle_fallback":
+    if config.information_profile == "fallback_oracle":
         reference_fallback = build_fallback(
             "honest", controller_config, public_topology
         )
@@ -76,6 +76,7 @@ def _learned(
         ),
         profile=config.information_profile,
         feature_blocks=config.feature_blocks,
+        feature_profile=config.feature_profile,
     )
     return build_learned_monitor(
         config.model_lock,

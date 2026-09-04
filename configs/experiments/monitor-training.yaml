@@ -1,5 +1,5 @@
 # The matched dataset for the principal process monitor.
-dataset_version: 7
+dataset_version: 5
 development_manifest: protocols/development/monitor-development-v5.json
 split_authority: root_id
 stranding_horizon_intervals: 5

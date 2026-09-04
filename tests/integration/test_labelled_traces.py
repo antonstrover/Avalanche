@@ -251,7 +251,11 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
     )
     assert set(
         validate_generated_dataset(output, frame, InformationProfile.PRINCIPAL)
-    ) == {"dataset_sha256", "manifest_sha256", "summary_sha256"}
+    ) == {
+        "dataset_sha256",
+        "dataset_manifest_sha256",
+        "dataset_summary_sha256",
+    }
 
     obsolete = frame.assign(harm_count=0)
     with pytest.raises(ValueError, match="obsolete harm field"):

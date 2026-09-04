@@ -39,11 +39,15 @@ from avalanche.monitors.artifacts import (
 from avalanche.monitors.calibration import CALIBRATION_VERSION, TemperatureFit
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
-    DATASET_CHECKSUM_NAMES,
     DATASET_VERSION,
     require_current_formal_dataset_rows,
 )
-from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.monitors.features import (
+    FEATURE_VERSION,
+    FeatureProfile,
+    feature_names_for,
+    feature_registry_for,
+)
 from avalanche.monitors.perceptron import (
     MODEL_VERSION,
     TrainedModel,
@@ -92,7 +96,7 @@ class AttemptLockV2(_FrozenArtifactModel):
     lock_version: Literal[2]
     attempt_name: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9-]*$")
     model_kind: Literal["perceptron", "gru"]
-    information_profile: Literal["principal", "oracle_fallback", "oracle_true_state"]
+    information_profile: Literal["principal", "fallback_oracle", "true_state_oracle"]
     feature_names: tuple[str, ...]
     model_filename: str
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -162,7 +166,7 @@ class SelectionManifestV1(_FrozenArtifactModel):
     """Validate one role assignment without changing an attempt lock."""
 
     selection_version: Literal[1]
-    profile: Literal["principal", "oracle_fallback", "oracle_true_state"]
+    profile: Literal["principal", "fallback_oracle", "true_state_oracle"]
     role: Literal["selected_pass", "negative_core_baseline", "failed_profile_ablation"]
     attempt_lock_path: str
     attempt_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -710,6 +714,8 @@ def compare_declared_models(
     Use an explicit schema only for a verified historical replay.
     """
     config = config or TrainingConfig()
+    if config.label != ATTACK_LABEL:
+        raise ValueError("formal fitting must use the proposal label")
     profile = InformationProfile(config.information_profile)
     base_stage = stage_id or f"monitor-{profile.value.replace('_', '-')}"
     if feature_names is not None and feature_version is None:
@@ -802,9 +808,9 @@ def train_locked_monitor(
     """Train one declared model and lock every accepted artifact."""
     require_current_formal_dataset_rows(train, name="training")
     require_current_formal_dataset_rows(validation, name="validation")
-    shortcut = require_approved_shortcut_report(shortcut_report_path)
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)
+    feature_profile = FeatureProfile(config.feature_profile)
     base_stage = stage_id or f"monitor-{profile.value.replace('_', '-')}"
     perceptron_stage = f"{base_stage}-perceptron"
     perceptron_calibration_stage = f"{base_stage}-perceptron-calibration"
@@ -812,14 +818,16 @@ def train_locked_monitor(
     gru_training_stage = f"{gru_stage}-training"
     gru_calibration_stage = f"{base_stage}-gru-calibration"
     expected_checksums = _require_dataset_checksums(dataset_checksums)
-    if (
-        profile is InformationProfile.PRINCIPAL
-        and shortcut.get("dataset_checksums") != expected_checksums
-    ):
-        raise ValueError("the shortcut report does not match the monitor dataset")
+    shortcut = require_approved_shortcut_report(
+        shortcut_report_path,
+        expected_digests=expected_checksums,
+        profile=feature_profile,
+    )
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ArtifactError("an immutable model output already exists")
-    feature_names = feature_names_for(profile)
+    feature_names = feature_names_for(
+        feature_profile if profile is InformationProfile.PRINCIPAL else profile
+    )
     _emit_metric(
         emitter,
         "stage_started",
@@ -1195,6 +1203,8 @@ def train_locked_monitor(
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
         "information_profile": profile.value,
+        "feature_profile": feature_profile.value,
+        "feature_schema_sha256": feature_registry_for(feature_profile).sha256,
         "shortcut_report": str(shortcut_report_path),
         "shortcut_report_approved": shortcut["approved"],
         "dataset_checksums": expected_checksums,
@@ -1248,8 +1258,10 @@ def _require_dataset_checksums(
 ) -> dict[str, str]:
     """Require every generated dataset artifact checksum."""
     values = dict(sorted((dataset_checksums or {}).items()))
-    if tuple(values) != DATASET_CHECKSUM_NAMES:
-        raise ValueError("training needs the dataset, manifest, and summary checksums")
+    from avalanche.monitors.shortcut_audit import SHORTCUT_INPUT_DIGESTS
+
+    if tuple(values) != tuple(sorted(SHORTCUT_INPUT_DIGESTS)):
+        raise ValueError("training needs all eight provenance digests")
     if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in values.values()):
         raise ValueError("each generated dataset checksum must be a full SHA-256 value")
     return values
@@ -1649,13 +1661,10 @@ def _write_lock(
     split_manifest_sha256 = _json_digest(
         {"dataset_checksums": dict(sorted(dataset_checksums.items()))}
     )
-    feature_schema_sha256 = _json_digest(
-        {
-            "feature_version": FEATURE_VERSION,
-            "information_profile": information_profile.value,
-            "feature_names": list(feature_names_for(information_profile)),
-        }
+    feature_profile = FeatureProfile(
+        metadata.get("feature_profile", FeatureProfile.PRINCIPAL_FULL.value)
     )
+    feature_schema_sha256 = feature_registry_for(feature_profile).sha256
     training_configuration_sha256 = _json_digest(
         {
             name: metadata.get(name)
@@ -1682,10 +1691,14 @@ def _write_lock(
         attempt_name=attempt_name,
         model_kind=metadata["model_kind"],
         information_profile=cast(
-            Literal["principal", "oracle_fallback", "oracle_true_state"],
+            Literal["principal", "fallback_oracle", "true_state_oracle"],
             information_profile.value,
         ),
-        feature_names=feature_names_for(information_profile),
+        feature_names=feature_names_for(
+            feature_profile
+            if information_profile is InformationProfile.PRINCIPAL
+            else information_profile
+        ),
         model_filename=model_path.name,
         model_sha256=_checksum(model_path),
         calibration_filename=calibration_path.name,

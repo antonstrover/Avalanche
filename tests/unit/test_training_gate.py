@@ -19,6 +19,7 @@ from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     DATASET_VERSION,
     EXECUTED_ACTIVATION,
+    LABEL_SCHEMA_SHA256,
     LABEL_SCHEMA_VERSION,
     STRANDING_LABEL,
     STRANDING_MASK,
@@ -27,7 +28,10 @@ from avalanche.monitors.dataset import (
 from avalanche.monitors.features import (
     FEATURE_NAMES,
     FEATURE_VERSION,
+    MASTER_FEATURE_REGISTRY,
+    FeatureProfile,
     feature_names_for,
+    feature_registry_for,
 )
 from avalanche.monitors.perceptron import (
     MODEL_VERSION,
@@ -67,8 +71,15 @@ from avalanche.monitors.training import (
 SIGNAL = FEATURE_NAMES[0]
 DATASET_CHECKSUMS = {
     "dataset_sha256": "a" * 64,
-    "manifest_sha256": "b" * 64,
-    "summary_sha256": "c" * 64,
+    "dataset_manifest_sha256": "b" * 64,
+    "dataset_summary_sha256": "c" * 64,
+    "development_manifest_sha256": "d" * 64,
+    "candidate_registry_sha256": "e" * 64,
+    "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+    "profile_feature_registry_sha256": feature_registry_for(
+        FeatureProfile.PRINCIPAL_FULL
+    ).sha256,
+    "label_schema_sha256": LABEL_SCHEMA_SHA256,
 }
 CANDIDATE_REGISTRY = (
     Path(__file__).resolve().parents[2]
@@ -145,6 +156,12 @@ def frame(rows: int = 80) -> pd.DataFrame:
     result["dataset_version"] = DATASET_VERSION
     result["label_schema_version"] = LABEL_SCHEMA_VERSION
     result["feature_version"] = FEATURE_VERSION
+    result["feature_profile"] = FeatureProfile.PRINCIPAL_FULL.value
+    result["master_feature_registry_sha256"] = MASTER_FEATURE_REGISTRY.sha256
+    result["profile_feature_registry_sha256"] = feature_registry_for(
+        FeatureProfile.PRINCIPAL_FULL
+    ).sha256
+    result["label_schema_sha256"] = LABEL_SCHEMA_SHA256
     result[STRANDING_LABEL] = labels
     result[STRANDING_MASK] = 1
     result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
@@ -207,16 +224,15 @@ def approved_report(
 ):
     dataset_checksums = dataset_checksums or DATASET_CHECKSUMS
     output = tmp_path / "audit"
+    audit_train = train.copy()
+    audit_validation = validation.copy()
+    audit_train[SIGNAL] = np.tile([0.0, 1.0], len(audit_train) // 2)
+    audit_validation[SIGNAL] = 1.0 - np.tile([0.0, 1.0], len(audit_validation) // 2)
     report = run_shortcut_audit(
-        train,
-        validation,
+        audit_train,
+        audit_validation,
         output,
         feature_names=FEATURE_NAMES,
-        accepted_justifications={
-            SIGNAL: "The feature is declared operational action evidence.",
-            "__logistic__": "The model combines only declared process evidence.",
-        },
-        reviewed_perfect_separation=(SIGNAL,),
         dataset_checksums=dataset_checksums,
     )
     assert report["approved"]
@@ -247,22 +263,12 @@ def fake_perceptron(*, separated: bool) -> TrainedModel:
 
 
 def oracle_frame(profile: InformationProfile, rows: int = 80) -> pd.DataFrame:
-    labels = np.tile([0, 1], rows // 2)
+    result = frame(rows)
     names = feature_names_for(profile)
-    values = {name: np.zeros(rows, dtype=np.float32) for name in names}
-    values[names[0]] = labels.astype(np.float32)
-    result = pd.DataFrame(values)
-    result[ATTACK_LABEL] = labels
-    result[EXECUTED_ACTIVATION] = labels
-    result["dataset_version"] = DATASET_VERSION
-    result["label_schema_version"] = LABEL_SCHEMA_VERSION
-    result["feature_version"] = FEATURE_VERSION
-    result[STRANDING_LABEL] = labels
-    result[STRANDING_MASK] = 1
-    result["attack_kind"] = np.where(labels == 1, "sleeper_saboteur", "honest")
-    result["run_id"] = np.repeat(["run-a", "run-b"], rows // 2)
-    result["step"] = np.tile(np.arange(rows // 2), 2)
-    return _with_pair_context(_with_operational_provenance(result))
+    for name in names:
+        if name not in result:
+            result[name] = 0.0
+    return result
 
 
 def test_formal_rows_reject_an_old_operational_evidence_version():
@@ -776,7 +782,13 @@ def test_training_requires_an_approved_shortcut_report(tmp_path):
         )
     )
     with pytest.raises(ValueError, match="not approved"):
-        train_locked_monitor(frame(), frame(), report, tmp_path / "model")
+        train_locked_monitor(
+            frame(),
+            frame(),
+            report,
+            tmp_path / "model",
+            dataset_checksums=DATASET_CHECKSUMS,
+        )
 
 
 def test_locked_training_rejects_legacy_dataset_rows(tmp_path):
@@ -909,7 +921,7 @@ def test_training_rejects_an_audit_for_another_dataset(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: pytest.fail("training must not start"),
     )
 
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(ValueError, match="do not match"):
         train_locked_monitor(
             train,
             validation,
@@ -928,7 +940,7 @@ def test_training_requires_every_dataset_artifact_checksum(tmp_path, monkeypatch
         lambda *_args, **_kwargs: pytest.fail("training must not start"),
     )
 
-    with pytest.raises(ValueError, match="dataset, manifest, and summary"):
+    with pytest.raises(ValueError, match="eight provenance digests"):
         train_locked_monitor(
             train,
             validation,

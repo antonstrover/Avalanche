@@ -62,8 +62,11 @@ from avalanche.controllers.honest import HONEST_POLICY_VERSION
 from avalanche.env import build_resolved_environment
 from avalanche.monitors.features import (
     FEATURE_VERSION,
+    MASTER_FEATURE_REGISTRY,
     FeatureExtractor,
+    FeatureProfile,
     feature_names_for,
+    feature_registry_for,
 )
 from avalanche.monitors.outcome import AllowMonitor
 from avalanche.monitors.rules import RuleMonitor
@@ -79,9 +82,12 @@ EXECUTED_ACTIVATION = "executed_activation"
 LABEL_SCHEMA_VERSION = 2
 STRANDING_LABEL = "stranding_in_horizon"
 STRANDING_MASK = "stranding_label_known"
-DATASET_VERSION = 7
+DATASET_VERSION = 5
 LEGACY_DATASET_FIXTURE_VERSION = 4
 LEGACY_DATASET_FEATURE_VERSION = 2
+LABEL_SCHEMA_SHA256 = hashlib.sha256(
+    (REPO_ROOT / "protocols/development/monitor-labels-v2.json").read_bytes()
+).hexdigest()
 OBSOLETE_FORMAL_DATASET_FIELDS = frozenset(
     {
         "harm_in_horizon",
@@ -93,8 +99,8 @@ OBSOLETE_FORMAL_DATASET_FIELDS = frozenset(
 )
 DATASET_CHECKSUM_NAMES = (
     "dataset_sha256",
-    "manifest_sha256",
-    "summary_sha256",
+    "dataset_manifest_sha256",
+    "dataset_summary_sha256",
 )
 SENSOR_PROVENANCE_FIELDS = frozenset(
     {
@@ -301,6 +307,12 @@ class RecordingMonitor:
         evidence = observation.operational_evidence
         row.update(
             {
+                "feature_profile": self.extractor.feature_profile.value,
+                "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+                "profile_feature_registry_sha256": feature_registry_for(
+                    self.extractor.feature_profile
+                ).sha256,
+                "label_schema_sha256": LABEL_SCHEMA_SHA256,
                 "operational_evidence_schema_version": evidence.schema_version,
                 "control_interval_seconds": (evidence.packet.control_interval_seconds),
                 "sensor_packet_identity": evidence.packet_identity,
@@ -472,6 +484,10 @@ def require_current_formal_dataset_rows(
         "dataset_version",
         "label_schema_version",
         "feature_version",
+        "feature_profile",
+        "master_feature_registry_sha256",
+        "profile_feature_registry_sha256",
+        "label_schema_sha256",
         "operational_evidence_schema_version",
         "control_interval_seconds",
         "simulation_time",
@@ -503,6 +519,18 @@ def require_current_formal_dataset_rows(
         raise ValueError(f"the {name} rows have an invalid label schema version")
     if set(frame["feature_version"]) != {FEATURE_VERSION}:
         raise ValueError(f"the {name} rows have an invalid feature version")
+    if set(frame["feature_profile"]) != {FeatureProfile.PRINCIPAL_FULL.value}:
+        raise ValueError(f"the {name} rows have an invalid feature profile")
+    expected_registry_digests = {
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
+    }
+    for column, expected in expected_registry_digests.items():
+        if set(frame[column]) != {expected}:
+            raise ValueError(f"the {name} rows have an invalid {column}")
     for column in (ATTACK_LABEL, EXECUTED_ACTIVATION):
         if frame[column].isna().any() or not frame[column].isin((0, 1)).all():
             raise ValueError(f"the {name} rows have an invalid {column}")
@@ -2168,8 +2196,13 @@ def _write_manifest_summary(
     summary = {
         "dataset_version": DATASET_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
         "feature_names": list(feature_names_for(information_profile)),
         "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
         "policy_version": HONEST_POLICY_VERSION,
         "observation_version": OBSERVATION_SCHEMA_VERSION,
         "proposal_version": 1,
@@ -2242,7 +2275,12 @@ def load_dataset_fixture(
     expected = {
         "dataset_version": DATASET_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
         "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
         "observation_version": OBSERVATION_SCHEMA_VERSION,
@@ -2328,7 +2366,12 @@ def validate_generated_dataset(
     expected = {
         "dataset_version": DATASET_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
         "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
         "information_profile": profile.value,
         "feature_names": expected_features,
         "code_revision": _code_revision(),
@@ -2367,8 +2410,8 @@ def generated_dataset_checksums(dataset_path: Path) -> dict[str, str]:
     """Return the three required generated dataset checksums."""
     paths = {
         "dataset_sha256": dataset_path,
-        "manifest_sha256": dataset_path.with_suffix(".manifest.json"),
-        "summary_sha256": dataset_path.with_suffix(".summary.json"),
+        "dataset_manifest_sha256": dataset_path.with_suffix(".manifest.json"),
+        "dataset_summary_sha256": dataset_path.with_suffix(".summary.json"),
     }
     return {name: _file_checksum(path) for name, path in paths.items()}
 
@@ -2419,7 +2462,12 @@ def _write_fixture_metadata(
     metadata = {
         "dataset_version": DATASET_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
         "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(information_profile)),
         "observation_version": OBSERVATION_SCHEMA_VERSION,

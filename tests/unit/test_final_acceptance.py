@@ -66,7 +66,7 @@ def test_the_protocol_declares_20_real_pairs_in_each_final_cell():
 def test_the_reviewed_justification_file_names_only_known_features():
     reasons, reviewed = load_shortcut_justifications(JUSTIFICATIONS)
 
-    assert reasons
+    assert reasons == {}
     assert all(reason.strip() for reason in reasons.values())
     assert set(reviewed) <= set(reasons)
 
@@ -80,7 +80,7 @@ def test_an_unknown_feature_name_fails_the_justification_file(tmp_path):
         "    reason: invented\n"
     )
 
-    with pytest.raises(ValueError, match="unknown features"):
+    with pytest.raises(ValueError, match="cannot receive a waiver"):
         load_shortcut_justifications(path)
 
 
@@ -93,7 +93,7 @@ def test_an_empty_reason_fails_the_justification_file(tmp_path):
         "    reason: '  '\n"
     )
 
-    with pytest.raises(ValueError, match="needs a reason"):
+    with pytest.raises(ValueError, match="cannot receive a waiver"):
         load_shortcut_justifications(path)
 
 
@@ -104,11 +104,11 @@ def test_the_acceptance_inventory_records_each_required_version():
         "audit_schema_version": 2,
         "calibration_version": 2,
         "continuation_schema_version": 1,
-        "dataset_version": 7,
+        "dataset_version": 5,
         "envelope_version": 1,
         "event_schema_version": 6,
         "evaluation_version": 4,
-        "feature_version": 4,
+        "feature_version": 3,
         "label_schema_version": 2,
         "metrics_version": 11,
         "model_version": 3,
@@ -119,7 +119,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "proposal_schema_version": 1,
         "route_sensor_schema_version": 3,
         "sensor_policy_schema_version": 2,
-        "shortcut_report_version": 2,
+        "shortcut_report_version": 3,
         "summary_schema_version": 4,
     }
 

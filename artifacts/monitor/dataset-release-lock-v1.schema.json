@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assets": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "api_identity": {"minLength": 1, "type": "string"},
+          "published_at": {"format": "date-time", "type": "string"},
+          "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+          "url": {"format": "uri", "type": "string"}
+        },
+        "required": ["sha256", "url", "api_identity", "published_at"],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "candidate_registry_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "dataset_generation_revision": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+    "dataset_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "development_manifest_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "feature_profile_sha256": {"additionalProperties": {"pattern": "^[0-9a-f]{64}$", "type": "string"}, "type": "object"},
+    "formal_protocol_sha256": {"additionalProperties": {"pattern": "^[0-9a-f]{64}$", "type": "string"}, "type": "object"},
+    "label_schema_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "master_feature_registry_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "release_api_identity": {"minLength": 1, "type": "string"},
+    "release_url": {"format": "uri", "type": "string"},
+    "published_at": {"format": "date-time", "type": "string"},
+    "resolved_configuration_sha256": {"items": {"pattern": "^[0-9a-f]{64}$", "type": "string"}, "type": "array"},
+    "schema_version": {"const": 1},
+    "schema_versions": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset": {"const": 5},
+        "feature": {"const": 3},
+        "label": {"const": 2},
+        "shortcut_report": {"const": 3}
+      },
+      "required": ["dataset", "feature", "label", "shortcut_report"],
+      "type": "object"
+    },
+    "tag": {"pattern": "^monitor-dataset-v5-[0-9a-f]{64}$", "type": "string"}
+  },
+  "required": [
+    "schema_version",
+    "tag",
+    "dataset_sha256",
+    "dataset_generation_revision",
+    "schema_versions",
+    "development_manifest_sha256",
+    "candidate_registry_sha256",
+    "master_feature_registry_sha256",
+    "feature_profile_sha256",
+    "label_schema_sha256",
+    "resolved_configuration_sha256",
+    "formal_protocol_sha256",
+    "release_url",
+    "release_api_identity",
+    "published_at",
+    "assets"
+  ],
+  "title": "DatasetReleaseLockV1",
+  "type": "object"
+}

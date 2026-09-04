@@ -47,13 +47,12 @@ def comparison_record(
     frame = fixture.rows
     if "attack_kind" not in frame:
         frame["attack_kind"] = frame["controller_kind"].str.replace("-", "_")
-    missing_features = [
-        name
-        for name in feature_names_for(InformationProfile.PRINCIPAL)
-        if name not in frame
-    ]
-    for name in missing_features:
-        frame[name] = 0.0
+    feature_names = feature_names_for(InformationProfile.PRINCIPAL)
+    missing_features = [name for name in feature_names if name not in frame]
+    if missing_features:
+        raise ValueError(
+            f"the comparison rows miss {len(missing_features)} feature columns"
+        )
     parts = split_declared_runs(frame)
     config = TrainingConfig(seed=seed, epochs=epochs)
     results = compare_declared_models(
@@ -68,7 +67,6 @@ def comparison_record(
         "code_revision": code_revision(),
         "dataset": str(dataset_path.resolve().relative_to(REPO_ROOT)),
         "dataset_sha256": _checksum(dataset_path),
-        "filled_missing_features": missing_features,
         "seed": seed,
         "epochs": epochs,
         "false_alarm_budget": FALSE_ALARM_BUDGET,
