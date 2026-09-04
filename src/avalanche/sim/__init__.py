@@ -10,7 +10,12 @@ from avalanche.sim.evacuation import (
     resolve_environment_context,
 )
 from avalanche.sim.graph import build_graph, validate_graph
-from avalanche.sim.hazards import HazardEvent, HazardEventType, update_hazards
+from avalanche.sim.hazards import (
+    HazardEvent,
+    HazardEventType,
+    HazardTransition,
+    update_hazards,
+)
 from avalanche.sim.movement import (
     DynamicState,
     MovementTransitions,
@@ -58,6 +63,7 @@ from avalanche.sim.topology import (
     load_topology,
     project_public_topology,
 )
+from avalanche.sim.transitions import EventPhase, MaterialTransition
 
 __all__ = [
     "MountainSim",
@@ -68,6 +74,9 @@ __all__ = [
     "validate_graph",
     "HazardEvent",
     "HazardEventType",
+    "HazardTransition",
+    "EventPhase",
+    "MaterialTransition",
     "update_hazards",
     "Topology",
     "PublicTopology",

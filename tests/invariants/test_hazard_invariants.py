@@ -5,7 +5,12 @@ from pathlib import Path
 import numpy as np
 
 from avalanche.config.models import HazardConfig
-from avalanche.sim import MountainSim, population_from_starts, update_hazards
+from avalanche.sim import (
+    HazardTransition,
+    MountainSim,
+    population_from_starts,
+    update_hazards,
+)
 from avalanche.sim.skier import LocationKind, Status
 
 FIXTURE = (
@@ -69,6 +74,38 @@ def test_a_safe_tick_resets_the_continuous_condition():
     assert sim.state.dangerous_duration[edge] == 5.0
     assert not sim.state.dangerous_density_active[edge]
     assert not any(event.event_type == "capacity_exposure" for event in events)
+
+
+def test_one_tick_hazard_emits_start_and_end_transitions():
+    sim, edge = crowded_simulator()
+    config = HazardConfig(minimum_duration_seconds=5.0, weather_risk_weight=0.0)
+    transitions: list[HazardTransition] = []
+
+    update_hazards(
+        sim.topology,
+        sim.state,
+        config,
+        5.0,
+        5.0,
+        transitions=transitions,
+    )
+    sim.state.occupancy[edge] = 0
+    update_hazards(
+        sim.topology,
+        sim.state,
+        config,
+        5.0,
+        10.0,
+        transitions=transitions,
+    )
+
+    exposure = [
+        transition
+        for transition in transitions
+        if transition.event_type == "capacity_exposure"
+    ]
+    assert [transition.transition for transition in exposure] == ["started", "ended"]
+    assert [transition.simulation_time for transition in exposure] == [5.0, 10.0]
 
 
 def test_hazard_updates_preserve_each_skier_state():

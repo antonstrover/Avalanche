@@ -21,6 +21,7 @@ from avalanche.config import (
     ModelLockReference,
     ResolvedConfig,
     make_run_dir,
+    run_id,
 )
 from avalanche.config.models import MonitorConfig
 from avalanche.control import DecisionType
@@ -44,6 +45,7 @@ from avalanche.monitors.perceptron import (
 from avalanche.monitors.splits import split_by_family
 from avalanche.monitors.training import AttemptLockV2, gate_digest
 from avalanche.sim import MountainSim
+from avalanche.traces import load_verified_performance
 from tests.configuration import resolve_test_configuration
 
 REPO = Path(__file__).resolve().parents[2]
@@ -402,9 +404,13 @@ def test_a_learned_run_records_latency_as_performance(model_reference, tmp_path)
 
     assert "monitor_latency_seconds_sum" not in summary["metrics"]
     assert "intervention_latency_seconds_sum" not in summary["metrics"]
-    assert summary["performance"]["performance_version"] == 1
-    assert summary["performance"]["monitor_latency_seconds_sum"] > 0.0
-    assert summary["performance"]["monitor_latency_seconds_mean"] > 0.0
+    assert "performance" not in summary
+    performance = load_verified_performance(
+        tmp_path.parent / "performance" / run_id(resolved) / "performance.json"
+    )
+    assert performance["performance_version"] == 1
+    assert performance["monitor_latency_seconds_sum"] > 0.0
+    assert performance["monitor_latency_seconds_mean"] > 0.0
 
 
 def test_monitor_draws_do_not_change_an_external_input(model_reference, monkeypatch):

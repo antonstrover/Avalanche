@@ -102,7 +102,7 @@ def decision_state(value: MonitorDecision) -> dict[str, Any]:
             if value.replacement_action is None
             else action_state(value.replacement_action)
         ),
-        "latency_seconds": value.latency_seconds,
+        "latency_seconds": 0.0,
         "related_infrastructure": tuple(
             item.model_dump(mode="python") for item in value.related_infrastructure
         ),

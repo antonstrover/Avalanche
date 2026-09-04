@@ -1,6 +1,7 @@
-"""Export a short simulator run to the replay file of the mountain scene.
+"""Export simulator evidence to the mountain scene replay file.
 
-The script runs the simulator with a few skiers on a mountain file.
+Pass a mountain component to generate a short demonstration.
+Pass a formal run directory to export its verified evaluator replay.
 It writes `dashboard/src/mountain/replay.sample.json`.
 A frame holds the simulation time and the place of each skier.
 The scene reads the place and draws a marker on the piste curve.
@@ -11,6 +12,7 @@ The script therefore maps each index through the node identity.
 
 Usage:
     python scripts/export_replay.py configs/mountain/medium-resort.yaml
+    python scripts/export_replay.py outputs/<run_id>
 """
 
 from __future__ import annotations
@@ -31,6 +33,12 @@ from avalanche.sim import (
     population_from_starts,
 )
 from avalanche.sim.population import display_progress
+from avalanche.sim.topology import load_topology
+from avalanche.traces import (
+    EVALUATOR_REPLAY_FILENAME,
+    load_physical_replay_snapshot,
+    load_verified_run,
+)
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 SCENE = REPOSITORY / "dashboard" / "src" / "mountain"
@@ -136,23 +144,107 @@ def export(source: Path, resort_path: Path, output: Path) -> dict[str, Any]:
     return replay
 
 
+def export_verified_run(
+    run_dir: Path,
+    resort_path: Path,
+    output: Path,
+) -> dict[str, Any]:
+    """Export evaluator frames from one completely verified run."""
+    reader = load_verified_run(run_dir)
+    configuration = reader.read_configuration()
+    mountain_path = Path(configuration["mountain"]["path"])
+    if not mountain_path.is_absolute():
+        mountain_path = REPOSITORY / mountain_path
+    topology = load_topology(mountain_path)
+    nodes, edges = scene_indices(resort_path)
+    table = reader.read_parquet(EVALUATOR_REPLAY_FILENAME)
+    frames = []
+    skier_count = 0
+    tick_seconds = float(configuration["intervals"]["movement_tick_seconds"])
+    for encoded in table.to_pylist():
+        row = load_physical_replay_snapshot(encoded)
+        population = row["state"]["population"]
+        location_kind = np.asarray(population["location_kind"])
+        location_index = np.asarray(population["location_index"])
+        required = np.asarray(population["required_travel_seconds"])
+        remaining = np.asarray(population["remaining_travel_seconds"])
+        skier_count = int(location_kind.size)
+        frames.append(
+            {
+                "time": float(row["simulation_time"]),
+                "skiers": [
+                    _replay_place(
+                        int(location_kind[index]),
+                        int(location_index[index]),
+                        float(required[index]),
+                        float(remaining[index]),
+                        topology,
+                        nodes,
+                        edges,
+                    )
+                    for index in range(skier_count)
+                    if int(location_kind[index]) != int(LocationKind.PENDING)
+                ],
+            }
+        )
+    replay = {
+        "mountain": topology.name,
+        "tick_seconds": tick_seconds,
+        "skier_count": skier_count,
+        "research_manifest_sha256": reader.research_manifest_sha256,
+        "frames": frames,
+    }
+    output.write_text(json.dumps(replay) + "\n")
+    return replay
+
+
+def _replay_place(
+    kind_value: int,
+    location_index: int,
+    required_seconds: float,
+    remaining_seconds: float,
+    topology: Any,
+    nodes: dict[str, int],
+    edges: dict[tuple[str, str], int],
+) -> list[Any]:
+    """Map one verified replay location into scene indices."""
+    kind = LocationKind(kind_value)
+    name = KIND_NAMES[kind]
+    if kind == LocationKind.FINISHED:
+        return [name, -1, 0.0]
+    if kind == LocationKind.NODE:
+        return [name, nodes[topology.node_ids[location_index]], 0.0]
+    source = topology.node_ids[int(topology.edge_source[location_index])]
+    destination = topology.node_ids[int(topology.edge_destination[location_index])]
+    progress = (
+        0.0
+        if required_seconds <= 0.0
+        else np.clip(1.0 - remaining_seconds / required_seconds, 0.0, 1.0)
+    )
+    return [name, edges[(source, destination)], round(float(progress), 4)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", help="the mountain component path")
+    parser.add_argument("source", help="a mountain component or formal run directory")
     parser.add_argument("--resort", type=Path, default=DEFAULT_RESORT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     arguments = parser.parse_args()
-    resolved = ConfigurationResolver().resolve(
-        arguments.source,
-        "configs/scenarios/default.yaml",
-        "configs/controllers/none.yaml",
-        "configs/monitors/none.yaml",
-    )
-    replay = export(
-        REPOSITORY / resolved.mountain.path,
-        arguments.resort,
-        arguments.output,
-    )
+    source = Path(arguments.source)
+    if source.is_dir():
+        replay = export_verified_run(source, arguments.resort, arguments.output)
+    else:
+        resolved = ConfigurationResolver().resolve(
+            arguments.source,
+            "configs/scenarios/default.yaml",
+            "configs/controllers/none.yaml",
+            "configs/monitors/none.yaml",
+        )
+        replay = export(
+            REPOSITORY / resolved.mountain.path,
+            arguments.resort,
+            arguments.output,
+        )
     print(
         f"Wrote {len(replay['frames'])} frames for {replay['skier_count']} skiers "
         f"to {arguments.output}."

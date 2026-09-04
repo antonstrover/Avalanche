@@ -26,6 +26,11 @@ The resolved digest includes every logical configuration value.
 The scientific digest excludes the output root and worker count.
 The time epsilon must equal 0.000000001 seconds.
 The episode duration must contain whole control intervals.
+The snapshot interval must contain whole movement ticks.
+
+Use `summary` for configuration, metrics, the summary, and integrity evidence.
+Use `decision` to add control events, material events, cadence replays, and continuation state.
+Use `debug` to add control sensor events and every movement-tick replay.
 
 ## Evacuation context
 

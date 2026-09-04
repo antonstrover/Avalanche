@@ -31,6 +31,7 @@ from avalanche.traces.continuation_state import (
     capture_simulator_state,
     restore_simulator_state,
 )
+from avalanche.traces.io import atomic_write_bytes
 
 PHYSICAL_REPLAY_SCHEMA_VERSION = 1
 CONTINUATION_SCHEMA_VERSION = 1
@@ -251,8 +252,7 @@ def write_continuation_snapshot(
     if not target.name.endswith(CONTINUATION_EXTENSION):
         raise SnapshotSchemaError("the continuation extension is invalid")
     content = canonical_messagepack(snapshot, allow_nonfinite=True)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
+    atomic_write_bytes(target, content)
     return {
         "artifact_type": CONTINUATION_ARTIFACT_TYPE,
         "path": target.name,

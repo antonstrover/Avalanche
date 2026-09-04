@@ -1,4 +1,5 @@
 from avalanche.control.adjudicator import (
+    ActionExecutionTransition,
     AdjudicationResult,
     Adjudicator,
     ApprovalHandler,
@@ -75,6 +76,7 @@ __all__ = [
     "AdjudicationResult",
     "Adjudicator",
     "ActionProposal",
+    "ActionExecutionTransition",
     "ActionChannel",
     "ActionDelta",
     "ActionDeltaEntry",

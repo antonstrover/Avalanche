@@ -239,12 +239,19 @@ The validation and preflight commands print stable configuration evidence.
 The command runs one resolved episode.
 Each formal episode runs through its configured horizon.
 It writes events, metrics, two replay views, a continuation, and the final summary.
+The `summary` trace level omits events, replays, and continuation state.
+The `decision` trace level writes material events and cadence replays.
+The `debug` trace level adds control sensor events and every tick replay.
+The snapshot interval must contain whole movement ticks.
 `physical-replay-reported.parquet` contains reported aggregate display state.
 `physical-replay-evaluator.parquet` contains privileged physical display state.
 Neither physical replay file can resume execution.
 The loader keeps version three through five display rows as nonformal data.
 The continuation file stores every future-influencing state owner.
-The artifact manifest stores each exact file digest.
+`run-manifest.json` stores each content path, type, schema, size, and SHA-256.
+`run-manifest.sha256` stores the exact manifest digest.
+A formal reader verifies the complete directory before loading one artifact.
+Performance timing stays outside the formal run under `outputs/performance/<run_id>/`.
 
 ### The simulator, from Python
 
@@ -313,6 +320,13 @@ The scene derives its transform from the resort bounds.
 ```bash
 uv run python scripts/export_topology.py configs/mountain/default.yaml
 uv run python scripts/export_replay.py configs/mountain/default.yaml
+```
+
+Pass a formal run directory to export its verified evaluator replay.
+The export rejects an incomplete or changed run.
+
+```bash
+uv run python scripts/export_replay.py outputs/<run_id>
 ```
 
 ## Check the code

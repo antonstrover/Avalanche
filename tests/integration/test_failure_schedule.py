@@ -8,7 +8,13 @@ import pytest
 from avalanche.config import FailuresConfig, load_yaml
 from avalanche.config.models import ScenarioConfig
 from avalanche.scenarios.failures import apply_failures, refresh_reported_telemetry
-from avalanche.sim import LocationKind, MountainSim, Status, population_from_starts
+from avalanche.sim import (
+    EventPhase,
+    LocationKind,
+    MountainSim,
+    Status,
+    population_from_starts,
+)
 from avalanche.sim.population import ABILITY_NAMES
 
 FIXTURE = (
@@ -169,6 +175,44 @@ def test_failures_apply_and_expire_at_movement_step_two():
         "sudden_closure",
     }
     assert all(event.end_time_seconds == 5.0 for event in sim.failure_transitions.ended)
+
+
+def test_failure_events_use_tick_identity():
+    """Record one failure start and end between control boundaries."""
+    failures = {
+        "schedule": [
+            {
+                "kind": "sudden_closure",
+                "target": "base_village->lift1_base",
+                "start_time_seconds": 5.0,
+                "duration_seconds": 5.0,
+                "controller_visible": True,
+            }
+        ]
+    }
+    sim = MountainSim(FIXTURE)
+    sim.reset(4, {"control_interval_seconds": 15.0, "failures": failures})
+
+    sim.tick()
+    sim.tick()
+    started = [
+        event for event in sim.last_tick_events if event.event_type == "failure_started"
+    ]
+    sim.tick()
+    ended = [
+        event for event in sim.last_tick_events if event.event_type == "failure_ended"
+    ]
+
+    assert len(started) == len(ended) == 1
+    assert started[0].simulation_time == 5.0
+    assert started[0].movement_tick == 1
+    assert ended[0].simulation_time == 10.0
+    assert ended[0].movement_tick == 2
+    assert started[0].control_interval_index == 0
+    assert ended[0].control_interval_index == 0
+    assert started[0].phase == ended[0].phase == EventPhase.FAILURE_TRANSITION
+    assert len(started[0].physical_state_checksum) == 64
+    assert len(ended[0].physical_state_checksum) == 64
 
 
 def test_late_telemetry_freezes_only_the_reported_value():

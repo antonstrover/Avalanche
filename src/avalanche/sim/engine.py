@@ -6,7 +6,7 @@ The engine applies deterministic weather and hazard conditions.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -39,6 +39,7 @@ from avalanche.scenarios.operational_events import (
     EVENT_STREAM_NAMES,
     OperationalEvent,
     OperationalEventSchedule,
+    OperationalEventTransitions,
     resolve_operational_event_schedule,
 )
 from avalanche.scenarios.sensors import (
@@ -56,7 +57,7 @@ from avalanche.sim.evacuation import (
     ResolvedEnvironmentContext,
     resolve_environment_context,
 )
-from avalanche.sim.hazards import HazardEvent, update_hazards
+from avalanche.sim.hazards import HazardEvent, HazardTransition, update_hazards
 from avalanche.sim.movement import (
     DynamicState,
     MovementTransitions,
@@ -83,6 +84,7 @@ from avalanche.sim.population import (
 from avalanche.sim.routes import RouteTable, build_route_table
 from avalanche.sim.skier import LocationKind, Status
 from avalanche.sim.topology import Topology, load_topology
+from avalanche.sim.transitions import EventPhase, MaterialTransition
 
 STREAM_NAMES = (
     "population",
@@ -103,6 +105,31 @@ STREAM_NAMES = (
 )
 DEFAULT_TICK_SECONDS = 5.0
 DEFAULT_EPISODE_SECONDS = 3_600.0
+
+
+def _edge_id(topology: Topology, edge: int) -> str:
+    """Return one stable edge identity."""
+    source = topology.node_ids[int(topology.edge_source[edge])]
+    destination = topology.node_ids[int(topology.edge_destination[edge])]
+    return f"{source}->{destination}"
+
+
+def _group_members(
+    skiers: np.ndarray,
+    entities: np.ndarray,
+) -> tuple[tuple[int, np.ndarray], ...]:
+    """Group sorted skier indices by one entity index."""
+    skier_values = np.asarray(skiers, dtype=np.int64)
+    entity_values = np.asarray(entities, dtype=np.int64)
+    if skier_values.shape != entity_values.shape:
+        raise ValueError("the transition entities must match the skier indices")
+    if skier_values.size == 0:
+        return ()
+    unique, inverse = np.unique(entity_values, return_inverse=True)
+    return tuple(
+        (int(entity), skier_values[inverse == group])
+        for group, entity in enumerate(unique)
+    )
 
 
 def _spawn_random_streams(seed: int) -> dict[str, np.random.Generator]:
@@ -156,11 +183,16 @@ class MountainSim:
         self.delivered_audits: tuple[AuditMeasurement, ...] = ()
         self.operational_event_schedule: OperationalEventSchedule | None = None
         self.active_operational_events: tuple[OperationalEvent, ...] = ()
+        self.operational_event_transitions = OperationalEventTransitions((), (), ())
         self.environment_context = ResolvedEnvironmentContext((), (), 0.0)
         self.metrics = OnlineMetrics(len(CUSTOMER_GROUP_NAMES), DEFAULT_EPISODE_SECONDS)
         self.last_movement_transitions = MovementTransitions(
             np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
         )
+        self.last_tick_events: tuple[MaterialTransition, ...] = ()
+        self.initial_events: tuple[MaterialTransition, ...] = ()
+        self.weather_transitions = ()
+        self._capture_tick_events = True
         self._stranding_interval_counts: dict[tuple[str, str], int] = {}
 
     def reset(
@@ -241,7 +273,8 @@ class MountainSim:
             self.topology,
             self.streams,
         )
-        self.active_operational_events = self.operational_event_schedule.active(0.0)
+        self.active_operational_events = ()
+        self.operational_event_transitions = OperationalEventTransitions((), (), ())
 
         hazards = options.get("hazards", HazardConfig())
         if not isinstance(hazards, HazardConfig):
@@ -270,6 +303,9 @@ class MountainSim:
         self.last_movement_transitions = MovementTransitions(
             np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
         )
+        self.last_tick_events = ()
+        self.initial_events = ()
+        self._capture_tick_events = True
         self._stranding_interval_counts = {}
         self._update_weather()
         self._update_failures()
@@ -305,12 +341,32 @@ class MountainSim:
         self.route_sensor_packet = self.route_sensor_channel.bootstrap(
             **self._route_sensor_sources()
         )
+        initial_events: list[MaterialTransition] = []
+        self._append_schedule_transitions(initial_events)
+        self._append_operational_transitions(initial_events)
+        self._append_sensor_transition(
+            initial_events,
+            self.route_sensor_channel.pending[0],
+            0.0,
+            EventPhase.SENSOR_SAMPLE,
+            "sensor_sampled",
+            movement_tick=0,
+        )
+        self._append_sensor_transition(
+            initial_events,
+            self.route_sensor_packet,
+            0.0,
+            EventPhase.SENSOR_DELIVERY,
+            "sensor_delivered",
+            movement_tick=0,
+        )
+        self.initial_events = tuple(initial_events)
 
         # 6. Build the first observation.
         # 7. Return the observation and the run metadata.
         return self.observation(), self.metadata(seed)
 
-    def tick(self) -> MovementTransitions:
+    def tick(self, *, capture_events: bool = True) -> MovementTransitions:
         """Run one movement tick in the recorded order of the steps.
 
         Each step writes into the arrays of the population.
@@ -321,8 +377,19 @@ class MountainSim:
         assert self.routes is not None, "call the reset before the first tick"
 
         pop = self.population
+        self._capture_tick_events = capture_events
+        tick_events: list[MaterialTransition] = []
+        boundary_interval = int(self.simulation_time / self.control_interval_seconds)
         # 1. Start the scheduled arrivals.
-        start_arrivals(pop, self.simulation_time)
+        released = start_arrivals(pop, self.simulation_time)
+        self._append_node_groups(
+            tick_events,
+            released,
+            pop.location_index[released],
+            phase=EventPhase.ARRIVAL_RELEASE,
+            event_type="skiers_arrived",
+            control_interval_index=boundary_interval,
+        )
         active_at_tick_start = (pop.status == Status.ACTIVE) & (
             pop.location_kind != LocationKind.PENDING
         )
@@ -330,6 +397,7 @@ class MountainSim:
         # 2. Update the weather and the scheduled failures.
         self._update_weather()
         self._update_failures()
+        self._append_schedule_transitions(tick_events)
         unavailable_lifts = lift_unavailable_mask(self.topology, self.state)
         returned_queue_skiers = return_unavailable_lift_queues(
             pop,
@@ -337,14 +405,48 @@ class MountainSim:
             self.state,
             unavailable_lifts,
         )
+        self._append_edge_groups(
+            tick_events,
+            returned_queue_skiers,
+            pop.locally_rejected_edge[returned_queue_skiers],
+            phase=EventPhase.QUEUE_TRANSITION,
+            event_type="lift_queue_returned",
+            control_interval_index=boundary_interval,
+        )
         # 3. Give lift service to the skiers in a queue.
+        served_batches: list[np.ndarray] = []
         onward_rejected_skiers = serve_lift_queues(
-            pop, self.topology, self.state, self.tick_seconds
+            pop,
+            self.topology,
+            self.state,
+            self.tick_seconds,
+            served_skiers=served_batches,
+        )
+        self._append_edge_groups(
+            tick_events,
+            onward_rejected_skiers,
+            pop.locally_rejected_edge[onward_rejected_skiers],
+            phase=EventPhase.QUEUE_TRANSITION,
+            event_type="lift_queue_returned",
+            control_interval_index=boundary_interval,
         )
         returned_queue_skiers = np.union1d(
             returned_queue_skiers,
             onward_rejected_skiers,
         ).astype(np.int64, copy=False)
+        served = (
+            np.concatenate(served_batches)
+            if served_batches
+            else np.empty(0, dtype=np.int64)
+        )
+        self._append_edge_groups(
+            tick_events,
+            served,
+            pop.location_index[served],
+            phase=EventPhase.QUEUE_TRANSITION,
+            event_type="lift_boarded",
+            control_interval_index=boundary_interval,
+        )
         lift_stranding_candidates = update_lift_blocked_times(
             pop,
             self.topology,
@@ -360,6 +462,7 @@ class MountainSim:
         # 4. Move the skiers on a piste and on a lift.
         advance_on_edges(pop, self.topology, self.state, self.tick_seconds)
         # 5. Move the skiers that finish an edge to the destination node.
+        choice_time = self.simulation_time + self.tick_seconds
         transitions = arrive_at_nodes(
             pop,
             self.topology,
@@ -367,13 +470,31 @@ class MountainSim:
             self.tick_seconds,
             self.time_epsilon_seconds,
         )
-        choice_time = self.simulation_time + self.tick_seconds
+        self._append_edge_groups(
+            tick_events,
+            transitions.completed_skiers,
+            transitions.completed_edges,
+            phase=EventPhase.EDGE_TRANSITION,
+            event_type="edge_completed",
+            simulation_time=choice_time,
+            movement_tick=self.step + 1,
+        )
         control_interval_index = int(
             self.simulation_time / self.control_interval_seconds
         )
         if self._is_control_boundary(choice_time):
             assert self.route_sensor_channel is not None
+            previous_packet = self.route_sensor_packet
             self.route_sensor_packet = self.route_sensor_channel.deliver(choice_time)
+            if self.route_sensor_packet is not previous_packet:
+                self._append_sensor_transition(
+                    tick_events,
+                    self.route_sensor_packet,
+                    choice_time,
+                    EventPhase.SENSOR_DELIVERY,
+                    "sensor_delivered",
+                    movement_tick=self.step + 1,
+                )
         # 6. Select the next edge for each skier at a node.
         # 7. Apply the closures and the capacity limits.
         #    The step 6 applies both limits, because it chooses the edge.
@@ -389,6 +510,33 @@ class MountainSim:
             self.reported_risk_config,
         )
         self.metrics.update_route_decisions(route_decisions)
+        self._append_node_groups(
+            tick_events,
+            route_decisions.completed_skiers,
+            pop.location_index[route_decisions.completed_skiers],
+            phase=EventPhase.NODE_TRANSITION,
+            event_type="journey_completed",
+            simulation_time=choice_time,
+            movement_tick=self.step + 1,
+        )
+        self._append_edge_groups(
+            tick_events,
+            route_decisions.entered_piste_skiers,
+            route_decisions.entered_piste_edges,
+            phase=EventPhase.EDGE_TRANSITION,
+            event_type="piste_entered",
+            simulation_time=choice_time,
+            movement_tick=self.step + 1,
+        )
+        self._append_edge_groups(
+            tick_events,
+            route_decisions.joined_queue_skiers,
+            route_decisions.joined_queue_edges,
+            phase=EventPhase.QUEUE_TRANSITION,
+            event_type="lift_queue_joined",
+            simulation_time=choice_time,
+            movement_tick=self.step + 1,
+        )
         node_stranding_candidates = update_stranded(
             pop,
             self.routes,
@@ -420,8 +568,12 @@ class MountainSim:
         )
         self.last_movement_transitions = transitions
         self._record_stranding(newly_stranded)
+        self._append_location_groups(tick_events, newly_stranded, choice_time)
         # 8. Calculate the occupancy, the speeds, and the hazards.
         update_congestion(pop, self.topology, self.state)
+        hazard_transitions: list[HazardTransition] | None = (
+            [] if capture_events else None
+        )
         self.hazard_events.extend(
             update_hazards(
                 self.topology,
@@ -430,8 +582,10 @@ class MountainSim:
                 self.tick_seconds,
                 self.simulation_time + self.tick_seconds,
                 self.time_epsilon_seconds,
+                transitions=hazard_transitions,
             )
         )
+        self._append_hazard_transitions(tick_events, hazard_transitions or [])
         refresh_reported_telemetry(self.state, self.topology)
         # 9. Update the true outcomes and the online metrics. Stage 5 adds the metrics.
         accumulate_times(
@@ -459,8 +613,19 @@ class MountainSim:
                 self.simulation_time,
                 **self._route_sensor_sources(),
             )
+            sampled = self.route_sensor_channel.pending[-1]
+            self._append_sensor_transition(
+                tick_events,
+                sampled,
+                self.simulation_time,
+                EventPhase.SENSOR_SAMPLE,
+                "sensor_sampled",
+                movement_tick=self.step,
+            )
             self._stranding_interval_counts = {}
         self._update_operational_events()
+        self._append_operational_transitions(tick_events)
+        self.last_tick_events = tuple(tick_events)
         return transitions
 
     def _is_control_boundary(self, simulation_time: float) -> bool:
@@ -596,7 +761,7 @@ class MountainSim:
         """Apply the current scheduled weather to the simulator state."""
         assert self.topology is not None
         assert self.weather_schedule is not None
-        self.weather_schedule.update(self.simulation_time)
+        self.weather_transitions = self.weather_schedule.update(self.simulation_time)
         apply_weather(self.weather, self.weather_config, self.topology, self.state)
 
     def _update_failures(self) -> None:
@@ -613,8 +778,391 @@ class MountainSim:
     def _update_operational_events(self) -> None:
         """Expose each active honest operating event."""
         assert self.operational_event_schedule is not None
-        self.active_operational_events = self.operational_event_schedule.active(
-            self.simulation_time
+        self.operational_event_transitions = (
+            self.operational_event_schedule.transitions(
+                self.simulation_time,
+                self.active_operational_events,
+            )
+        )
+        self.active_operational_events = self.operational_event_transitions.active
+
+    def _append_schedule_transitions(
+        self,
+        target: list[MaterialTransition],
+    ) -> None:
+        """Append exact scenario starts and ends for this boundary."""
+        if not self._capture_tick_events:
+            return
+        assert self.topology is not None
+        changed = bool(
+            self.weather_transitions
+            or self.failure_transitions.started
+            or self.failure_transitions.ended
+        )
+        if not changed:
+            return
+        checksum = self.physical_state_checksum()
+        for transition in self.weather_transitions:
+            target.append(
+                self._transition(
+                    EventPhase.WEATHER_TRANSITION,
+                    "weather_changed",
+                    "weather",
+                    {
+                        "scheduled_time_seconds": transition.start_time_seconds,
+                        "weather": transition.weather.as_array().tolist(),
+                    },
+                    control_interval_index=int(
+                        self.simulation_time / self.control_interval_seconds
+                    ),
+                    physical_state_checksum=checksum,
+                )
+            )
+        for event in self.failure_transitions.started:
+            target.append(
+                self._edge_transition(
+                    EventPhase.FAILURE_TRANSITION,
+                    "failure_started",
+                    "scenario",
+                    event.target,
+                    event.as_dict(),
+                    control_interval_index=int(
+                        self.simulation_time / self.control_interval_seconds
+                    ),
+                    physical_state_checksum=checksum,
+                )
+            )
+        for event in self.failure_transitions.ended:
+            target.append(
+                self._edge_transition(
+                    EventPhase.FAILURE_TRANSITION,
+                    "failure_ended",
+                    "scenario",
+                    event.target,
+                    event.as_dict(),
+                    control_interval_index=int(
+                        self.simulation_time / self.control_interval_seconds
+                    ),
+                    physical_state_checksum=checksum,
+                )
+            )
+
+    def _append_operational_transitions(
+        self,
+        target: list[MaterialTransition],
+    ) -> None:
+        """Append exact operational starts and ends for this boundary."""
+        if not self._capture_tick_events:
+            return
+        operational = self.operational_event_transitions
+        if not operational.started and not operational.ended:
+            return
+        checksum = self.physical_state_checksum()
+        for event_type, events in (
+            ("operational_event_started", operational.started),
+            ("operational_event_ended", operational.ended),
+        ):
+            for event in events:
+                target.append(
+                    self._transition(
+                        EventPhase.OPERATIONAL_EVENT_TRANSITION,
+                        event_type,
+                        "scenario",
+                        event.complete(),
+                        entity_kind=event.target_type,
+                        entity_index=event.target,
+                        entity_id=event.target_id,
+                        control_interval_index=int(
+                            self.simulation_time / self.control_interval_seconds
+                        ),
+                        physical_state_checksum=checksum,
+                    )
+                )
+
+    def _append_node_groups(
+        self,
+        target: list[MaterialTransition],
+        skiers: np.ndarray,
+        nodes: np.ndarray,
+        *,
+        phase: EventPhase,
+        event_type: str,
+        simulation_time: float | None = None,
+        movement_tick: int | None = None,
+        control_interval_index: int | None = None,
+    ) -> None:
+        """Append one aggregate transition for each affected node."""
+        if not self._capture_tick_events:
+            return
+        assert self.topology is not None
+        groups = _group_members(skiers, nodes)
+        if not groups:
+            return
+        timestamp = self.simulation_time if simulation_time is None else simulation_time
+        tick = self.step if movement_tick is None else movement_tick
+        checksum = self.physical_state_checksum(
+            simulation_time=timestamp,
+            movement_tick=tick,
+        )
+        for node, members in groups:
+            target.append(
+                self._transition(
+                    phase,
+                    event_type,
+                    "simulator",
+                    {
+                        "count": len(members),
+                        "skier_indices": members.tolist(),
+                    },
+                    entity_kind="node",
+                    entity_index=node,
+                    entity_id=self.topology.node_ids[node],
+                    simulation_time=simulation_time,
+                    movement_tick=movement_tick,
+                    control_interval_index=control_interval_index,
+                    physical_state_checksum=checksum,
+                )
+            )
+
+    def _append_edge_groups(
+        self,
+        target: list[MaterialTransition],
+        skiers: np.ndarray,
+        edges: np.ndarray,
+        *,
+        phase: EventPhase,
+        event_type: str,
+        simulation_time: float | None = None,
+        movement_tick: int | None = None,
+        control_interval_index: int | None = None,
+    ) -> None:
+        """Append one aggregate transition for each affected edge."""
+        if not self._capture_tick_events:
+            return
+        groups = _group_members(skiers, edges)
+        if not groups:
+            return
+        timestamp = self.simulation_time if simulation_time is None else simulation_time
+        tick = self.step if movement_tick is None else movement_tick
+        checksum = self.physical_state_checksum(
+            simulation_time=timestamp,
+            movement_tick=tick,
+        )
+        for edge, members in groups:
+            target.append(
+                self._edge_transition(
+                    phase,
+                    event_type,
+                    "simulator",
+                    edge,
+                    {
+                        "count": len(members),
+                        "skier_indices": members.tolist(),
+                    },
+                    simulation_time=simulation_time,
+                    movement_tick=movement_tick,
+                    control_interval_index=control_interval_index,
+                    physical_state_checksum=checksum,
+                )
+            )
+
+    def _append_location_groups(
+        self,
+        target: list[MaterialTransition],
+        skiers: np.ndarray,
+        boundary_time: float,
+    ) -> None:
+        """Append exact aggregate stranding transitions by location."""
+        if not self._capture_tick_events or skiers.size == 0:
+            return
+        assert self.topology is not None
+        kinds = self.population.location_kind[skiers]
+        indices = self.population.location_index[skiers]
+        keys = np.column_stack((kinds, indices))
+        groups, inverse = np.unique(keys, axis=0, return_inverse=True)
+        checksum = self.physical_state_checksum(
+            simulation_time=boundary_time,
+            movement_tick=self.step + 1,
+        )
+        for group_index, (kind_value, entity_index) in enumerate(groups):
+            members = skiers[inverse == group_index]
+            kind = LocationKind(int(kind_value)).name.lower()
+            index = int(entity_index)
+            entity_id = (
+                self.topology.node_ids[index]
+                if kind == "node"
+                else _edge_id(self.topology, index)
+            )
+            target.append(
+                self._transition(
+                    EventPhase.STRANDING_TRANSITION,
+                    "skiers_stranded",
+                    "simulator",
+                    {
+                        "stranding_boundary_seconds": boundary_time,
+                        "newly_stranded_skiers": len(members),
+                        "skier_indices": members.tolist(),
+                    },
+                    entity_kind=kind,
+                    entity_index=index,
+                    entity_id=entity_id,
+                    simulation_time=boundary_time,
+                    movement_tick=self.step + 1,
+                    physical_state_checksum=checksum,
+                )
+            )
+
+    def _append_hazard_transitions(
+        self,
+        target: list[MaterialTransition],
+        transitions: list[HazardTransition],
+    ) -> None:
+        """Append every precursor start and end independently."""
+        if not self._capture_tick_events:
+            return
+        if not transitions:
+            return
+        simulation_time = transitions[0].simulation_time
+        checksum = self.physical_state_checksum(
+            simulation_time=simulation_time,
+            movement_tick=self.step + 1,
+        )
+        for transition in transitions:
+            target.append(
+                self._edge_transition(
+                    EventPhase.PRECURSOR_TRANSITION,
+                    f"{transition.event_type}_{transition.transition}",
+                    "simulator",
+                    transition.edge_index,
+                    {
+                        "density_ratio": transition.density_ratio,
+                        "hazard_score": transition.hazard_score,
+                    },
+                    simulation_time=transition.simulation_time,
+                    movement_tick=self.step + 1,
+                    physical_state_checksum=checksum,
+                )
+            )
+
+    def _append_sensor_transition(
+        self,
+        target: list[MaterialTransition],
+        packet: RouteSensorPacket,
+        simulation_time: float,
+        phase: EventPhase,
+        event_type: str,
+        *,
+        movement_tick: int,
+    ) -> None:
+        """Append one debug sensor boundary identity."""
+        if not self._capture_tick_events:
+            return
+        operational = packet.operational_packet
+        checksum = self.physical_state_checksum(
+            "reported",
+            simulation_time=simulation_time,
+            movement_tick=movement_tick,
+        )
+        target.append(
+            self._transition(
+                phase,
+                event_type,
+                "sensor_channel",
+                {
+                    "sensor_schema_version": packet.schema_version,
+                    "sample_time": packet.sample_time,
+                    "report_time": packet.report_time,
+                    "packet_identity": (
+                        None if operational is None else operational.packet_identity
+                    ),
+                    "policy_identity": packet.policy_identity,
+                },
+                simulation_time=simulation_time,
+                movement_tick=movement_tick,
+                control_interval_index=int(
+                    simulation_time / self.control_interval_seconds
+                ),
+                checksum_view="reported",
+                physical_state_checksum=checksum,
+            )
+        )
+
+    def _edge_transition(
+        self,
+        phase: EventPhase,
+        event_type: str,
+        actor_id: str,
+        edge: int,
+        payload: dict[str, Any],
+        *,
+        simulation_time: float | None = None,
+        movement_tick: int | None = None,
+        control_interval_index: int | None = None,
+        physical_state_checksum: str | None = None,
+    ) -> MaterialTransition:
+        """Build one transition for an edge entity."""
+        assert self.topology is not None
+        return self._transition(
+            phase,
+            event_type,
+            actor_id,
+            payload,
+            entity_kind="edge",
+            entity_index=edge,
+            entity_id=_edge_id(self.topology, edge),
+            simulation_time=simulation_time,
+            movement_tick=movement_tick,
+            control_interval_index=control_interval_index,
+            physical_state_checksum=physical_state_checksum,
+        )
+
+    def _transition(
+        self,
+        phase: EventPhase,
+        event_type: str,
+        actor_id: str,
+        payload: dict[str, Any],
+        *,
+        entity_kind: str = "",
+        entity_index: int = -1,
+        entity_id: str = "",
+        simulation_time: float | None = None,
+        movement_tick: int | None = None,
+        control_interval_index: int | None = None,
+        checksum_view: Literal["reported", "evaluator"] = "evaluator",
+        physical_state_checksum: str | None = None,
+    ) -> MaterialTransition:
+        """Build one transition with its exact tick identity."""
+        timestamp = self.simulation_time if simulation_time is None else simulation_time
+        tick = self.step if movement_tick is None else movement_tick
+        interval = (
+            int(
+                max(timestamp - self.time_epsilon_seconds, 0.0)
+                / self.control_interval_seconds
+            )
+            if control_interval_index is None
+            else control_interval_index
+        )
+        return MaterialTransition(
+            simulation_time=timestamp,
+            movement_tick=tick,
+            control_interval_index=interval,
+            phase=phase,
+            event_type=event_type,
+            actor_id=actor_id,
+            payload=payload,
+            entity_kind=entity_kind,
+            entity_index=entity_index,
+            entity_id=entity_id,
+            physical_state_checksum=(
+                self.physical_state_checksum(
+                    checksum_view,
+                    simulation_time=timestamp,
+                    movement_tick=tick,
+                )
+                if physical_state_checksum is None
+                else physical_state_checksum
+            ),
         )
 
     def advance_audits(self, interval: int) -> tuple[AuditMeasurement, ...]:
@@ -760,7 +1308,13 @@ class MountainSim:
             ],
         }
 
-    def physical_replay_state(self, view_kind: str = "evaluator") -> dict[str, Any]:
+    def physical_replay_state(
+        self,
+        view_kind: str = "evaluator",
+        *,
+        simulation_time: float | None = None,
+        movement_tick: int | None = None,
+    ) -> dict[str, Any]:
         """Return the replay-visible physical state for one display view."""
         if view_kind not in {"reported", "evaluator"}:
             raise ValueError("the physical replay view is invalid")
@@ -854,8 +1408,10 @@ class MountainSim:
             }
         return {
             "view_kind": view_kind,
-            "simulation_time": self.simulation_time,
-            "movement_tick": self.step,
+            "simulation_time": (
+                self.simulation_time if simulation_time is None else simulation_time
+            ),
+            "movement_tick": self.step if movement_tick is None else movement_tick,
             "topology_artifact_reference": {
                 "name": self.topology.name,
                 "sha256": self.topology.mountain_sha256,
@@ -863,11 +1419,21 @@ class MountainSim:
             "state": state,
         }
 
-    def physical_state_checksum(self, view_kind: str = "evaluator") -> str:
+    def physical_state_checksum(
+        self,
+        view_kind: str = "evaluator",
+        *,
+        simulation_time: float | None = None,
+        movement_tick: int | None = None,
+    ) -> str:
         """Return the SHA-256 identity of one replay display view."""
         from avalanche.traces.checksums import named_checksum
 
         return named_checksum(
-            self.physical_replay_state(view_kind),
+            self.physical_replay_state(
+                view_kind,
+                simulation_time=simulation_time,
+                movement_tick=movement_tick,
+            ),
             allow_nonfinite=True,
         )

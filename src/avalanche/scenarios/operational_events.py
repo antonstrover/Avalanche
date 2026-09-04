@@ -1,5 +1,7 @@
 """Resolve difficult but honest operating events."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -109,6 +111,30 @@ class OperationalEventSchedule:
     def active(self, simulation_time: float) -> tuple[OperationalEvent, ...]:
         """Return each active event in stable order."""
         return tuple(event for event in self.events if event.active_at(simulation_time))
+
+    def transitions(
+        self,
+        simulation_time: float,
+        previous: tuple[OperationalEvent, ...],
+    ) -> OperationalEventTransitions:
+        """Return exact starts and ends at one boundary."""
+        active = self.active(simulation_time)
+        before = set(previous)
+        current = set(active)
+        return OperationalEventTransitions(
+            active=active,
+            started=tuple(event for event in active if event not in before),
+            ended=tuple(event for event in previous if event not in current),
+        )
+
+
+@dataclass(frozen=True)
+class OperationalEventTransitions:
+    """Hold active, started, and ended operational events."""
+
+    active: tuple[OperationalEvent, ...]
+    started: tuple[OperationalEvent, ...]
+    ended: tuple[OperationalEvent, ...]
 
 
 def resolve_operational_event_schedule(

@@ -4,7 +4,7 @@ import hashlib
 import struct
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from math import isclose, isfinite
 from pathlib import Path
@@ -21,6 +21,7 @@ from avalanche.config.models import (
     NumericsConfig,
 )
 from avalanche.control import (
+    ActionExecutionTransition,
     ActionProposal,
     AdjudicationResult,
     Adjudicator,
@@ -562,7 +563,10 @@ class AvalancheEnv(gym.Env):
         )
 
     def complete_control_interval(
-        self, transition: ControlIntervalTransition
+        self,
+        transition: ControlIntervalTransition,
+        *,
+        tick_observer: Callable[[MountainSim], None] | None = None,
     ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
         """Run movement after one adjudicated control boundary."""
         if self.sim.simulation_time != transition.simulation_time:
@@ -571,7 +575,9 @@ class AvalancheEnv(gym.Env):
             raise RuntimeError("complete the most recent adjudication")
 
         for _ in range(self.config.movement_ticks_per_step):
-            self.sim.tick()
+            self.sim.tick(capture_events=tick_observer is not None)
+            if tick_observer is not None:
+                tick_observer(self.sim)
         self.sim.metrics.record_control_interval(self.sim.state)
 
         after = self._reward_snapshot()
@@ -672,7 +678,11 @@ class AvalancheEnv(gym.Env):
                     self.sim.metrics.cumulative_stranded_seconds
                 ),
             )
-            _apply_executed_action(self.sim, result.executed_action)
+            action_transitions = _apply_executed_action(
+                self.sim,
+                result.executed_action,
+            )
+            result = replace(result, action_transitions=action_transitions)
             self.last_proposal = proposal
             self.last_adjudication = result
             self.last_executed_action = result.executed_action
@@ -840,11 +850,16 @@ def create_action_proposal(
     )
 
 
-def _apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
-    """Apply one validated action to the simulator state."""
+def _apply_executed_action(
+    sim: MountainSim,
+    executed: ExecutedAction,
+) -> tuple[ActionExecutionTransition, ...]:
+    """Apply one action and return each infrastructure transition."""
     topology = sim.topology
     if topology is None:
         raise RuntimeError("reset the simulator before an executed action")
+    before_closed = sim.state.closed.copy()
+    before_capacity = sim.state.lift_capacity_factor.copy()
     action = thaw_action(executed.action)
     requests = action["piste_requests"]
     sim.state.closed[requests == PISTE_CLOSE] = True
@@ -862,6 +877,49 @@ def _apply_executed_action(sim: MountainSim, executed: ExecutedAction) -> None:
     sim.state.telemetry_override[~telemetry_enabled] = 0.0
     _apply_route_weights(sim, action["route_weights"])
     refresh_reported_telemetry(sim.state, topology)
+    transitions: list[ActionExecutionTransition] = []
+    for event_type, changed in (
+        ("piste_closed", sim.state.closed & ~before_closed),
+        ("piste_opened", ~sim.state.closed & before_closed),
+    ):
+        for edge in np.flatnonzero(changed):
+            transitions.append(
+                _action_edge_transition(
+                    topology,
+                    int(edge),
+                    event_type,
+                    {"closed": bool(sim.state.closed[edge])},
+                )
+            )
+    capacity_changed = np.flatnonzero(sim.state.lift_capacity_factor != before_capacity)
+    for edge in capacity_changed:
+        transitions.append(
+            _action_edge_transition(
+                topology,
+                int(edge),
+                "lift_capacity_changed",
+                {"capacity_factor": float(sim.state.lift_capacity_factor[edge])},
+            )
+        )
+    return tuple(transitions)
+
+
+def _action_edge_transition(
+    topology: Topology,
+    edge: int,
+    event_type: str,
+    payload: dict[str, Any],
+) -> ActionExecutionTransition:
+    """Build one stable executed-action edge transition."""
+    source = topology.node_ids[int(topology.edge_source[edge])]
+    destination = topology.node_ids[int(topology.edge_destination[edge])]
+    return ActionExecutionTransition(
+        event_type=event_type,
+        entity_kind="edge",
+        entity_index=edge,
+        entity_id=f"{source}->{destination}",
+        payload=payload,
+    )
 
 
 def action_intervention_cost(executed: ExecutedAction) -> float:

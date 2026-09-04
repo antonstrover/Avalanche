@@ -2,17 +2,22 @@
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
-import pyarrow.parquet as pq
+import pytest
 
-from avalanche.config import ResolvedConfig
+from avalanche.config import (
+    ConfigurationResolutionError,
+    ResolvedConfig,
+    load_yaml,
+    run_id,
+)
 from avalanche.control import OBSERVATION_SCHEMA_VERSION
 from avalanche.control.types import OPERATIONAL_SENSOR_SPECS
-from avalanche.env import build_resolved_environment
 from avalanche.experiments import run_episode
 from avalanche.experiments.final_evaluation import attack_detection_metrics
-from avalanche.experiments.runner import _material_state, _record_material_changes
 from avalanche.metrics import METRICS_VERSION
 from avalanche.traces import (
     CONTINUATION_ARTIFACT_TYPE,
@@ -20,15 +25,18 @@ from avalanche.traces import (
     EVENT_SCHEMA_VERSION,
     PHYSICAL_REPLAY_SCHEMA_VERSION,
     REPORTED_REPLAY_FILENAME,
+    RUN_MANIFEST_FILENAME,
+    RUN_MANIFEST_SIDECAR_FILENAME,
     SUMMARY_SCHEMA_VERSION,
-    TraceWriter,
     load_continuation_snapshot,
     load_physical_replay_snapshot,
+    load_verified_performance,
+    load_verified_run,
 )
 from tests.configuration import resolve_test_configuration
 
 
-def small_config(root: Path) -> ResolvedConfig:
+def small_config(root: Path, trace_level: str = "decision") -> ResolvedConfig:
     return resolve_test_configuration(
         root,
         mountain="configs/mountain/small.yaml",
@@ -48,6 +56,81 @@ def small_config(root: Path) -> ResolvedConfig:
         override={
             "population": {"skier_count": 8},
             "episode_duration_seconds": 10.0,
+            "trace_level": trace_level,
+        },
+    )
+
+
+def cadence_config(root: Path, trace_level: str) -> ResolvedConfig:
+    """Return one run with five movement ticks per control interval."""
+    return resolve_test_configuration(
+        root,
+        mountain="configs/mountain/small.yaml",
+        scenario="configs/scenarios/default.yaml",
+        controller="configs/controllers/small-resort/honest.yaml",
+        monitor="configs/monitors/none.yaml",
+        changes={
+            "mountain": {"population": {"arrival_window_seconds": 0.0}},
+            "scenario": {
+                "intervals": {
+                    "movement_tick_seconds": 1.0,
+                    "control_interval_seconds": 5.0,
+                },
+                "snapshot_interval_seconds": 5.0,
+            },
+        },
+        override={
+            "population": {"skier_count": 1},
+            "episode_duration_seconds": 10.0,
+            "trace_level": trace_level,
+        },
+    )
+
+
+def contained_hazard_config(root: Path) -> ResolvedConfig:
+    """Return one hazard that lasts one tick inside a control interval."""
+    return resolve_test_configuration(
+        root,
+        mountain="configs/mountain/small.yaml",
+        scenario="configs/scenarios/default.yaml",
+        controller="configs/controllers/small-resort/honest.yaml",
+        monitor="configs/monitors/none.yaml",
+        changes={
+            "mountain": {"population": {"arrival_window_seconds": 0.0}},
+            "scenario": {
+                "intervals": {
+                    "movement_tick_seconds": 5.0,
+                    "control_interval_seconds": 15.0,
+                },
+                "snapshot_interval_seconds": 5.0,
+                "scenario": {
+                    "weather": {
+                        "initial": {
+                            "wind": 25.0,
+                            "visibility": 1.0,
+                            "snowfall": 10.0,
+                            "temperature": -20.0,
+                        },
+                        "schedule": [
+                            {
+                                "start_time_seconds": 5.0,
+                                "wind": 0.0,
+                                "visibility": 10000.0,
+                                "snowfall": 0.0,
+                                "temperature": 2.0,
+                            }
+                        ],
+                    },
+                    "hazards": {
+                        "minimum_duration_seconds": 5.0,
+                        "weather_risk_weight": 10.0,
+                    },
+                },
+            },
+        },
+        override={
+            "population": {"skier_count": 1},
+            "episode_duration_seconds": 15.0,
         },
     )
 
@@ -133,24 +216,45 @@ def stranded_config(root: Path) -> ResolvedConfig:
 
 def test_a_full_episode_writes_each_required_file(tmp_path):
     resolved = small_config(tmp_path / ".configuration")
-    summary = run_episode(resolved, tmp_path)
+    output = tmp_path / "run"
+    summary = run_episode(resolved, output)
     required = {
-        "artifact-manifest.json",
+        "config.resolved.yaml",
         "episode-0-final.avalanche-continuation.msgpack",
         "events.jsonl",
+        "metadata.json",
         "metrics.parquet",
+        "model-reference.json",
         EVALUATOR_REPLAY_FILENAME,
         REPORTED_REPLAY_FILENAME,
+        RUN_MANIFEST_FILENAME,
+        RUN_MANIFEST_SIDECAR_FILENAME,
         "summary.json",
     }
-    assert required <= {path.name for path in tmp_path.iterdir()}
-    assert json.loads((tmp_path / "summary.json").read_text()) == summary
-    metrics_table = pq.read_table(tmp_path / "metrics.parquet")
+    assert required == {path.name for path in output.iterdir()}
+    reader = load_verified_run(output)
+    assert reader.read_json("summary.json") == summary
+    events = reader.read_events()
+    envelope = {
+        "schema_version",
+        "event_sequence",
+        "simulation_time",
+        "movement_tick",
+        "control_interval_index",
+        "actor_id",
+        "event_type",
+        "payload",
+        "physical_state_checksum",
+    }
+    assert all(envelope <= set(event) for event in events)
+    assert all(len(event["physical_state_checksum"]) == 64 for event in events)
+    assert [event["event_sequence"] for event in events] == list(range(len(events)))
+    metrics_table = reader.read_parquet("metrics.parquet")
     assert metrics_table.num_rows == 3
     assert "monitor_latency_seconds_sum" not in metrics_table.column_names
     assert "intervention_latency_seconds_sum" not in metrics_table.column_names
-    reported = pq.read_table(tmp_path / REPORTED_REPLAY_FILENAME)
-    evaluator = pq.read_table(tmp_path / EVALUATOR_REPLAY_FILENAME)
+    reported = reader.read_parquet(REPORTED_REPLAY_FILENAME)
+    evaluator = reader.read_parquet(EVALUATOR_REPLAY_FILENAME)
     assert reported.num_rows == evaluator.num_rows == 3
     assert reported.column("schema_version").to_pylist() == (
         [PHYSICAL_REPLAY_SCHEMA_VERSION] * 3
@@ -162,10 +266,10 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     evaluator_row = load_physical_replay_snapshot(evaluator.to_pylist()[0])
     assert "population" not in reported_row["state"]
     assert "population" in evaluator_row["state"]
-    manifest = json.loads((tmp_path / "artifact-manifest.json").read_text())
+    manifest = reader.manifest
     assert all(
         item["artifact_sha256"]
-        == hashlib.sha256((tmp_path / item["path"]).read_bytes()).hexdigest()
+        == hashlib.sha256((output / item["path"]).read_bytes()).hexdigest()
         for item in manifest["artifacts"]
     )
     continuation = next(
@@ -174,7 +278,7 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
         if item["artifact_type"] == CONTINUATION_ARTIFACT_TYPE
     )
     loaded = load_continuation_snapshot(
-        tmp_path / continuation["path"],
+        output / continuation["path"],
         expected_artifact_sha256=continuation["artifact_sha256"],
         resolved=resolved,
     )
@@ -197,9 +301,16 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     assert summary["metrics"]["lost_safe_evacuation_capacity_seconds"] >= 0.0
     assert summary["simulation_time"] == 10.0
     assert summary["truncated"]
-    assert summary["performance"]["performance_version"] == 1
-    assert summary["performance"]["monitor_latency_seconds_sum"] >= 0.0
-    assert summary["performance"]["monitor_latency_seconds_mean"] >= 0.0
+    assert summary["terminal_reason"] == "episode_horizon"
+    assert "performance" not in summary
+    performance = load_verified_performance(
+        tmp_path / "performance" / run_id(resolved) / "performance.json"
+    )
+    assert not performance["reproducible"]
+    assert performance["performance_version"] == 1
+    assert performance["monitor_latency_seconds_sum"] >= 0.0
+    assert performance["monitor_latency_seconds_mean"] >= 0.0
+    assert performance["research_manifest_sha256"] == (reader.research_manifest_sha256)
     lifecycle = summary["attack_lifecycle"]
     assert lifecycle["trigger_ready_at"] is None
     assert lifecycle["first_malicious_proposal_at"] is None
@@ -209,11 +320,9 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
 
 
 def test_decision_events_keep_each_control_interval(tmp_path):
-    run_episode(small_config(tmp_path / ".configuration"), tmp_path)
-    events = [
-        json.loads(line)
-        for line in (tmp_path / "events.jsonl").read_text().splitlines()
-    ]
+    output = tmp_path / "run"
+    run_episode(small_config(tmp_path / ".configuration"), output)
+    events = load_verified_run(output).read_events()
     proposals = [event for event in events if event["event_type"] == "action_proposed"]
     evaluator = [
         event for event in events if event["event_type"] == "evaluator_observation"
@@ -233,6 +342,17 @@ def test_decision_events_keep_each_control_interval(tmp_path):
     assert [event["simulation_time"] for event in decisions] == [0.0, 5.0]
     assert [event["simulation_time"] for event in executed] == [0.0, 5.0]
     assert [event["simulation_time"] for event in outcomes] == [5.0, 10.0]
+    for proposal in proposals:
+        later_phases = [
+            event
+            for event in events
+            if event["simulation_time"] == proposal["simulation_time"]
+            and event["phase_code"] >= 4
+        ]
+        assert all(
+            proposal["event_sequence"] < event["event_sequence"]
+            for event in later_phases
+        )
     assert len(evaluator) == len(proposals)
     assert all("attack_step_record" not in event["payload"] for event in proposals)
     assert all("attack_step_record" not in event["payload"] for event in decisions)
@@ -278,24 +398,25 @@ def test_decision_events_keep_each_control_interval(tmp_path):
         )
         assert {event["schema_version"] for event in boundary} == {EVENT_SCHEMA_VERSION}
         assert len({event["simulation_time"] for event in boundary}) == 1
-        assert len({event["step"] for event in boundary}) == 1
-        assert len({event["state_checksum"] for event in boundary}) == 1
+        assert len({event["movement_tick"] for event in boundary}) == 1
+        assert len({event["physical_state_checksum"] for event in boundary}) == 1
         decision_ids = {
             event["payload"]["decision_id"] for event in (*boundary, outcomes[index])
         }
         assert len(decision_ids) == 1
-        assert outcomes[index]["state_checksum"] != boundary[0]["state_checksum"]
+        assert (
+            outcomes[index]["physical_state_checksum"]
+            != (boundary[0]["physical_state_checksum"])
+        )
         assert (
             outcomes[index]["payload"]["metrics"]["metrics_version"] == METRICS_VERSION
         )
 
 
 def test_a_sleeper_trace_aligns_attack_labels_and_decisions(tmp_path):
-    run_episode(sleeper_config(tmp_path / ".configuration"), tmp_path)
-    events = [
-        json.loads(line)
-        for line in (tmp_path / "events.jsonl").read_text().splitlines()
-    ]
+    output = tmp_path / "run"
+    run_episode(sleeper_config(tmp_path / ".configuration"), output)
+    events = load_verified_run(output).read_events()
     evaluators = [
         event for event in events if event["event_type"] == "evaluator_observation"
     ]
@@ -369,34 +490,24 @@ def test_a_sleeper_trace_aligns_attack_labels_and_decisions(tmp_path):
 
 
 def test_stranding_events_keep_each_movement_boundary(tmp_path):
-    resolved = small_config(tmp_path / ".configuration")
-    env = build_resolved_environment(resolved)
-    env.reset(seed=resolved.seed)
-    before = _material_state(env)
-    env.sim.population.first_stranded_at[:3] = [5.0, 5.0, 10.0]
-    trace = TraceWriter(tmp_path / "trace", "run", "episode", resolved.seed)
-
-    _record_material_changes(trace, env, before)
-
+    output = tmp_path / "run"
+    run_episode(stranded_config(tmp_path / ".configuration"), output)
     stranded = [
-        event for event in trace.events if event.event_type == "skiers_stranded"
+        event
+        for event in load_verified_run(output).read_events()
+        if event["event_type"] == "skiers_stranded"
     ]
-    assert [event.payload for event in stranded] == [
-        {
-            "stranding_boundary_seconds": 5.0,
-            "control_interval_index": 0,
-            "newly_stranded_skiers": 2,
-        },
-        {
-            "stranding_boundary_seconds": 10.0,
-            "control_interval_index": 1,
-            "newly_stranded_skiers": 1,
-        },
-    ]
+    assert sum(event["payload"]["newly_stranded_skiers"] for event in stranded) == 8
+    assert {event["simulation_time"] for event in stranded} == {5.0}
+    assert {event["movement_tick"] for event in stranded} == {1}
+    assert {event["control_interval_index"] for event in stranded} == {0}
 
 
 def test_stranded_terminal_state_runs_to_horizon(tmp_path):
-    summary = run_episode(stranded_config(tmp_path / ".configuration"), tmp_path)
+    summary = run_episode(
+        stranded_config(tmp_path / ".configuration"),
+        tmp_path / "run",
+    )
 
     assert summary["simulation_time"] == 15.0
     assert summary["truncated"]
@@ -405,3 +516,170 @@ def test_stranded_terminal_state_runs_to_horizon(tmp_path):
     assert summary["metrics"]["harm_onset_at"] == 5.0
     assert summary["metrics"]["harm_onset_control_interval"] == 0
     assert summary["metrics"]["cumulative_stranded_seconds"] == 80.0
+
+
+def test_contained_hazard_has_start_and_end_events(tmp_path):
+    output = tmp_path / "run"
+    run_episode(contained_hazard_config(tmp_path / ".configuration"), output)
+    events = load_verified_run(output).read_events()
+    precursors = [
+        event
+        for event in events
+        if event["event_type"].startswith("capacity_exposure_")
+    ]
+    target = precursors[0]["entity_id"]
+    selected = [event for event in precursors if event["entity_id"] == target]
+
+    assert [event["event_type"] for event in selected] == [
+        "capacity_exposure_started",
+        "capacity_exposure_ended",
+    ]
+    assert [event["simulation_time"] for event in selected] == [5.0, 10.0]
+    assert [event["movement_tick"] for event in selected] == [1, 2]
+    assert {event["control_interval_index"] for event in selected} == {0}
+
+
+def test_snapshot_cadence_uses_exact_movement_ticks(tmp_path):
+    resolved = cadence_config(tmp_path / ".configuration", "decision")
+    output = tmp_path / "run"
+    run_episode(resolved, output)
+    reader = load_verified_run(output)
+    reported = reader.read_parquet(REPORTED_REPLAY_FILENAME).to_pylist()
+    evaluator = reader.read_parquet(EVALUATOR_REPLAY_FILENAME).to_pylist()
+
+    assert [row["movement_tick"] for row in reported] == [0, 5, 10]
+    assert [row["simulation_time"] for row in reported] == [0.0, 5.0, 10.0]
+    assert [row["movement_tick"] for row in evaluator] == [0, 5, 10]
+
+
+def test_snapshot_cadence_rejects_a_partial_movement_tick(tmp_path):
+    with pytest.raises(ConfigurationResolutionError, match="whole movement ticks"):
+        resolve_test_configuration(
+            tmp_path / ".configuration",
+            mountain="configs/mountain/small.yaml",
+            scenario="configs/scenarios/default.yaml",
+            controller="configs/controllers/small-resort/honest.yaml",
+            monitor="configs/monitors/none.yaml",
+            changes={
+                "scenario": {
+                    "intervals": {"movement_tick_seconds": 5.0},
+                    "snapshot_interval_seconds": 7.5,
+                }
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("trace_level", "expected"),
+    [
+        (
+            "summary",
+            {
+                "config.resolved.yaml",
+                "metadata.json",
+                "metrics.parquet",
+                "model-reference.json",
+                "run-manifest.json",
+                "run-manifest.sha256",
+                "summary.json",
+            },
+        ),
+        (
+            "decision",
+            {
+                "config.resolved.yaml",
+                "episode-0-final.avalanche-continuation.msgpack",
+                "events.jsonl",
+                "metadata.json",
+                "metrics.parquet",
+                "model-reference.json",
+                "physical-replay-evaluator.parquet",
+                "physical-replay-reported.parquet",
+                "run-manifest.json",
+                "run-manifest.sha256",
+                "summary.json",
+            },
+        ),
+        (
+            "debug",
+            {
+                "config.resolved.yaml",
+                "episode-0-final.avalanche-continuation.msgpack",
+                "events.jsonl",
+                "metadata.json",
+                "metrics.parquet",
+                "model-reference.json",
+                "physical-replay-evaluator.parquet",
+                "physical-replay-reported.parquet",
+                "run-manifest.json",
+                "run-manifest.sha256",
+                "summary.json",
+            },
+        ),
+    ],
+)
+def test_trace_levels_have_the_declared_file_set(tmp_path, trace_level, expected):
+    output = tmp_path / "run"
+    run_episode(cadence_config(tmp_path / ".configuration", trace_level), output)
+
+    assert {path.name for path in output.iterdir()} == expected
+    reader = load_verified_run(output)
+    if trace_level == "summary":
+        assert "events.jsonl" not in reader.artifacts
+        return
+    replay = reader.read_parquet(EVALUATOR_REPLAY_FILENAME)
+    expected_rows = 11 if trace_level == "debug" else 3
+    assert replay.num_rows == expected_rows
+    sensor_events = [
+        event for event in reader.read_events() if event["phase_code"] in {13, 14}
+    ]
+    assert bool(sensor_events) == (trace_level == "debug")
+
+
+def test_terminal_event_is_flushed_last(tmp_path):
+    output = tmp_path / "run"
+    run_episode(small_config(tmp_path / ".configuration"), output)
+    events = load_verified_run(output).read_events()
+
+    assert events[-1]["event_type"] == "episode_ended"
+    assert events[-1]["phase_code"] == 17
+    assert events[-1]["simulation_time"] == 10.0
+    assert events[-1]["movement_tick"] == 2
+
+
+def test_verified_replay_export_loads_an_untampered_run(tmp_path):
+    output = tmp_path / "run"
+    run_episode(small_config(tmp_path / ".configuration"), output)
+    mountain = load_yaml(
+        Path(__file__).resolve().parents[2]
+        / "configs"
+        / "mountain"
+        / "small-resort.yaml"
+    )
+    resort = tmp_path / "resort.json"
+    resort.write_text(
+        json.dumps({"nodes": mountain["nodes"], "edges": mountain["edges"]})
+    )
+    replay_path = tmp_path / "replay.json"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/export_replay.py",
+            str(output),
+            "--resort",
+            str(resort),
+            "--output",
+            str(replay_path),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    replay = json.loads(replay_path.read_text())
+
+    assert replay["research_manifest_sha256"] == (
+        load_verified_run(output).research_manifest_sha256
+    )
+    assert replay["frames"]

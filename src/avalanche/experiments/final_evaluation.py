@@ -58,7 +58,12 @@ from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
 from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import verify_formal_model_reference
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_KINDS
-from avalanche.traces import EVENT_SCHEMA_VERSION, SUMMARY_SCHEMA_VERSION
+from avalanche.traces import (
+    EVENT_SCHEMA_VERSION,
+    SUMMARY_SCHEMA_VERSION,
+    load_verified_performance,
+    load_verified_run,
+)
 
 EVALUATION_VERSION = 4
 BOOTSTRAP_SEED = 20260825
@@ -441,11 +446,8 @@ def _run_evaluation_episode(task: EvaluationRun) -> dict[str, Any]:
         raise ValueError("an evaluation run needs one complete pair context")
     if task.output_dir.exists() and any(task.output_dir.iterdir()):
         raise ValueError("an immutable evaluation run already exists")
-    summary = run_episode(task.resolved, task.output_dir)
     configuration = task.resolved.model_dump(mode="json")
     configuration_text = yaml.safe_dump(configuration, sort_keys=True)
-    config_path = task.output_dir / "config.resolved.yaml"
-    config_path.write_text(configuration_text)
     metadata = {
         "code_revision": task.code_revision,
         "configuration_sha256": hashlib.sha256(configuration_text.encode()).hexdigest(),
@@ -457,11 +459,30 @@ def _run_evaluation_episode(task: EvaluationRun) -> dict[str, Any]:
         "root_seed": task.root_seed,
         **task.pair_context.as_dict(),
     }
-    (task.output_dir / "evaluation-metadata.json").write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+    run_episode(
+        task.resolved,
+        task.output_dir,
+        metadata=metadata,
     )
-    events = _read_events(task.output_dir / "events.jsonl")
-    return _evaluation_record(task, summary, metadata, events)
+    reader = load_verified_run(task.output_dir)
+    summary = reader.read_json("summary.json")
+    verified_metadata = reader.read_json("metadata.json")
+    events = reader.read_events()
+    performance = load_verified_performance(
+        task.output_dir.parent
+        / "performance"
+        / str(summary["run_id"])
+        / "performance.json",
+        expected_research_manifest_sha256=reader.research_manifest_sha256,
+    )
+    return _evaluation_record(
+        task,
+        summary,
+        verified_metadata,
+        events,
+        performance=performance,
+        research_manifest_sha256=reader.research_manifest_sha256,
+    )
 
 
 def _evaluation_record(
@@ -469,6 +490,9 @@ def _evaluation_record(
     summary: Mapping[str, Any],
     metadata: Mapping[str, Any],
     events: Sequence[Mapping[str, Any]],
+    *,
+    performance: Mapping[str, Any] | None = None,
+    research_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Build one final evaluator row from a real episode summary."""
     if summary.get("summary_schema_version") != SUMMARY_SCHEMA_VERSION:
@@ -495,7 +519,8 @@ def _evaluation_record(
     )
     if normalized_harm != timing["harm_onset_at"]:
         raise ValueError("the metric and lifecycle harm clocks differ")
-    latency = float(summary["performance"]["monitor_latency_seconds_mean"])
+    performance = performance or {}
+    latency = float(performance.get("monitor_latency_seconds_mean", 0.0))
     return {
         "record_kind": "evaluation_episode",
         "feature_profile": task.cell.feature_profile,
@@ -517,6 +542,7 @@ def _evaluation_record(
         "run_id": summary["run_id"],
         "code_revision": task.code_revision,
         "resolved_config_checksum": metadata["resolved_configuration_sha256"],
+        "research_manifest_sha256": research_manifest_sha256,
         "model_lock_checksum": task.model_lock_checksum,
         "evaluation_version": EVALUATION_VERSION,
         "dataset_version": DATASET_VERSION,
@@ -609,13 +635,6 @@ def _attach_paired_assessments(
     return list(records)
 
 
-def _read_events(path: Path) -> list[dict[str, Any]]:
-    """Read one complete JSON Lines event trace."""
-    events = [json.loads(line) for line in path.read_text().splitlines() if line]
-    _require_current_event_schema(events)
-    return events
-
-
 def attack_detection_metrics(
     events: Sequence[Mapping[str, Any]], *, attack_run: bool
 ) -> dict[str, Any]:
@@ -653,7 +672,7 @@ def attack_detection_metrics(
     seen: set[str] = set()
     ordered = sorted(
         evaluator_events,
-        key=lambda event: (float(event["simulation_time"]), int(event["step"])),
+        key=_event_order_key,
     )
     for event in ordered:
         payload = event["payload"]
@@ -1170,7 +1189,7 @@ def _final_attack_lifecycle(
         raise ValueError("the evaluator trace misses the attack lifecycle")
     ordered = sorted(
         events,
-        key=lambda event: (float(event["simulation_time"]), int(event["step"])),
+        key=_event_order_key,
     )
     previous: dict[str, Any] | None = None
     for event in ordered:
@@ -1279,7 +1298,7 @@ def _censor_harm(events: Sequence[Mapping[str, Any]]) -> float:
     """Return cumulative harm at the final interval outcome."""
     final = max(
         events,
-        key=lambda event: (float(event["simulation_time"]), int(event["step"])),
+        key=_event_order_key,
     )
     payload = final.get("payload")
     metrics = None if not isinstance(payload, Mapping) else payload.get("metrics")
@@ -1292,6 +1311,12 @@ def _censor_harm(events: Sequence[Mapping[str, Any]]) -> float:
     if not np.isfinite(result) or result < 0.0:
         raise ValueError("the censor outcome has invalid stranded seconds")
     return result
+
+
+def _event_order_key(event: Mapping[str, Any]) -> tuple[float, int]:
+    """Return one formal or legacy event time key."""
+    tick = event.get("movement_tick", event.get("step", -1))
+    return float(event["simulation_time"]), int(tick)
 
 
 def _require_current_event_schema(events: Sequence[Mapping[str, Any]]) -> None:

@@ -102,6 +102,17 @@ class ProposalEngineeringError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ActionExecutionTransition:
+    """Record one physical change from an executed action."""
+
+    event_type: str
+    entity_kind: str
+    entity_index: int
+    entity_id: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class AdjudicationResult:
     """Hold one proposal, one decision, and one final action."""
 
@@ -115,6 +126,7 @@ class AdjudicationResult:
     predicted_result: PredictedResult = ()
     approval_request: ApprovalRequest | None = None
     approval_response: ApprovalResponse | None = None
+    action_transitions: tuple[ActionExecutionTransition, ...] = ()
 
 
 class Adjudicator:

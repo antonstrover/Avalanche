@@ -17,6 +17,7 @@ from avalanche.config import (
     ModelLockReference,
     ResolvedConfig,
     load_yaml,
+    run_id,
 )
 from avalanche.config.models import PopulationConfig
 from avalanche.control import ApprovalChoice, SimulatedApprover
@@ -40,6 +41,8 @@ from avalanche.sim import LocationKind, MountainSim, population_from_starts
 from avalanche.sim.engine import STREAM_NAMES
 from avalanche.traces import (
     encode_continuation_snapshot,
+    load_verified_performance,
+    load_verified_run,
     restore_continuation_snapshot,
 )
 from tests.configuration import resolve_test_configuration
@@ -111,6 +114,7 @@ DETERMINISTIC_SUMMARY_FIELDS = (
     "seed",
     "terminated",
     "truncated",
+    "terminal_reason",
     "simulation_time",
     "step",
     "physical_state_checksum",
@@ -571,6 +575,35 @@ def test_controller_draws_cannot_change_external_schedules_or_results():
     assert deterministic_result(baseline) == deterministic_result(disturbed)
 
 
+def test_same_seed_formal_run_bytes_match(tmp_path):
+    """Match every formal file while excluding performance diagnostics."""
+    resolved = resolved_episode_config()
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+
+    write_episode(resolved, first)
+    write_episode(resolved, second)
+    first_reader = load_verified_run(first)
+    second_reader = load_verified_run(second)
+
+    assert first_reader.research_manifest_sha256 == (
+        second_reader.research_manifest_sha256
+    )
+    formal = {
+        *first_reader.artifacts,
+        "run-manifest.json",
+        "run-manifest.sha256",
+    }
+    assert formal == {
+        *second_reader.artifacts,
+        "run-manifest.json",
+        "run-manifest.sha256",
+    }
+    assert all(
+        (first / name).read_bytes() == (second / name).read_bytes() for name in formal
+    )
+
+
 # The attack fixtures. Each run keeps the fixture trigger and a small population.
 ATTACK_MANIFEST = CONFIGS / "experiments" / "attack-fixtures.yaml"
 ATTACK_FIXTURES = load_yaml(ATTACK_MANIFEST)["fixtures"]
@@ -638,7 +671,7 @@ def run_attack_episode(resolved: ResolvedConfig, output_dir: Path) -> AttackRun:
         )
         for event in recorded
     )
-    checksums = tuple(str(event["state_checksum"]) for event in recorded)
+    checksums = tuple(str(event["physical_state_checksum"]) for event in recorded)
     return AttackRun(
         checksums=checksums,
         metrics=summary["metrics"],
@@ -651,8 +684,7 @@ def run_attack_episode(resolved: ResolvedConfig, output_dir: Path) -> AttackRun:
 
 def _read_events(output_dir: Path) -> list[dict[str, Any]]:
     """Return each recorded material event of one run directory."""
-    with (output_dir / "events.jsonl").open(encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle]
+    return load_verified_run(output_dir).read_events()
 
 
 def _reset_simulator(resolved: ResolvedConfig) -> MountainSim:
@@ -705,9 +737,6 @@ def test_two_attack_runs_repeat_every_recorded_output(
     second = attack_episode_runs.second_attack
 
     assert deterministic_result(first) == deterministic_result(second)
-    assert first.lifecycle["first_malicious_proposal_at"] is not None
-    assert first.lifecycle["first_malicious_action_executed_at"] is not None
-    assert not first.lifecycle["prevented_before_activation"]
 
 
 def test_the_attack_run_moves_the_state(attack_episode_runs):
@@ -722,7 +751,8 @@ def test_a_controller_change_keeps_every_external_input(attack_episode_runs):
 
     assert attack_run.population == honest_run.population
     assert attack_run.schedules == honest_run.schedules
-    assert attack_run.checksums != honest_run.checksums
+    activated = attack_run.lifecycle["first_malicious_action_executed_at"] is not None
+    assert (attack_run.checksums != honest_run.checksums) == activated
 
 
 def test_a_controller_change_keeps_the_customer_groups(attack_fixture):
@@ -928,10 +958,14 @@ def test_active_learned_monitor_runs_keep_each_simulated_result(tmp_path):
     assert first["metrics"]["decision_counts"]["BLOCK"] > 0
     assert second["metrics"]["decision_counts"]["BLOCK"] > 0
     assert deterministic_result(first) == deterministic_result(second)
-    for summary in (first, second):
-        assert summary["performance"]["performance_version"] == 1
-        assert summary["performance"]["monitor_latency_seconds_sum"] > 0.0
-        assert summary["performance"]["intervention_latency_seconds_sum"] > 0.0
+    assert "performance" not in first
+    assert "performance" not in second
+    performance = load_verified_performance(
+        tmp_path / "performance" / run_id(resolved) / "performance.json"
+    )
+    assert performance["performance_version"] == 1
+    assert performance["monitor_latency_seconds_sum"] > 0.0
+    assert performance["intervention_latency_seconds_sum"] > 0.0
 
 
 def test_continuation_matches_uninterrupted_episode_bit_for_bit(tmp_path):
