@@ -45,7 +45,7 @@ def test_the_observation_and_checksum_include_hazards():
             }
         },
     )
-    before = sim.state_checksum()
+    before = sim.physical_state_checksum()
     sim.state.occupancy[0] = 200
     events = update_hazards(
         sim.topology,
@@ -62,7 +62,7 @@ def test_the_observation_and_checksum_include_hazards():
     assert observation["edge_dangerous_density_active"][0]
     assert observation["hazard_events"][0]["event_type"] == "density_warning"
     assert metadata["hazards"]["minimum_duration_seconds"] == 5.0
-    assert sim.state_checksum() != before
+    assert sim.physical_state_checksum() != before
 
 
 def test_a_tick_records_stable_hazard_events():

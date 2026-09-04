@@ -104,7 +104,7 @@ def pack_frame(
         "sequence": sequence,
         "simulation_time": sim.simulation_time,
         "topology_version": topology,
-        "state_checksum": sim.state_checksum(),
+        "state_checksum": sim.physical_state_checksum(),
         "payload": payload,
     }
     return msgpack.packb(envelope, use_bin_type=True)
@@ -670,7 +670,7 @@ def run_session(
                         "sequence": sequence,
                         "simulation_time": sim.simulation_time,
                         "topology_version": topology,
-                        "state_checksum": sim.state_checksum(),
+                        "state_checksum": sim.physical_state_checksum(),
                         "command_id": command_id,
                         "status": "paused" if paused else "running",
                         "simulation_speed": simulation_speed,
@@ -726,7 +726,7 @@ def run_session(
                         "sequence": sequence,
                         "simulation_time": sim.simulation_time,
                         "topology_version": topology,
-                        "state_checksum": sim.state_checksum(),
+                        "state_checksum": sim.physical_state_checksum(),
                     },
                     use_bin_type=True,
                 )

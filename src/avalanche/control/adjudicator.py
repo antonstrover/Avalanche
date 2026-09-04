@@ -126,11 +126,18 @@ class Adjudicator:
         validate: ActionValidator,
         fallback: FallbackAction | None = None,
         approval: ApprovalHandler | None = None,
+        approval_timeout_seconds: float = 30.0,
     ) -> None:
+        if approval_timeout_seconds <= 0.0:
+            raise ValueError("the approval timeout must be positive")
         self.monitor = monitor
         self.validate = validate
         self.fallback = fallback
         self.approval = approval or SimulatedApprover()
+        self.approval_timeout_seconds = float(approval_timeout_seconds)
+        self.pending_approval: ApprovalRequest | None = None
+        self.pending_approval_remaining_seconds: float | None = None
+        self.last_approval_response: ApprovalResponse | None = None
 
     def reset(self, seed: int) -> None:
         """Reset the monitor for one reproducible run."""
@@ -138,6 +145,64 @@ class Adjudicator:
         reset_fallback = getattr(self.fallback, "reset", None)
         if reset_fallback is not None:
             reset_fallback(seed)
+        reset_approval = getattr(self.approval, "reset", None)
+        if reset_approval is not None:
+            reset_approval(seed)
+        self.pending_approval = None
+        self.pending_approval_remaining_seconds = None
+        self.last_approval_response = None
+
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return the pending adjudication and approval state."""
+        from avalanche.control.state import (
+            approval_request_state,
+            approval_response_state,
+        )
+
+        pending = approval_request_state(self.pending_approval)
+        if pending is not None:
+            pending["deadline_epoch_seconds"] = None
+        return {
+            "approval_timeout_seconds": self.approval_timeout_seconds,
+            "pending_approval": pending,
+            "pending_approval_remaining_seconds": (
+                self.pending_approval_remaining_seconds
+            ),
+            "approval_deadline_basis": "remaining_duration",
+            "last_approval_response": approval_response_state(
+                self.last_approval_response
+            ),
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore the pending adjudication and approval state."""
+        from avalanche.control.state import (
+            approval_request_from_state,
+            approval_response_from_state,
+        )
+
+        if float(state["approval_timeout_seconds"]) != self.approval_timeout_seconds:
+            raise ValueError("the approval timeout is incompatible")
+        if state["approval_deadline_basis"] != "remaining_duration":
+            raise ValueError("the approval deadline basis is incompatible")
+        remaining = state["pending_approval_remaining_seconds"]
+        self.pending_approval_remaining_seconds = (
+            None if remaining is None else float(remaining)
+        )
+        pending = state["pending_approval"]
+        if pending is not None:
+            pending = dict(pending)
+            if pending.get("deadline_epoch_seconds") is not None:
+                raise ValueError("the pending approval deadline must be relative")
+            pending["deadline_epoch_seconds"] = 0.0
+        self.pending_approval = approval_request_from_state(pending)
+        if (self.pending_approval is None) != (
+            self.pending_approval_remaining_seconds is None
+        ):
+            raise ValueError("the pending approval deadline is inconsistent")
+        self.last_approval_response = approval_response_from_state(
+            state["last_approval_response"]
+        )
 
     def adjudicate(
         self,
@@ -231,7 +296,16 @@ class Adjudicator:
                     safe_fallback=fallback.action,
                     predicted_result=decision.predicted_result,
                 )
-                approval_response = self.approval(approval_request)
+                self.pending_approval = approval_request
+                self.pending_approval_remaining_seconds = (
+                    self.approval_timeout_seconds
+                )
+                try:
+                    approval_response = self.approval(approval_request)
+                    self.last_approval_response = approval_response
+                finally:
+                    self.pending_approval = None
+                    self.pending_approval_remaining_seconds = None
                 if approval_response.choice is ApprovalChoice.APPROVE:
                     action = proposal.action
                     controller_id = proposal.controller_id

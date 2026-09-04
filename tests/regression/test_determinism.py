@@ -146,7 +146,7 @@ def run(seed: int) -> list[str]:
     checksums = []
     for _ in range(TICK_COUNT):
         sim.tick()
-        checksums.append(sim.state_checksum())
+        checksums.append(sim.physical_state_checksum())
     return checksums
 
 
@@ -339,7 +339,7 @@ def failure_recovery_run(seed: int) -> tuple[list[dict[str, Any]], tuple[tuple, 
         sim.tick()
         timeline.append(
             (
-                sim.state_checksum(),
+                sim.physical_state_checksum(),
                 tuple(int(value) for value in pop.status),
                 tuple(float(value) for value in pop.queue_no_route_blocked_seconds),
                 tuple(float(value) for value in pop.onboard_blocked_seconds),

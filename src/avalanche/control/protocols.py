@@ -1,6 +1,6 @@
 """Protocols each controller and each monitor must implement."""
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from avalanche.control.types import (
     ActionProposal,
@@ -29,3 +29,12 @@ class Monitor(Protocol):
         proposal: MonitorProposal,
         history: TraceWindow,
     ) -> MonitorDecision: ...
+
+
+@runtime_checkable
+class StatefulComponent(Protocol):
+    """Expose complete state for executable continuation."""
+
+    def snapshot_state(self) -> dict[str, Any]: ...
+
+    def restore_state(self, state: dict[str, Any]) -> None: ...

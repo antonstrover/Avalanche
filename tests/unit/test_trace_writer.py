@@ -44,7 +44,7 @@ def test_an_event_carries_the_complete_envelope(tmp_path):
         "schema_version": EVENT_SCHEMA_VERSION,
         "seed": 4,
         "simulation_time": 0.0,
-        "state_checksum": sim.state_checksum(),
+        "state_checksum": sim.physical_state_checksum(),
         "step": 0,
     }
     assert json.loads((tmp_path / "model-reference.json").read_text()) == {
@@ -54,7 +54,7 @@ def test_an_event_carries_the_complete_envelope(tmp_path):
     }
     snapshot = writer.snapshot_rows[0]
     assert snapshot["snapshot_schema_version"] == SNAPSHOT_SCHEMA_VERSION
-    assert snapshot["state_checksum"] == sim.state_checksum()
+    assert snapshot["state_checksum"] == sim.physical_state_checksum()
 
 
 def test_an_event_can_use_one_captured_boundary_state(tmp_path):

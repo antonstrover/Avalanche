@@ -74,7 +74,7 @@ def _run_instrumented_boundaries(
         assert truncated is (boundary == BOUNDARY_COUNT - 1)
 
     elapsed = perf_counter() - started
-    return env.sim.state_checksum(), info["metrics"], elapsed
+    return env.sim.physical_state_checksum(), info["metrics"], elapsed
 
 
 def test_control_boundaries_avoid_repeated_runtime_work(monkeypatch, capsys):

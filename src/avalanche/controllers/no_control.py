@@ -17,6 +17,15 @@ class NoControlController:
     def reset(self, seed: int) -> None:
         """Reset the controller without random state."""
 
+    def snapshot_state(self) -> dict[str, object]:
+        """Return the empty controller state."""
+        return {"random_state": None}
+
+    def restore_state(self, state: dict[str, object]) -> None:
+        """Validate the empty controller state."""
+        if state != {"random_state": None}:
+            raise ValueError("the no-control state is invalid")
+
     def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the unchanged infrastructure action."""
         return ActionProposal(

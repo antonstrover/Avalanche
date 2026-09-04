@@ -5,9 +5,6 @@ The tick keeps the recorded order of the steps, because the order changes a run.
 The engine applies deterministic weather and hazard conditions.
 """
 
-import hashlib
-import json
-import struct
 from pathlib import Path
 from typing import Any
 
@@ -763,168 +760,110 @@ class MountainSim:
             ],
         }
 
-    def state_checksum(self) -> str:
-        """Return the digest of the dynamic state.
+    def physical_replay_state(self, view_kind: str = "evaluator") -> dict[str, Any]:
+        """Return the replay-visible physical state for one display view."""
+        if view_kind not in {"reported", "evaluator"}:
+            raise ValueError("the physical replay view is invalid")
+        if self.topology is None or self.route_sensor_packet is None:
+            raise RuntimeError("reset the simulator before replay work")
+        if view_kind == "reported":
+            packet = self.route_sensor_packet.operational_packet
+            if packet is None:
+                raise RuntimeError("the reported replay needs an operational packet")
+            sensors = {sensor.name: sensor for sensor in packet.sensors}
+            state = {
+                "node": {
+                    name: sensors[name].values
+                    for name in ("node_demand", "node_crowding")
+                },
+                "edge": {
+                    name: sensors[name].values
+                    for name in (
+                        "edge_occupancy",
+                        "edge_density",
+                        "edge_speed_factor",
+                        "edge_availability",
+                        "edge_weather_risk",
+                        "lift_queue_length",
+                        "lift_occupancy",
+                        "lift_boarding_throughput",
+                    )
+                },
+                "masks": {name: sensor.missing for name, sensor in sensors.items()},
+                "weather": sensors["weather"].values,
+                "failures": {
+                    name: sensors[name].values
+                    for name in (
+                        "visible_failure_kind",
+                        "visible_failure_target",
+                        "visible_failure_present",
+                    )
+                },
+                "precursors": {
+                    "reported_density_ratio": self.state.reported_density_ratio,
+                    "reported_hazard_score": self.state.hazard_score,
+                },
+                "reported_stranding": tuple(
+                    {
+                        "location_kind": item.location_kind,
+                        "topology_id": item.topology_id,
+                        "count": item.count,
+                        "missing": item.missing,
+                    }
+                    for item in self.route_sensor_packet.reported_stranding
+                ),
+            }
+        else:
+            at_node = self.population.location_kind == LocationKind.NODE
+            node_crowding = np.bincount(
+                self.population.location_index[at_node],
+                minlength=self.topology.node_count,
+            ).astype("<i8")
+            state = {
+                "node": {"node_crowding": node_crowding},
+                "edge": {
+                    "occupancy": self.state.occupancy,
+                    "queue_length": self.state.queue_length,
+                    "density_ratio": self.state.density_ratio,
+                    "speed_factor": self.state.speed_factor,
+                    "availability": ~effective_closed(self.state),
+                    "weather_risk": self.state.weather_risk,
+                },
+                "weather": self.weather.as_array(),
+                "failures": tuple(item.as_dict() for item in self.active_failures),
+                "precursors": {
+                    "hazard_score": self.state.hazard_score,
+                    "early_indicator": self.state.early_indicator,
+                    "dangerous_density_active": self.state.dangerous_density_active,
+                },
+                "population": {
+                    "location_kind": self.population.location_kind,
+                    "location_index": self.population.location_index,
+                    "required_travel_seconds": (
+                        self.population.required_travel_seconds
+                    ),
+                    "remaining_travel_seconds": (
+                        self.population.remaining_travel_seconds
+                    ),
+                    "status": self.population.status,
+                },
+            }
+        return {
+            "view_kind": view_kind,
+            "simulation_time": self.simulation_time,
+            "movement_tick": self.step,
+            "topology_artifact_reference": {
+                "name": self.topology.name,
+                "sha256": self.topology.mountain_sha256,
+            },
+            "state": state,
+        }
 
-        The digest covers each input that can change a later movement tick.
-        It excludes immutable configuration and derived event views.
-        It excludes metrics and history because they cannot change movement.
-        The digest is stable on one platform.
-        """
-        digest = hashlib.blake2b(digest_size=16)
-        _digest_array(digest, "simulation_time", np.array(self.simulation_time, "<f8"))
-        _digest_array(digest, "step", np.array(self.step, "<i8"))
-        _digest_array(digest, "tick_seconds", np.array(self.tick_seconds, "<f8"))
-        _digest_array(
-            digest,
-            "time_epsilon_seconds",
-            np.array(self.time_epsilon_seconds, "<f8"),
+    def physical_state_checksum(self, view_kind: str = "evaluator") -> str:
+        """Return the SHA-256 identity of one replay display view."""
+        from avalanche.traces.checksums import named_checksum
+
+        return named_checksum(
+            self.physical_replay_state(view_kind),
+            allow_nonfinite=True,
         )
-        _digest_array(
-            digest,
-            "population.arrived",
-            np.array(self.population.arrived, "<i8"),
-        )
-        _digest_array(
-            digest,
-            "population.next_ticket",
-            np.array(self.population.next_ticket, "<i8"),
-        )
-        if self.weather_schedule is not None:
-            _digest_array(digest, "weather", self.weather.as_array())
-            _digest_array(
-                digest,
-                "weather.next_transition",
-                np.array(self.weather_schedule.next_transition, "<i8"),
-            )
-        for name, array in self.population.checksum_fields():
-            _digest_array(digest, f"population.{name}", array)
-        for name, array in self.state.checksum_fields():
-            _digest_array(digest, f"state.{name}", array)
-        for stream_name in (
-            "choice",
-            "sensor",
-            "route_tie",
-            "blocked_sensor",
-            "stranding_sensor",
-            "operational_sensor",
-            "audit_missing",
-        ):
-            stream = self.streams.get(stream_name)
-            if stream is None:
-                continue
-            _digest_bytes(
-                digest,
-                f"random.{stream_name}",
-                json.dumps(
-                    stream.bit_generator.state,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode(),
-            )
-        if self.route_sensor_packet is not None:
-            _digest_route_packet(
-                digest, "route_sensor.latest", self.route_sensor_packet
-            )
-        if self.route_sensor_channel is not None:
-            for index, packet in enumerate(self.route_sensor_channel.pending):
-                _digest_route_packet(digest, f"route_sensor.pending.{index}", packet)
-            for index, report in enumerate(self.route_sensor_channel.pending_stranding):
-                _digest_stranding_report(
-                    digest,
-                    f"route_sensor.pending_stranding.{index}",
-                    report,
-                )
-        for index, ((kind, topology_id), count) in enumerate(
-            sorted(self._stranding_interval_counts.items())
-        ):
-            prefix = f"stranding_interval.{index}"
-            _digest_bytes(digest, f"{prefix}.kind", kind.encode())
-            _digest_bytes(digest, f"{prefix}.topology_id", topology_id.encode())
-            _digest_array(digest, f"{prefix}.count", np.array(count, "<i8"))
-        return digest.hexdigest()
-
-
-def _digest_route_packet(digest: Any, prefix: str, packet: RouteSensorPacket) -> None:
-    """Add one complete route packet to a state digest."""
-    _digest_array(digest, f"{prefix}.sample_time", np.array(packet.sample_time, "<f8"))
-    _digest_array(digest, f"{prefix}.report_time", np.array(packet.report_time, "<f8"))
-    _digest_bytes(digest, f"{prefix}.policy_identity", packet.policy_identity.encode())
-    for name in (
-        "reported_availability",
-        "reported_speed_factor",
-        "reported_density_ratio",
-        "reported_weather_risk",
-        "reported_queue_length",
-        "reported_boarding_throughput",
-        "reported_queued_no_route_count",
-        "reported_onboard_blocked_count",
-        "availability_missing",
-        "speed_factor_missing",
-        "density_ratio_missing",
-        "weather_risk_missing",
-        "queue_length_missing",
-        "boarding_throughput_missing",
-        "queued_no_route_count_missing",
-        "onboard_blocked_count_missing",
-    ):
-        _digest_array(digest, f"{prefix}.{name}", getattr(packet, name))
-    if packet.operational_packet is not None:
-        operational = packet.operational_packet
-        _digest_bytes(
-            digest,
-            f"{prefix}.operational.packet_identity",
-            operational.packet_identity.encode(),
-        )
-        for sensor in operational.sensors:
-            sensor_prefix = f"{prefix}.operational.{sensor.name}"
-            _digest_array(digest, f"{sensor_prefix}.values", sensor.values)
-            _digest_array(digest, f"{sensor_prefix}.missing", sensor.missing)
-            _digest_array(
-                digest,
-                f"{sensor_prefix}.sample_time",
-                np.array(sensor.sample_time, "<f8"),
-            )
-            _digest_array(
-                digest,
-                f"{sensor_prefix}.report_time",
-                np.array(sensor.report_time, "<f8"),
-            )
-    for index, report in enumerate(packet.reported_stranding):
-        _digest_stranding_report(
-            digest,
-            f"{prefix}.reported_stranding.{index}",
-            report,
-        )
-
-
-def _digest_stranding_report(digest: Any, prefix: str, report: Any) -> None:
-    """Add one complete reported stranding aggregate to a digest."""
-    _digest_bytes(digest, f"{prefix}.location_kind", report.location_kind.encode())
-    _digest_bytes(digest, f"{prefix}.topology_id", report.topology_id.encode())
-    _digest_array(digest, f"{prefix}.count", np.array(report.count, "<i8"))
-    _digest_array(digest, f"{prefix}.missing", np.array(report.missing, "|b1"))
-    _digest_array(digest, f"{prefix}.sample_time", np.array(report.sample_time, "<f8"))
-    _digest_array(digest, f"{prefix}.report_time", np.array(report.report_time, "<f8"))
-
-
-def _digest_array(digest: Any, name: str, values: np.ndarray) -> None:
-    """Add one named array with a stable type and shape."""
-    array = np.asarray(values)
-    dtype = array.dtype.newbyteorder("<")
-    portable = np.ascontiguousarray(array, dtype=dtype)
-    _digest_bytes(digest, name, portable.tobytes())
-    _digest_bytes(digest, f"{name}.dtype", dtype.str.encode())
-    shape = struct.pack("<Q", portable.ndim) + b"".join(
-        struct.pack("<Q", size) for size in portable.shape
-    )
-    _digest_bytes(digest, f"{name}.shape", shape)
-
-
-def _digest_bytes(digest: Any, name: str, values: bytes) -> None:
-    """Add one named byte value with unambiguous lengths."""
-    encoded_name = name.encode()
-    digest.update(struct.pack("<Q", len(encoded_name)))
-    digest.update(encoded_name)
-    digest.update(struct.pack("<Q", len(values)))
-    digest.update(values)

@@ -167,7 +167,7 @@ def test_shared_references_do_not_change_the_simulator():
     action["route_weights"].fill(1.0)
     observation["reported_edge_occupancy"].fill(99.0)
     process, controller = boundary_observations(env, proposed)
-    checksum = env.sim.state_checksum()
+    checksum = env.sim.physical_state_checksum()
 
     result = adjudicator(env, AllowMonitor()).adjudicate(
         process,
@@ -175,7 +175,7 @@ def test_shared_references_do_not_change_the_simulator():
         simulation_time=env.sim.simulation_time,
         fallback_observation=controller,
     )
-    assert env.sim.state_checksum() == checksum
+    assert env.sim.physical_state_checksum() == checksum
     assert not np.any(result.executed_action.action.route_weights)
     assert len(env.sim.population) == 20
     assert np.all(np.isin(env.sim.population.location_kind, list(LocationKind)))
@@ -192,7 +192,7 @@ def test_a_controller_cannot_mutate_the_shared_topology(controller_type):
         id(value) for value in vars(topology).values() if isinstance(value, np.ndarray)
     )
     observation = env.controller_observation()
-    checksum = env.sim.state_checksum()
+    checksum = env.sim.physical_state_checksum()
     controller = controller_type(topology)
 
     with pytest.raises(ValueError, match="read-only"):
@@ -207,7 +207,7 @@ def test_a_controller_cannot_mutate_the_shared_topology(controller_type):
         )
         == array_ids
     )
-    assert env.sim.state_checksum() == checksum
+    assert env.sim.physical_state_checksum() == checksum
 
 
 def test_a_normal_proposal_keeps_only_the_public_topology():
@@ -290,7 +290,7 @@ def test_an_expected_monitor_refusal_has_safe_details():
     env = configured_env()
     proposed = proposal(env, neutral_action(env.topology))
     process, controller = boundary_observations(env, proposed)
-    checksum = env.sim.state_checksum()
+    checksum = env.sim.physical_state_checksum()
 
     with pytest.raises(ProposalEngineeringError) as caught:
         adjudicator(env, RefusingMonitor()).adjudicate(
@@ -306,14 +306,14 @@ def test_an_expected_monitor_refusal_has_safe_details():
     assert payload["exception_type"].endswith(".MonitorRefusal")
     assert payload["traceback"] is None
     assert payload["details"] == {"expected_version": 2, "actual_version": 1}
-    assert env.sim.state_checksum() == checksum
+    assert env.sim.physical_state_checksum() == checksum
 
 
 def test_an_unexpected_monitor_fault_has_one_bounded_traceback():
     env = configured_env()
     proposed = proposal(env, neutral_action(env.topology))
     process, controller = boundary_observations(env, proposed)
-    checksum = env.sim.state_checksum()
+    checksum = env.sim.physical_state_checksum()
 
     with pytest.raises(ProposalEngineeringError) as caught:
         adjudicator(env, FaultingMonitor()).adjudicate(
@@ -332,7 +332,7 @@ def test_an_unexpected_monitor_fault_has_one_bounded_traceback():
     assert "do-not-record-this-local" not in payload["traceback"]
     assert len(payload["traceback"]) <= 16_384
     assert payload["details"] == {}
-    assert env.sim.state_checksum() == checksum
+    assert env.sim.physical_state_checksum() == checksum
 
 
 def test_a_refusal_rejects_non_finite_details():

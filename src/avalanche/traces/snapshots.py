@@ -1,93 +1,152 @@
-"""Encode and restore complete simulator snapshots."""
+"""Define separate display replay and executable continuation snapshots."""
+
+from __future__ import annotations
 
 import hashlib
-import json
-from dataclasses import fields
-from typing import Any
+import hmac
+import platform
+import subprocess
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 
-from avalanche.control import DecisionType
-from avalanche.metrics import METRICS_VERSION, OnlineMetrics
-from avalanche.scenarios.audits import AuditChannel, AuditMeasurement
-from avalanche.scenarios.sensors import ROUTE_SENSOR_CHANNELS
-from avalanche.scenarios.weather import Weather, WeatherSchedule
-from avalanche.sim.engine import STREAM_NAMES, MountainSim
-from avalanche.sim.hazards import HazardEvent
-from avalanche.sim.movement import DynamicState, new_dynamic_state
-from avalanche.sim.population import SkierArrays, display_progress, empty_population
+from avalanche.config.models import ResolvedConfig
+from avalanche.config.run_identity import REPO_ROOT
+from avalanche.control import ApprovalChoice, SimulatedApprover, StatefulComponent
+from avalanche.controllers.attacks import AttackLifecycle
+from avalanche.controllers.factory import build_controller, build_fallback
+from avalanche.env.adapter import AvalancheEnv
+from avalanche.env.factory import build_resolved_environment
+from avalanche.monitors.factory import build_monitor
+from avalanche.sim.engine import MountainSim
+from avalanche.traces.checksums import (
+    CanonicalEncodingError,
+    canonical_messagepack,
+    canonical_sha256,
+    decode_canonical_messagepack,
+    named_checksum,
+)
+from avalanche.traces.continuation_state import (
+    capture_simulator_state,
+    restore_simulator_state,
+)
 
-SNAPSHOT_SCHEMA_VERSION = 5
+PHYSICAL_REPLAY_SCHEMA_VERSION = 1
+CONTINUATION_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = PHYSICAL_REPLAY_SCHEMA_VERSION
+PHYSICAL_REPLAY_ARTIFACT_TYPE = "avalanche.physical_replay_snapshot"
+CONTINUATION_ARTIFACT_TYPE = "avalanche.continuation_snapshot"
+REPORTED_REPLAY_FILENAME = "physical-replay-reported.parquet"
+EVALUATOR_REPLAY_FILENAME = "physical-replay-evaluator.parquet"
+CONTINUATION_EXTENSION = ".avalanche-continuation.msgpack"
 
-_SNAPSHOT_KEYS = {
-    "snapshot_schema_version",
+_PHYSICAL_KEYS = {
+    "artifact_type",
+    "schema_version",
+    "view_kind",
     "run_id",
     "episode_id",
-    "seed",
     "simulation_time",
-    "step",
-    "state_checksum",
-    "topology_checksum",
-    "context_checksum",
-    "node_count",
-    "edge_count",
-    "skier_count",
-    "tick_seconds",
-    "arrays",
-    "state_json",
+    "movement_tick",
+    "topology_artifact_name",
+    "topology_artifact_sha256",
+    "state_messagepack",
+    "physical_state_checksum",
 }
-_ARRAY_KEYS = {"name", "dtype", "shape", "data"}
-_STATE_KEYS = {
-    "population",
-    "weather",
-    "hazard_events",
-    "active_failures",
-    "active_operational_event_ids",
-    "audit",
-    "metrics",
-    "random_streams",
+_CONTINUATION_KEYS = {
+    "artifact_type",
+    "schema_version",
+    "compatibility",
+    "references",
+    "simulator",
+    "environment",
+    "controller",
+    "monitor",
+    "fallback",
+    "approval",
+    "adjudicator",
+    "feature_extractor",
+    "attack_lifecycle",
+    "trace",
+    "runtime",
+    "continuation_checksum",
 }
-_POPULATION_KEYS = {"arrived", "next_ticket"}
-_WEATHER_KEYS = {"current", "next_transition"}
-_AUDIT_KEYS = {"measurements", "delivered"}
-_METRIC_KEYS = {
-    "metrics_version",
-    "group_count",
-    "edge_count",
-    "edge_references",
-    "episode_duration_seconds",
-    "newly_stranded_skiers",
-    "cumulative_stranded_seconds",
-    "harm_onset_at",
-    "harm_onset_control_interval",
-    "dangerous_density_seconds",
-    "density_exposure_seconds",
-    "reported_density_exposure_seconds",
-    "capacity_violation_seconds",
-    "reported_capacity_violation_seconds",
-    "safe_evacuation_capacity_skiers_per_second",
-    "lost_safe_evacuation_capacity_seconds",
-    "queue_no_route_blocked_seconds",
-    "onboard_blocked_seconds",
-    "group_stranded_seconds",
-    "decision_counts",
-    "intervention_latency_seconds_sum",
-    "intervention_latency_count",
-    "monitor_latency_seconds_sum",
-    "monitor_decision_count",
-    "first_intervention_interval",
-    "cumulative_stranded_seconds_before_first_intervention",
-    "route_decision_count",
-    "missing_sensor_route_decision_count",
-    "missing_sensor_route_decision_counts",
-    "evacuation_capacity_trajectory",
-    "true_density_ratio_trajectory",
-    "reported_density_ratio_trajectory",
-}
+_PROTOCOL_PATHS = (
+    "src/avalanche/traces/checksums.py",
+    "src/avalanche/traces/snapshots.py",
+    "src/avalanche/traces/continuation_state.py",
+    "src/avalanche/control/protocols.py",
+)
 
 
 class SnapshotSchemaError(ValueError):
     """Report invalid or unsupported snapshot data."""
+
+
+def encode_physical_replay_snapshot(
+    sim: MountainSim,
+    *,
+    view_kind: Literal["reported", "evaluator"],
+    run_id: str,
+    episode_id: str,
+) -> dict[str, Any]:
+    """Return one display-only physical replay row."""
+    replay = sim.physical_replay_state(view_kind)
+    topology = replay["topology_artifact_reference"]
+    return {
+        "artifact_type": PHYSICAL_REPLAY_ARTIFACT_TYPE,
+        "schema_version": PHYSICAL_REPLAY_SCHEMA_VERSION,
+        "view_kind": view_kind,
+        "run_id": run_id,
+        "episode_id": episode_id,
+        "simulation_time": replay["simulation_time"],
+        "movement_tick": replay["movement_tick"],
+        "topology_artifact_name": topology["name"],
+        "topology_artifact_sha256": topology["sha256"],
+        "state_messagepack": canonical_messagepack(
+            replay["state"],
+            allow_nonfinite=True,
+        ),
+        "physical_state_checksum": named_checksum(
+            replay,
+            allow_nonfinite=True,
+        ),
+    }
+
+
+def load_physical_replay_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    """Validate and return one non-executable replay view."""
+    value = _mapping(row, "physical replay")
+    _require_keys(value, _PHYSICAL_KEYS, "physical replay")
+    if value["artifact_type"] != PHYSICAL_REPLAY_ARTIFACT_TYPE:
+        raise SnapshotSchemaError("the artifact is not a physical replay")
+    if value["schema_version"] != PHYSICAL_REPLAY_SCHEMA_VERSION:
+        raise SnapshotSchemaError("the physical replay schema is unsupported")
+    view_kind = value["view_kind"]
+    if view_kind not in {"reported", "evaluator"}:
+        raise SnapshotSchemaError("the physical replay view is invalid")
+    try:
+        state = decode_canonical_messagepack(
+            value["state_messagepack"],
+            allow_nonfinite=True,
+        )
+    except CanonicalEncodingError as error:
+        raise SnapshotSchemaError("the physical replay state is invalid") from error
+    replay = {
+        "view_kind": view_kind,
+        "simulation_time": value["simulation_time"],
+        "movement_tick": value["movement_tick"],
+        "topology_artifact_reference": {
+            "name": value["topology_artifact_name"],
+            "sha256": value["topology_artifact_sha256"],
+        },
+        "state": state,
+    }
+    expected = named_checksum(replay, allow_nonfinite=True)
+    if not hmac.compare_digest(str(value["physical_state_checksum"]), expected):
+        raise SnapshotSchemaError("the physical state checksum does not match")
+    return {**replay, "executable": False}
 
 
 def encode_snapshot(
@@ -97,780 +156,329 @@ def encode_snapshot(
     episode_id: str,
     seed: int,
 ) -> dict[str, Any]:
-    """Return one complete and versioned simulator snapshot."""
-    _require_reset(sim)
-    assert sim.topology is not None
-    assert sim.weather_schedule is not None
-    arrays = [
-        _encode_array(f"population.{name}", values)
-        for name, values in _snapshot_v3_population_arrays(sim.population)
-    ]
-    arrays.extend(
-        _encode_array(f"state.{name}", values)
-        for name, values in sim.state.checksum_fields()
+    """Return the evaluator replay through the former local entry point."""
+    del seed
+    return encode_physical_replay_snapshot(
+        sim,
+        view_kind="evaluator",
+        run_id=run_id,
+        episode_id=episode_id,
     )
-    state = {
-        "population": {
-            "arrived": sim.population.arrived,
-            "next_ticket": sim.population.next_ticket,
-        },
-        "weather": {
-            "current": sim.weather.as_array().tolist(),
-            "next_transition": sim.weather_schedule.next_transition,
-        },
-        "hazard_events": [event.as_dict() for event in sim.hazard_events],
-        "active_failures": [event.as_dict() for event in sim.active_failures],
-        "active_operational_event_ids": [
-            event.event_id for event in sim.active_operational_events
-        ],
-        "audit": _audit_state(sim),
-        "metrics": _metric_state(sim.metrics),
-        "random_streams": {
-            name: stream.bit_generator.state for name, stream in sim.streams.items()
-        },
-    }
-    return {
-        "snapshot_schema_version": SNAPSHOT_SCHEMA_VERSION,
-        "run_id": run_id,
-        "episode_id": episode_id,
-        "seed": seed,
-        "simulation_time": sim.simulation_time,
-        "step": sim.step,
-        "state_checksum": sim.state_checksum(),
-        "topology_checksum": _topology_checksum(sim),
-        "context_checksum": _context_checksum(sim),
-        "node_count": sim.topology.node_count,
-        "edge_count": sim.topology.edge_count,
-        "skier_count": len(sim.population),
-        "tick_seconds": sim.tick_seconds,
-        "arrays": arrays,
-        "state_json": _canonical_json(state),
-    }
 
 
 def restore_snapshot(sim: MountainSim, row: dict[str, Any]) -> None:
-    """Validate one snapshot and replace a reset simulator state."""
-    _require_reset(sim)
-    assert sim.topology is not None
-    assert sim.weather_schedule is not None
-    assert sim.failure_schedule is not None
-    assert sim.operational_event_schedule is not None
-    _require_keys(row, _SNAPSHOT_KEYS, "snapshot")
-    version = _integer(row["snapshot_schema_version"], "snapshot schema version")
-    if version != SNAPSHOT_SCHEMA_VERSION:
-        raise SnapshotSchemaError(
-            f"the snapshot schema version {version} is unsupported"
-        )
-    raise SnapshotSchemaError(
-        "the snapshot is display-only and cannot restore formal state"
-    )
+    """Reject execution restoration from every display replay."""
+    del sim
+    load_physical_replay_snapshot(row)
+    raise SnapshotSchemaError("the physical replay is display-only")
 
-    simulation_time = _finite_float(row["simulation_time"], "simulation time")
-    step = _integer(row["step"], "step")
-    seed = _integer(row["seed"], "seed")
-    node_count = _integer(row["node_count"], "node count")
-    edge_count = _integer(row["edge_count"], "edge count")
-    skier_count = _integer(row["skier_count"], "skier count")
-    tick_seconds = _finite_float(row["tick_seconds"], "tick seconds")
-    expected_checksum = row["state_checksum"]
-    if not isinstance(expected_checksum, str):
-        raise SnapshotSchemaError("the snapshot checksum must be text")
-    if not isinstance(row["run_id"], str) or not isinstance(row["episode_id"], str):
-        raise SnapshotSchemaError("the snapshot identities must be text")
-    if simulation_time < 0.0 or step < 0 or skier_count < 0 or tick_seconds <= 0.0:
-        raise SnapshotSchemaError("the snapshot has an invalid scalar value")
-    if seed < 0:
-        raise SnapshotSchemaError("the snapshot seed must not be negative")
-    if node_count != sim.topology.node_count or edge_count != sim.topology.edge_count:
-        raise SnapshotSchemaError("the snapshot topology dimensions do not match")
-    if row["topology_checksum"] != _topology_checksum(sim):
-        raise SnapshotSchemaError("the snapshot topology does not match")
-    if row["context_checksum"] != _context_checksum(sim):
-        raise SnapshotSchemaError("the snapshot configuration does not match")
 
-    decoded = _decode_arrays(sim, row["arrays"], skier_count)
-    state = _decode_json(row["state_json"])
-    _require_keys(state, _STATE_KEYS, "snapshot state")
-    population_state = _mapping(state["population"], "population state")
-    _require_keys(population_state, _POPULATION_KEYS, "population state")
-    arrived = _integer(population_state["arrived"], "arrived count")
-    next_ticket = _integer(population_state["next_ticket"], "next ticket")
-    if not 0 <= arrived <= skier_count or next_ticket < 0:
-        raise SnapshotSchemaError("the snapshot population counters are invalid")
-
-    weather_state = _mapping(state["weather"], "weather state")
-    _require_keys(weather_state, _WEATHER_KEYS, "weather state")
-    current_weather = _weather(weather_state["current"])
-    next_transition = _integer(
-        weather_state["next_transition"], "weather transition index"
-    )
-    if not 0 <= next_transition <= len(sim.weather_schedule.transitions):
-        raise SnapshotSchemaError("the weather transition index is invalid")
-
-    new_streams = _random_streams(state["random_streams"])
-    new_metrics = _metrics(state["metrics"], sim)
-    audit_state = _mapping(state["audit"], "audit state")
-    _require_keys(audit_state, _AUDIT_KEYS, "audit state")
-    measurements = _audit_measurements(
-        audit_state["measurements"], "audit measurements"
-    )
-    delivered = _audit_measurements(audit_state["delivered"], "delivered audits")
-    hazards = _hazard_events(state["hazard_events"])
-
-    active_failures = sim.failure_schedule.active(simulation_time)
-    if state["active_failures"] != [event.as_dict() for event in active_failures]:
-        raise SnapshotSchemaError("the active failure state does not match")
-    active_events = sim.operational_event_schedule.active(simulation_time)
-    if state["active_operational_event_ids"] != [
-        event.event_id for event in active_events
-    ]:
-        raise SnapshotSchemaError("the active operational state does not match")
-
-    population_values = {
-        item.name: decoded[f"population.{item.name}"]
-        for item in fields(SkierArrays)
-        if isinstance(getattr(empty_population(0), item.name), np.ndarray)
+def encode_continuation_snapshot(
+    env: AvalancheEnv,
+    controller: StatefulComponent,
+    resolved: ResolvedConfig,
+    *,
+    attack_lifecycle: AttackLifecycle,
+    trace_state: dict[str, Any],
+    runtime_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Return one complete executable continuation snapshot."""
+    _validate_formal_configuration(resolved)
+    monitor = _stateful(env.adjudicator.monitor, "monitor")
+    fallback = _optional_stateful(env.adjudicator.fallback, "fallback")
+    approval = _stateful(env.adjudicator.approval, "approval")
+    feature = _optional_stateful(getattr(monitor, "extractor", None), "feature")
+    snapshot = {
+        "artifact_type": CONTINUATION_ARTIFACT_TYPE,
+        "schema_version": CONTINUATION_SCHEMA_VERSION,
+        "compatibility": _compatibility_state(env.sim),
+        "references": _reference_state(resolved, env.sim),
+        "simulator": capture_simulator_state(env.sim),
+        "environment": env.snapshot_state(),
+        "controller": _component_state(controller),
+        "monitor": _component_state(monitor),
+        "fallback": _component_state(fallback),
+        "approval": _component_state(approval),
+        "adjudicator": _component_state(env.adjudicator),
+        "feature_extractor": _component_state(feature),
+        "attack_lifecycle": attack_lifecycle.snapshot_state(),
+        "trace": trace_state,
+        "runtime": runtime_state,
     }
-    dynamic_values = {
-        item.name: decoded[f"state.{item.name}"] for item in fields(DynamicState)
-    }
-    population = SkierArrays(
-        **population_values,
-        arrived=arrived,
-        next_ticket=next_ticket,
+    snapshot["continuation_checksum"] = named_checksum(
+        snapshot,
+        allow_nonfinite=True,
     )
-    dynamic_state = DynamicState(**dynamic_values)
-    audit_channel = AuditChannel(sim.audit_config, new_streams["audit"])
-    audit_channel.measurements = list(measurements)
-    weather_schedule = WeatherSchedule(
-        sim.weather_schedule.transitions,
-        current_weather,
-        next_transition,
-    )
-
-    previous = (
-        sim.tick_seconds,
-        sim.simulation_time,
-        sim.step,
-        sim.population,
-        sim.state,
-        sim.weather_schedule,
-        sim.hazard_events,
-        sim.active_failures,
-        sim.active_operational_events,
-        sim.streams,
-        sim.audit_channel,
-        sim.delivered_audits,
-        sim.metrics,
-    )
-    replacement = (
-        tick_seconds,
-        simulation_time,
-        step,
-        population,
-        dynamic_state,
-        weather_schedule,
-        list(hazards),
-        active_failures,
-        active_events,
-        new_streams,
-        audit_channel,
-        delivered,
-        new_metrics,
-    )
-    _replace_state(sim, replacement)
-    if sim.state_checksum() != expected_checksum:
-        _replace_state(sim, previous)
-        raise SnapshotSchemaError("the restored state checksum does not match")
+    _validate_continuation(snapshot, resolved)
+    return snapshot
 
 
-def _require_reset(sim: MountainSim) -> None:
-    """Require the target simulator to have one resolved context."""
-    values = (
-        sim.topology,
-        sim.routes,
-        sim.weather_schedule,
-        sim.failure_schedule,
-        sim.audit_channel,
-        sim.operational_event_schedule,
-    )
-    if any(value is None for value in values):
-        raise SnapshotSchemaError("reset the simulator before snapshot work")
-
-
-def _snapshot_v3_population_arrays(
-    population: SkierArrays,
-) -> tuple[tuple[str, np.ndarray], ...]:
-    """Return the version three display arrays."""
-    arrays: list[tuple[str, np.ndarray]] = []
-    for name, values in population.checksum_fields():
-        if name == "required_travel_seconds":
-            arrays.append(("progress", display_progress(population)))
-        elif name not in {
-            "remaining_travel_seconds",
-            "queue_no_route_blocked_seconds",
-            "onboard_blocked_seconds",
-            "queue_source_node",
-            "chosen_edge",
-            "locally_rejected_edge",
-            "first_stranded_at",
-            "ever_stranded",
-        }:
-            arrays.append((name, values))
-    return tuple(arrays)
-
-
-def _replace_state(sim: MountainSim, values: tuple[Any, ...]) -> None:
-    """Replace each mutable simulator state owner."""
-    (
-        sim.tick_seconds,
-        sim.simulation_time,
-        sim.step,
-        sim.population,
-        sim.state,
-        sim.weather_schedule,
-        sim.hazard_events,
-        sim.active_failures,
-        sim.active_operational_events,
-        sim.streams,
-        sim.audit_channel,
-        sim.delivered_audits,
-        sim.metrics,
-    ) = values
-
-
-def _encode_array(name: str, values: np.ndarray) -> dict[str, Any]:
-    """Encode one array with an explicit portable representation."""
-    dtype_name, dtype = _portable_dtype(values.dtype)
-    portable = np.ascontiguousarray(values, dtype=dtype)
+def write_continuation_snapshot(
+    path: Path,
+    snapshot: dict[str, Any],
+) -> dict[str, str]:
+    """Write canonical bytes and return their enclosing manifest record."""
+    target = Path(path)
+    if not target.name.endswith(CONTINUATION_EXTENSION):
+        raise SnapshotSchemaError("the continuation extension is invalid")
+    content = canonical_messagepack(snapshot, allow_nonfinite=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
     return {
-        "name": name,
-        "dtype": dtype_name,
-        "shape": list(portable.shape),
-        "data": portable.tobytes(),
+        "artifact_type": CONTINUATION_ARTIFACT_TYPE,
+        "path": target.name,
+        "artifact_sha256": hashlib.sha256(content).hexdigest(),
     }
 
 
-def _decode_arrays(
-    sim: MountainSim, value: Any, skier_count: int
-) -> dict[str, np.ndarray]:
-    """Validate and decode every required snapshot array."""
-    if not isinstance(value, list):
-        raise SnapshotSchemaError("the snapshot arrays must be a list")
-    assert sim.topology is not None
-    population_template = empty_population(0)
-    state_template = new_dynamic_state(sim.topology)
-    expected: dict[str, tuple[np.dtype[Any], tuple[int, ...]]] = {}
-    for name, array in population_template.checksum_fields():
-        expected[f"population.{name}"] = (array.dtype, (skier_count,))
-    for name, array in state_template.checksum_fields():
-        expected[f"state.{name}"] = (array.dtype, array.shape)
-
-    decoded: dict[str, np.ndarray] = {}
-    for entry_value in value:
-        entry = _mapping(entry_value, "snapshot array")
-        _require_keys(entry, _ARRAY_KEYS, "snapshot array")
-        name = entry["name"]
-        if not isinstance(name, str):
-            raise SnapshotSchemaError("a snapshot array name must be text")
-        if name in decoded:
-            raise SnapshotSchemaError(f"the snapshot array {name!r} is duplicated")
-        if name not in expected:
-            raise SnapshotSchemaError(f"the snapshot array {name!r} is unknown")
-        native_dtype, expected_shape = expected[name]
-        dtype_name, portable_dtype = _portable_dtype(native_dtype)
-        if entry["dtype"] != dtype_name:
-            raise SnapshotSchemaError(f"the snapshot array {name!r} has a bad type")
-        shape = entry["shape"]
-        if not isinstance(shape, list) or any(
-            not isinstance(size, int) or isinstance(size, bool) for size in shape
-        ):
-            raise SnapshotSchemaError(f"the snapshot array {name!r} has a bad shape")
-        if tuple(shape) != expected_shape:
-            raise SnapshotSchemaError(f"the snapshot array {name!r} has a bad shape")
-        data = entry["data"]
-        if not isinstance(data, bytes):
-            raise SnapshotSchemaError(f"the snapshot array {name!r} has bad data")
-        size = int(np.prod(expected_shape, dtype=np.int64))
-        if len(data) != size * portable_dtype.itemsize:
-            raise SnapshotSchemaError(f"the snapshot array {name!r} has bad data")
-        portable = np.frombuffer(data, dtype=portable_dtype).reshape(expected_shape)
-        if native_dtype.kind == "b" and np.any(portable > 1):
-            raise SnapshotSchemaError(f"the snapshot array {name!r} has bad flags")
-        result = portable.astype(native_dtype, copy=True)
-        if result.dtype.kind == "f" and not np.all(np.isfinite(result)):
-            raise SnapshotSchemaError(f"the snapshot array {name!r} is not finite")
-        decoded[name] = result
-    missing = sorted(set(expected) - set(decoded))
-    if missing:
-        raise SnapshotSchemaError(f"the snapshot array {missing[0]!r} is missing")
-    return decoded
-
-
-def _portable_dtype(dtype: np.dtype[Any]) -> tuple[str, np.dtype[Any]]:
-    """Return one stable snapshot type for a NumPy type."""
-    value = np.dtype(dtype)
-    types: dict[np.dtype[Any], tuple[str, np.dtype[Any]]] = {
-        np.dtype(np.bool_): ("uint8", np.dtype("u1")),
-        np.dtype(np.int8): ("int8", np.dtype("i1")),
-        np.dtype(np.int32): ("int32-le", np.dtype("<i4")),
-        np.dtype(np.int64): ("int64-le", np.dtype("<i8")),
-        np.dtype(np.float32): ("float32-le", np.dtype("<f4")),
-        np.dtype(np.float64): ("float64-le", np.dtype("<f8")),
-    }
+def load_continuation_snapshot(
+    path: Path,
+    *,
+    expected_artifact_sha256: str,
+    resolved: ResolvedConfig,
+) -> dict[str, Any]:
+    """Verify bytes before parsing one continuation snapshot."""
+    target = Path(path)
+    content = target.read_bytes()
+    actual = hashlib.sha256(content).hexdigest()
+    if not hmac.compare_digest(actual, expected_artifact_sha256):
+        raise SnapshotSchemaError("the continuation artifact SHA-256 does not match")
     try:
-        return types[value]
-    except KeyError:
-        raise SnapshotSchemaError(f"the array type {value} is unsupported") from None
+        value = decode_canonical_messagepack(content, allow_nonfinite=True)
+    except CanonicalEncodingError as error:
+        raise SnapshotSchemaError("the continuation MessagePack is invalid") from error
+    snapshot = _mapping(value, "continuation")
+    _validate_continuation(snapshot, resolved)
+    if not target.name.endswith(CONTINUATION_EXTENSION):
+        raise SnapshotSchemaError("the continuation extension is invalid")
+    return snapshot
 
 
-def _audit_state(sim: MountainSim) -> dict[str, Any]:
-    """Return all pending and delivered audit state."""
-    assert sim.audit_channel is not None
-    return {
-        "measurements": [
-            _audit_snapshot_record(item) for item in sim.audit_channel.measurements
-        ],
-        "delivered": [_audit_snapshot_record(item) for item in sim.delivered_audits],
-    }
-
-
-def _audit_snapshot_record(measurement: AuditMeasurement) -> dict[str, Any]:
-    """Encode a missing audit value without a nonstandard JSON number."""
-    record: dict[str, Any] = measurement.privileged()
-    if measurement.missing:
-        record["measured_density"] = None
-    return record
-
-
-def _metric_state(metrics: OnlineMetrics) -> dict[str, Any]:
-    """Return every mutable online metric accumulator."""
-    return {
-        "metrics_version": METRICS_VERSION,
-        "group_count": metrics.group_count,
-        "edge_count": metrics.edge_count,
-        "edge_references": list(metrics.edge_references),
-        "episode_duration_seconds": metrics.episode_duration_seconds,
-        "newly_stranded_skiers": metrics.newly_stranded_skiers,
-        "cumulative_stranded_seconds": metrics.cumulative_stranded_seconds,
-        "harm_onset_at": metrics.harm_onset_at,
-        "harm_onset_control_interval": metrics.harm_onset_control_interval,
-        "dangerous_density_seconds": metrics.dangerous_density_seconds,
-        "density_exposure_seconds": metrics.density_exposure_seconds,
-        "reported_density_exposure_seconds": (
-            metrics.reported_density_exposure_seconds
-        ),
-        "capacity_violation_seconds": metrics.capacity_violation_seconds,
-        "reported_capacity_violation_seconds": (
-            metrics.reported_capacity_violation_seconds
-        ),
-        "safe_evacuation_capacity_skiers_per_second": (
-            metrics.safe_evacuation_capacity_skiers_per_second
-        ),
-        "lost_safe_evacuation_capacity_seconds": (
-            metrics.lost_safe_evacuation_capacity_seconds
-        ),
-        "queue_no_route_blocked_seconds": metrics.queue_no_route_blocked_seconds,
-        "onboard_blocked_seconds": metrics.onboard_blocked_seconds,
-        "group_stranded_seconds": metrics.group_stranded_seconds.tolist(),
-        "decision_counts": dict(metrics.decision_counts),
-        "intervention_latency_seconds_sum": (metrics.intervention_latency_seconds_sum),
-        "intervention_latency_count": metrics.intervention_latency_count,
-        "monitor_latency_seconds_sum": metrics.monitor_latency_seconds_sum,
-        "monitor_decision_count": metrics.monitor_decision_count,
-        "first_intervention_interval": metrics.first_intervention_interval,
-        "cumulative_stranded_seconds_before_first_intervention": (
-            metrics.cumulative_stranded_seconds_before_first_intervention
-        ),
-        "route_decision_count": metrics.route_decision_count,
-        "missing_sensor_route_decision_count": (
-            metrics.missing_sensor_route_decision_count
-        ),
-        "missing_sensor_route_decision_counts": dict(
-            metrics.missing_sensor_route_decision_counts
-        ),
-        "evacuation_capacity_trajectory": list(metrics.evacuation_capacity_trajectory),
-        "true_density_ratio_trajectory": [
-            list(row) for row in metrics.true_density_ratio_trajectory
-        ],
-        "reported_density_ratio_trajectory": [
-            list(row) for row in metrics.reported_density_ratio_trajectory
-        ],
-    }
-
-
-def _metrics(value: Any, sim: MountainSim) -> OnlineMetrics:
-    """Validate and rebuild every online metric accumulator."""
-    state = _mapping(value, "metric state")
-    _require_keys(state, _METRIC_KEYS, "metric state")
-    version = _nonnegative_integer(state["metrics_version"], "metrics version")
-    if version != METRICS_VERSION:
-        raise SnapshotSchemaError(
-            f"the metrics schema version {version} is unsupported"
-        )
-    group_count = _integer(state["group_count"], "metric group count")
-    edge_count = _nonnegative_integer(state["edge_count"], "metric edge count")
-    assert sim.topology is not None
-    if edge_count != sim.topology.edge_count:
-        raise SnapshotSchemaError("the metric edge count does not match the topology")
-    duration = _finite_float(
-        state["episode_duration_seconds"], "metric episode duration"
+def restore_continuation_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    resolved: ResolvedConfig,
+) -> dict[str, Any]:
+    """Construct and restore compatible executable components."""
+    _validate_continuation(snapshot, resolved)
+    env = build_resolved_environment(resolved)
+    controller = build_controller(resolved.controller, env.topology)
+    fallback = build_fallback(
+        resolved.fallback.policy,
+        resolved.controller,
+        env.topology,
     )
-    try:
-        metrics = OnlineMetrics(
-            group_count,
-            duration,
-            topology=sim.topology,
-            environment_context=sim.environment_context,
-        )
-    except ValueError as error:
-        raise SnapshotSchemaError(str(error)) from error
-    edge_references = state["edge_references"]
-    if (
-        not isinstance(edge_references, list)
-        or any(not isinstance(item, str) or not item for item in edge_references)
-        or tuple(edge_references) != metrics.edge_references
+    monitor = build_monitor(resolved.monitor, resolved.controller, env.topology)
+    approval = SimulatedApprover(ApprovalChoice(resolved.approval.simulated_choice))
+    env.configure_adjudicator(
+        monitor,
+        fallback,
+        approval,
+        resolved.approval.timeout_seconds,
+    )
+    controller.reset(resolved.seed)
+    env.reset(seed=resolved.seed)
+    restore_simulator_state(env.sim, snapshot["simulator"])
+    _restore_component(controller, snapshot["controller"], "controller")
+    _restore_component(monitor, snapshot["monitor"], "monitor")
+    _restore_component(fallback, snapshot["fallback"], "fallback")
+    _restore_component(approval, snapshot["approval"], "approval")
+    _restore_component(env.adjudicator, snapshot["adjudicator"], "adjudicator")
+    feature = getattr(monitor, "extractor", None)
+    _restore_component(feature, snapshot["feature_extractor"], "feature")
+    env.restore_state(snapshot["environment"])
+    lifecycle = AttackLifecycle()
+    lifecycle.restore_state(snapshot["attack_lifecycle"])
+    restored_state = capture_simulator_state(env.sim)
+    if canonical_sha256(restored_state, allow_nonfinite=True) != canonical_sha256(
+        snapshot["simulator"],
+        allow_nonfinite=True,
     ):
-        raise SnapshotSchemaError("the metric edge references do not match")
-    metrics.newly_stranded_skiers = _nonnegative_integer(
-        state["newly_stranded_skiers"], "newly stranded metric"
-    )
-    metrics.cumulative_stranded_seconds = _nonnegative_float(
-        state["cumulative_stranded_seconds"], "cumulative stranded metric"
-    )
-    onset = state["harm_onset_at"]
-    metrics.harm_onset_at = (
-        None if onset is None else _nonnegative_float(onset, "harm onset")
-    )
-    onset_interval = state["harm_onset_control_interval"]
-    metrics.harm_onset_control_interval = (
-        None
-        if onset_interval is None
-        else _nonnegative_integer(onset_interval, "harm onset interval")
-    )
-    metrics.dangerous_density_seconds = _nonnegative_float(
-        state["dangerous_density_seconds"], "dangerous density metric"
-    )
-    metrics.density_exposure_seconds = _nonnegative_float(
-        state["density_exposure_seconds"], "density exposure metric"
-    )
-    metrics.reported_density_exposure_seconds = _nonnegative_float(
-        state["reported_density_exposure_seconds"],
-        "reported density exposure metric",
-    )
-    metrics.capacity_violation_seconds = _nonnegative_float(
-        state["capacity_violation_seconds"], "capacity violation metric"
-    )
-    metrics.reported_capacity_violation_seconds = _nonnegative_float(
-        state["reported_capacity_violation_seconds"],
-        "reported capacity violation metric",
-    )
-    metrics.safe_evacuation_capacity_skiers_per_second = _nonnegative_float(
-        state["safe_evacuation_capacity_skiers_per_second"],
-        "safe evacuation capacity metric",
-    )
-    metrics.lost_safe_evacuation_capacity_seconds = _nonnegative_float(
-        state["lost_safe_evacuation_capacity_seconds"],
-        "lost safe evacuation capacity metric",
-    )
-    metrics.queue_no_route_blocked_seconds = _nonnegative_float(
-        state["queue_no_route_blocked_seconds"], "queue blocked metric"
-    )
-    metrics.onboard_blocked_seconds = _nonnegative_float(
-        state["onboard_blocked_seconds"], "onboard blocked metric"
-    )
-    stranded = state["group_stranded_seconds"]
-    if not isinstance(stranded, list) or len(stranded) != group_count:
-        raise SnapshotSchemaError("the grouped stranded metric has a bad shape")
-    metrics.group_stranded_seconds = np.array(
-        [_nonnegative_float(item, "grouped stranded metric") for item in stranded],
-        dtype=np.float64,
-    )
-    decision_counts = _mapping(state["decision_counts"], "decision counts")
-    expected_decisions = {item.value for item in DecisionType}
-    if set(decision_counts) != expected_decisions:
-        raise SnapshotSchemaError("the decision counts have invalid fields")
-    metrics.decision_counts = {
-        name: _nonnegative_integer(count, "decision count")
-        for name, count in decision_counts.items()
+        raise SnapshotSchemaError("the restored simulator state does not match")
+    env.sim.physical_state_checksum("reported")
+    env.sim.physical_state_checksum("evaluator")
+    return {
+        "environment": env,
+        "controller": controller,
+        "attack_lifecycle": lifecycle,
+        "trace": snapshot["trace"],
+        "runtime": snapshot["runtime"],
     }
-    metrics.intervention_latency_seconds_sum = _nonnegative_float(
-        state["intervention_latency_seconds_sum"], "intervention latency"
-    )
-    metrics.intervention_latency_count = _nonnegative_integer(
-        state["intervention_latency_count"], "intervention latency count"
-    )
-    metrics.monitor_latency_seconds_sum = _nonnegative_float(
-        state["monitor_latency_seconds_sum"], "monitor latency"
-    )
-    metrics.monitor_decision_count = _nonnegative_integer(
-        state["monitor_decision_count"], "monitor decision count"
-    )
-    intervention = state["first_intervention_interval"]
-    metrics.first_intervention_interval = (
-        None
-        if intervention is None
-        else _nonnegative_integer(intervention, "first intervention")
-    )
-    harm = state["cumulative_stranded_seconds_before_first_intervention"]
-    metrics.cumulative_stranded_seconds_before_first_intervention = (
-        None
-        if harm is None
-        else _nonnegative_float(harm, "stranded seconds before first intervention")
-    )
-    metrics.route_decision_count = _nonnegative_integer(
-        state["route_decision_count"], "route decision count"
-    )
-    metrics.missing_sensor_route_decision_count = _nonnegative_integer(
-        state["missing_sensor_route_decision_count"],
-        "missing-sensor route decision count",
-    )
-    route_counts = _mapping(
-        state["missing_sensor_route_decision_counts"],
-        "missing-sensor route decision counts",
-    )
-    if set(route_counts) != set(ROUTE_SENSOR_CHANNELS):
-        raise SnapshotSchemaError("the missing route counts have invalid fields")
-    metrics.missing_sensor_route_decision_counts = {
-        name: _nonnegative_integer(route_counts[name], "missing route channel count")
-        for name in ROUTE_SENSOR_CHANNELS
+
+
+def _validate_continuation(
+    snapshot: dict[str, Any],
+    resolved: ResolvedConfig,
+) -> None:
+    _require_keys(snapshot, _CONTINUATION_KEYS, "continuation")
+    if snapshot["artifact_type"] != CONTINUATION_ARTIFACT_TYPE:
+        raise SnapshotSchemaError("the artifact is not a continuation snapshot")
+    if snapshot["schema_version"] != CONTINUATION_SCHEMA_VERSION:
+        raise SnapshotSchemaError("the continuation schema is unsupported")
+    expected = named_checksum(snapshot, allow_nonfinite=True)
+    actual = snapshot["continuation_checksum"]
+    if not isinstance(actual, str) or not hmac.compare_digest(actual, expected):
+        raise SnapshotSchemaError("the continuation checksum does not match")
+    compatibility = _mapping(snapshot["compatibility"], "compatibility")
+    current = _compatibility_state()
+    for name, expected_value in current.items():
+        if compatibility.get(name) != expected_value:
+            raise SnapshotSchemaError(f"the {name} compatibility identity differs")
+    references = _mapping(snapshot["references"], "references")
+    if references != _reference_state(resolved):
+        raise SnapshotSchemaError("the continuation references do not match")
+    _validate_component_identities(snapshot, resolved)
+
+
+def _validate_component_identities(
+    snapshot: dict[str, Any],
+    resolved: ResolvedConfig,
+) -> None:
+    env = build_resolved_environment(resolved)
+    controller = build_controller(resolved.controller, env.topology)
+    fallback = build_fallback(resolved.fallback.policy, resolved.controller, env.topology)
+    monitor = build_monitor(resolved.monitor, resolved.controller, env.topology)
+    approval = SimulatedApprover(ApprovalChoice(resolved.approval.simulated_choice))
+    expected = {
+        "controller": controller,
+        "monitor": monitor,
+        "fallback": fallback,
+        "approval": approval,
+        "adjudicator": env.adjudicator,
+        "feature_extractor": getattr(monitor, "extractor", None),
     }
-    metrics.evacuation_capacity_trajectory = _metric_float_trajectory(
-        state["evacuation_capacity_trajectory"],
-        "evacuation capacity trajectory",
-    )
-    metrics.true_density_ratio_trajectory = _metric_density_trajectory(
-        state["true_density_ratio_trajectory"],
-        edge_count,
-        "true density trajectory",
-    )
-    metrics.reported_density_ratio_trajectory = _metric_density_trajectory(
-        state["reported_density_ratio_trajectory"],
-        edge_count,
-        "reported density trajectory",
-    )
-    lengths = {
-        len(metrics.evacuation_capacity_trajectory),
-        len(metrics.true_density_ratio_trajectory),
-        len(metrics.reported_density_ratio_trajectory),
+    for name, component in expected.items():
+        section = _mapping(snapshot[name], name)
+        expected_type = None if component is None else _type_identity(component)
+        if section.get("component_type") != expected_type:
+            raise SnapshotSchemaError(f"the {name} component type differs")
+
+
+def _component_state(component: StatefulComponent | None) -> dict[str, Any]:
+    if component is None:
+        return {"component_type": None, "state": None}
+    value = _stateful(component, "component")
+    return {
+        "component_type": _type_identity(value),
+        "state": value.snapshot_state(),
     }
-    if len(lengths) != 1:
-        raise SnapshotSchemaError("the metric trajectories must stay aligned")
-    if metrics.missing_sensor_route_decision_count > metrics.route_decision_count:
-        raise SnapshotSchemaError("missing route decisions exceed all route decisions")
-    if any(
-        count > metrics.route_decision_count
-        for count in metrics.missing_sensor_route_decision_counts.values()
-    ):
-        raise SnapshotSchemaError("a missing route channel exceeds all route decisions")
-    return metrics
 
 
-def _metric_float_trajectory(value: Any, label: str) -> list[float]:
-    """Validate one nonnegative scalar metric trajectory."""
-    if not isinstance(value, list):
-        raise SnapshotSchemaError(f"the {label} must be a list")
-    return [_nonnegative_float(item, label) for item in value]
+def _restore_component(component: Any, section: Any, label: str) -> None:
+    value = _mapping(section, label)
+    if component is None:
+        if value != {"component_type": None, "state": None}:
+            raise SnapshotSchemaError(f"the {label} component is incompatible")
+        return
+    if value.get("component_type") != _type_identity(component):
+        raise SnapshotSchemaError(f"the {label} component type differs")
+    _stateful(component, label).restore_state(value.get("state"))
 
 
-def _metric_density_trajectory(
-    value: Any, edge_count: int, label: str
-) -> list[tuple[float, ...]]:
-    """Validate one nonnegative edge metric trajectory."""
-    if not isinstance(value, list):
-        raise SnapshotSchemaError(f"the {label} must be a list")
-    rows: list[tuple[float, ...]] = []
-    for row in value:
-        if not isinstance(row, list) or len(row) != edge_count:
-            raise SnapshotSchemaError(f"the {label} has an invalid edge shape")
-        rows.append(tuple(_nonnegative_float(item, label) for item in row))
-    return rows
+def _stateful(value: Any, label: str) -> StatefulComponent:
+    if not isinstance(value, StatefulComponent):
+        raise TypeError(f"the {label} must expose continuation state")
+    return value
 
 
-def _random_streams(value: Any) -> dict[str, np.random.Generator]:
-    """Validate and rebuild every independent random stream."""
-    states = _mapping(value, "random streams")
-    if set(states) != set(STREAM_NAMES):
-        raise SnapshotSchemaError("the snapshot random streams do not match")
-    streams: dict[str, np.random.Generator] = {}
-    for name in STREAM_NAMES:
-        state = _mapping(states[name], f"the {name} random stream")
-        stream = np.random.default_rng()
-        try:
-            stream.bit_generator.state = state
-        except (TypeError, ValueError) as error:
-            raise SnapshotSchemaError(
-                f"the {name} random stream state is invalid"
-            ) from error
-        streams[name] = stream
-    return streams
+def _optional_stateful(value: Any, label: str) -> StatefulComponent | None:
+    return None if value is None else _stateful(value, label)
 
 
-def _audit_measurements(value: Any, label: str) -> tuple[AuditMeasurement, ...]:
-    """Validate and rebuild one audit measurement sequence."""
-    if not isinstance(value, list):
-        raise SnapshotSchemaError(f"the {label} must be a list")
-    try:
-        records = []
-        for item in value:
-            record = dict(_mapping(item, label))
-            if record.get("missing") and record.get("measured_density") is None:
-                record["measured_density"] = np.nan
-            records.append(AuditMeasurement(**record))
-        return tuple(records)
-    except (TypeError, ValueError) as error:
-        raise SnapshotSchemaError(f"the {label} are invalid") from error
+def _type_identity(value: Any) -> str:
+    value_type = type(value)
+    return f"{value_type.__module__}.{value_type.__qualname__}"
 
 
-def _hazard_events(value: Any) -> tuple[HazardEvent, ...]:
-    """Validate and rebuild the recorded hazard events."""
-    if not isinstance(value, list):
-        raise SnapshotSchemaError("the hazard events must be a list")
-    try:
-        return tuple(HazardEvent(**_mapping(item, "hazard event")) for item in value)
-    except (TypeError, ValueError) as error:
-        raise SnapshotSchemaError("the hazard events are invalid") from error
-
-
-def _weather(value: Any) -> Weather:
-    """Validate and rebuild the current weather vector."""
-    if not isinstance(value, list) or len(value) != 4:
-        raise SnapshotSchemaError("the weather vector has a bad shape")
-    return Weather(*(_finite_float(item, "weather value") for item in value))
-
-
-def _topology_checksum(sim: MountainSim) -> str:
-    """Return one identity for the complete static topology."""
-    digest = hashlib.sha256()
-    topology = sim.topology
-    assert topology is not None
-    identity = {"name": topology.name, "nodes": topology.node_ids}
-    digest.update(_canonical_json(identity).encode())
-    for item in fields(topology):
-        value = getattr(topology, item.name)
-        if isinstance(value, np.ndarray):
-            encoded = _encode_array(item.name, value)
-            metadata = {key: encoded[key] for key in ("name", "dtype", "shape")}
-            digest.update(_canonical_json(metadata).encode())
-            digest.update(encoded["data"])
-    return digest.hexdigest()
-
-
-def _context_checksum(sim: MountainSim) -> str:
-    """Return one identity for the immutable continuation context."""
-    assert sim.weather_schedule is not None
-    assert sim.failure_schedule is not None
-    assert sim.operational_event_schedule is not None
-    context = {
-        "tick_seconds": sim.tick_seconds,
-        "time_epsilon_seconds": sim.time_epsilon_seconds,
-        "weather_config": sim.weather_config.model_dump(mode="json"),
-        "weather_transitions": [
-            {
-                "start_time_seconds": item.start_time_seconds,
-                "weather": item.weather.as_array().tolist(),
-            }
-            for item in sim.weather_schedule.transitions
-        ],
-        "hazard_config": sim.hazard_config.model_dump(mode="json"),
-        "failure_schedule": [item.as_dict() for item in sim.failure_schedule.events],
-        "audit_config": sim.audit_config.model_dump(mode="json"),
-        "operational_event_schedule": [
-            item.complete() for item in sim.operational_event_schedule.events
-        ],
-        "environment_context": {
-            "evacuation_target_edges": list(
-                sim.environment_context.evacuation_target_edges
-            ),
-            "evacuation_target_abilities": [
-                list(abilities)
-                for abilities in sim.environment_context.evacuation_target_abilities
-            ],
-            "baseline_safe_evacuation_capacity_skiers_per_second": (
-                sim.environment_context.baseline_safe_evacuation_capacity_skiers_per_second
-            ),
+def _compatibility_state(sim: MountainSim | None = None) -> dict[str, Any]:
+    bit_generator = (
+        np.random.default_rng().bit_generator
+        if sim is None or not sim.streams
+        else next(iter(sim.streams.values())).bit_generator
+    )
+    return {
+        "python_version": platform.python_version(),
+        "numpy_version": np.__version__,
+        "bit_generator_class": _type_identity(bit_generator),
+        "code_revision": _code_revision(),
+        "protocol_digests": {
+            name: hashlib.sha256((REPO_ROOT / name).read_bytes()).hexdigest()
+            for name in _PROTOCOL_PATHS
         },
     }
-    return hashlib.sha256(_canonical_json(context).encode()).hexdigest()
 
 
-def _canonical_json(value: Any) -> str:
-    """Return deterministic JSON without non-finite numbers."""
-    return json.dumps(
-        value,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
+def _reference_state(
+    resolved: ResolvedConfig,
+    sim: MountainSim | None = None,
+) -> dict[str, Any]:
+    topology_sha256 = (
+        _topology_sha256(resolved) if sim is None else _sim_topology_sha256(sim)
     )
+    return {
+        "resolved_configuration_sha256": resolved.resolved_configuration_sha256,
+        "scientific_configuration_sha256": resolved.scientific_configuration_sha256,
+        "topology_artifact": {
+            "path": resolved.mountain.path,
+            "sha256": topology_sha256,
+        },
+        "source_artifacts": tuple(
+            {
+                "path": item.source_path,
+                "sha256": item.source_sha256,
+            }
+            for item in resolved.provenance
+            if item.source_path is not None and item.source_sha256 is not None
+        ),
+        "model_lock": (
+            None
+            if resolved.monitor.model_lock is None
+            else resolved.monitor.model_lock.model_dump(mode="python")
+        ),
+    }
 
 
-def _decode_json(value: Any) -> dict[str, Any]:
-    """Decode JSON and reject duplicate object fields."""
-    if not isinstance(value, str):
-        raise SnapshotSchemaError("the snapshot state must be JSON text")
+def _topology_sha256(resolved: ResolvedConfig) -> str:
+    path = Path(resolved.mountain.path)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
-    def object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for name, item in pairs:
-            if name in result:
-                raise SnapshotSchemaError(f"the JSON field {name!r} is duplicated")
-            result[name] = item
-        return result
 
+def _sim_topology_sha256(sim: MountainSim) -> str:
+    if sim.topology is None:
+        raise SnapshotSchemaError("reset the simulator before continuation work")
+    return sim.topology.mountain_sha256
+
+
+def _code_revision() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _validate_formal_configuration(resolved: ResolvedConfig) -> None:
     try:
-        result = json.loads(value, object_pairs_hook=object_pairs)
-    except SnapshotSchemaError:
-        raise
-    except (json.JSONDecodeError, TypeError, ValueError) as error:
-        raise SnapshotSchemaError("the snapshot state JSON is invalid") from error
-    return _mapping(result, "snapshot state")
+        canonical_messagepack(resolved.model_dump(mode="python"))
+    except CanonicalEncodingError as error:
+        raise SnapshotSchemaError("the resolved configuration is not finite") from error
 
 
 def _mapping(value: Any, label: str) -> dict[str, Any]:
-    """Require one string-keyed mapping."""
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
-        raise SnapshotSchemaError(f"the {label} must be an object")
+        raise SnapshotSchemaError(f"the {label} must be a string-keyed mapping")
     return value
 
 
 def _require_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
-    """Require one exact field set."""
     missing = sorted(expected - set(value))
     extra = sorted(set(value) - expected)
     if missing:
         raise SnapshotSchemaError(f"the {label} field {missing[0]!r} is missing")
     if extra:
         raise SnapshotSchemaError(f"the {label} field {extra[0]!r} is unknown")
-
-
-def _integer(value: Any, label: str) -> int:
-    """Require one integer scalar."""
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise SnapshotSchemaError(f"the {label} must be an integer")
-    return value
-
-
-def _nonnegative_integer(value: Any, label: str) -> int:
-    """Require one nonnegative integer scalar."""
-    result = _integer(value, label)
-    if result < 0:
-        raise SnapshotSchemaError(f"the {label} must not be negative")
-    return result
-
-
-def _finite_float(value: Any, label: str) -> float:
-    """Require one finite numeric scalar."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise SnapshotSchemaError(f"the {label} must be numeric")
-    result = float(value)
-    if not np.isfinite(result):
-        raise SnapshotSchemaError(f"the {label} must be finite")
-    return result
-
-
-def _nonnegative_float(value: Any, label: str) -> float:
-    """Require one finite nonnegative scalar."""
-    result = _finite_float(value, label)
-    if result < 0.0:
-        raise SnapshotSchemaError(f"the {label} must not be negative")
-    return result

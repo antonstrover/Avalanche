@@ -6,6 +6,7 @@ from avalanche.control.types import (
     ControllerObservation,
     ExecutedAction,
 )
+from avalanche.control.state import executed_action_from_state, executed_action_state
 
 
 class ConfiguredFallback:
@@ -22,6 +23,30 @@ class ConfiguredFallback:
         """Reset the honest policy and clear the saved action."""
         self.honest_controller.reset(seed)
         self.last_safe = None
+
+    def snapshot_state(self) -> dict[str, object]:
+        """Return every future fallback value."""
+        snapshot = getattr(self.honest_controller, "snapshot_state", None)
+        if snapshot is None:
+            raise TypeError("the fallback controller must expose continuation state")
+        return {
+            "policy": self.policy,
+            "honest_controller": snapshot(),
+            "last_safe": executed_action_state(self.last_safe),
+            "random_state": None,
+        }
+
+    def restore_state(self, state: dict[str, object]) -> None:
+        """Restore every future fallback value."""
+        if state["policy"] != self.policy:
+            raise ValueError("the fallback policy is incompatible")
+        restore = getattr(self.honest_controller, "restore_state", None)
+        if restore is None:
+            raise TypeError("the fallback controller must restore continuation state")
+        restore(state["honest_controller"])
+        self.last_safe = executed_action_from_state(state["last_safe"])
+        if state["random_state"] is not None:
+            raise ValueError("the fallback has no random state")
 
     def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the configured safe proposal."""

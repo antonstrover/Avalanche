@@ -105,6 +105,39 @@ class AttackLifecycle:
             ),
         }
 
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return every future lifecycle accumulator."""
+        return {
+            "trigger_ready_at": self.trigger_ready_at,
+            "first_malicious_proposal_at": self.first_malicious_proposal_at,
+            "first_malicious_action_executed_at": (
+                self.first_malicious_action_executed_at
+            ),
+            "harm_onset_at": self.harm_onset_at,
+            "malicious_proposal_count": self.malicious_proposal_count,
+            "prevented_malicious_proposal_count": (
+                self.prevented_malicious_proposal_count
+            ),
+            "seen_steps": tuple(sorted(self._seen_steps)),
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore every future lifecycle accumulator."""
+        self.trigger_ready_at = state["trigger_ready_at"]
+        self.first_malicious_proposal_at = state["first_malicious_proposal_at"]
+        self.first_malicious_action_executed_at = state[
+            "first_malicious_action_executed_at"
+        ]
+        self.harm_onset_at = state["harm_onset_at"]
+        self.malicious_proposal_count = int(state["malicious_proposal_count"])
+        self.prevented_malicious_proposal_count = int(
+            state["prevented_malicious_proposal_count"]
+        )
+        self._seen_steps = {
+            (float(simulation_time), str(digest))
+            for simulation_time, digest in state["seen_steps"]
+        }
+
 
 def require_attack_record_contract(
     record: AttackRecordConfig,
@@ -195,6 +228,28 @@ class StealthGuard:
     def observe(self, channel: str, index: tuple[int, ...], honest: float) -> None:
         """Track an honest value while an attack stays inactive."""
         self.previous[(channel, index)] = honest
+
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return each future rate-limit value."""
+        return {
+            "previous": tuple(
+                {
+                    "channel": channel,
+                    "index": index,
+                    "value": value,
+                }
+                for (channel, index), value in sorted(self.previous.items())
+            )
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore each future rate-limit value."""
+        self.previous = {
+            (str(item["channel"]), tuple(int(value) for value in item["index"])): float(
+                item["value"]
+            )
+            for item in state["previous"]
+        }
 
 
 def resolve_edge(topology: Topology | PublicTopology, reference: str) -> int:

@@ -11,6 +11,7 @@ from avalanche.control import (
     freeze_action,
     thaw_action,
 )
+from avalanche.control.state import attack_step_from_state, attack_step_state
 from avalanche.controllers.attacks import (
     StealthGuard,
     build_attack_step_record,
@@ -85,6 +86,38 @@ class ProfitBiasedController:
         self._ramp_step = 0
         self._last_time = None
         self.last_attack_step_record = None
+
+    def snapshot_state(self) -> dict[str, object]:
+        """Return every future wrapper value."""
+        snapshot = getattr(self.honest, "snapshot_state", None)
+        if snapshot is None:
+            raise TypeError("the wrapped controller must expose continuation state")
+        return {
+            "honest": snapshot(),
+            "stealth": self._stealth.snapshot_state(),
+            "ramp_step": self._ramp_step,
+            "last_time": self._last_time,
+            "last_attack_step_record": attack_step_state(
+                self.last_attack_step_record
+            ),
+            "random_state": None,
+        }
+
+    def restore_state(self, state: dict[str, object]) -> None:
+        """Restore every future wrapper value."""
+        restore = getattr(self.honest, "restore_state", None)
+        if restore is None:
+            raise TypeError("the wrapped controller must restore continuation state")
+        restore(state["honest"])
+        self._stealth.restore_state(state["stealth"])
+        self._ramp_step = int(state["ramp_step"])
+        value = state["last_time"]
+        self._last_time = None if value is None else float(value)
+        self.last_attack_step_record = attack_step_from_state(
+            state["last_attack_step_record"]
+        )
+        if state["random_state"] is not None:
+            raise ValueError("the controller wrapper has no random state")
 
     def propose(self, observation: ControllerObservation) -> ActionProposal:
         """Return the honest proposal, or the biased proposal after the trigger."""

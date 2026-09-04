@@ -24,7 +24,13 @@ from avalanche.monitors import build_monitor
 from avalanche.monitors.dataset import LABEL_SCHEMA_VERSION
 from avalanche.sim.movement import effective_closed
 from avalanche.sim.time import time_boundary_reached
-from avalanche.traces import SUMMARY_SCHEMA_VERSION, EventState, TraceWriter
+from avalanche.traces import (
+    SUMMARY_SCHEMA_VERSION,
+    EventState,
+    TraceWriter,
+    encode_continuation_snapshot,
+    write_continuation_snapshot,
+)
 
 
 def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
@@ -39,6 +45,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         monitor,
         fallback,
         SimulatedApprover(ApprovalChoice(resolved.approval.simulated_choice)),
+        resolved.approval.timeout_seconds,
     )
     controller.reset(resolved.seed)
     observation, info = env.reset(seed=resolved.seed)
@@ -215,7 +222,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "truncated": truncated,
         "simulation_time": env.sim.simulation_time,
         "step": env.sim.step,
-        "state_checksum": env.sim.state_checksum(),
+        "physical_state_checksum": env.sim.physical_state_checksum(),
         "metrics": metrics,
         "attack_lifecycle": attack_lifecycle.as_dict(),
         # The speed is not a research metric and is not deterministic.
@@ -233,8 +240,30 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     }
     summary = json.loads(json.dumps(summary))
     trace.record("episode_ended", "simulator", summary, env.sim)
-    if not trace.snapshot_rows or trace.snapshot_rows[-1]["step"] != env.sim.step:
+    if (
+        not trace.evaluator_snapshot_rows
+        or trace.evaluator_snapshot_rows[-1]["movement_tick"] != env.sim.step
+    ):
         trace.record_snapshot(env.sim)
+    continuation = encode_continuation_snapshot(
+        env,
+        controller,
+        resolved,
+        attack_lifecycle=attack_lifecycle,
+        trace_state=trace.snapshot_state(),
+        runtime_state={
+            "next_snapshot_time": next_snapshot,
+            "risk_scores": tuple(risk_scores),
+            "attack_labels": tuple(attack_labels),
+            "terminated": terminated,
+            "truncated": truncated,
+        },
+    )
+    continuation_record = write_continuation_snapshot(
+        output_dir / "episode-0-final.avalanche-continuation.msgpack",
+        continuation,
+    )
+    trace.record_continuation_artifact(continuation_record)
     reference = getattr(monitor, "model_reference", None)
     trace.close(summary, reference() if reference is not None else None)
     return summary

@@ -45,6 +45,17 @@ from avalanche.control import (
     freeze_action,
     observation_as_json,
     thaw_action,
+    thaw_evidence,
+)
+from avalanche.control.state import (
+    adjudication_from_state,
+    adjudication_state,
+    decision_from_state,
+    decision_state,
+    executed_action_from_state,
+    executed_action_state,
+    proposal_from_state,
+    proposal_state,
 )
 from avalanche.env.actions import (
     PISTE_CLOSE,
@@ -327,17 +338,24 @@ class AvalancheEnv(gym.Env):
         monitor: Monitor,
         fallback: ConfiguredFallback | None,
         approval: ApprovalHandler | None = None,
+        approval_timeout_seconds: float = 30.0,
     ) -> None:
         """Install the monitor boundary before an environment reset."""
         if not self._ended:
             raise RuntimeError("configure the adjudicator before the environment reset")
-        self.adjudicator = self._make_adjudicator(monitor, fallback, approval)
+        self.adjudicator = self._make_adjudicator(
+            monitor,
+            fallback,
+            approval,
+            approval_timeout_seconds,
+        )
 
     def _make_adjudicator(
         self,
         monitor: Monitor,
         fallback: ConfiguredFallback | None,
         approval: ApprovalHandler | None = None,
+        approval_timeout_seconds: float = 30.0,
     ) -> Adjudicator:
         """Build a validator against the current action contract."""
         action_space = self.action_space
@@ -350,6 +368,7 @@ class AvalancheEnv(gym.Env):
             ),
             fallback,
             approval,
+            approval_timeout_seconds,
         )
 
     def reset(
@@ -404,6 +423,83 @@ class AvalancheEnv(gym.Env):
         observation = self._observation()
         return observation, self._base_info(observation)
 
+    def snapshot_state(self) -> dict[str, Any]:
+        """Return every future environment and observation history value."""
+        return {
+            "seed": self._seed,
+            "ended": self._ended,
+            "last_proposal": proposal_state(self.last_proposal),
+            "last_adjudication": adjudication_state(self.last_adjudication),
+            "last_executed_action": executed_action_state(
+                self.last_executed_action
+            ),
+            "control_history": tuple(
+                freeze_action(thaw_evidence(entry["executed_action"])).__dict__
+                for entry in self._control_history
+            ),
+            "intervention_history": tuple(
+                {
+                    "simulation_time": item.simulation_time,
+                    "decision": decision_state(item.decision),
+                }
+                for item in self._intervention_history
+            ),
+            "cumulative_intervention_cost": self._cumulative_intervention_cost,
+            "audit_interval": self._audit_interval,
+            "audit_sampled_time": self._audit_sampled_time,
+            "environment_random_state": self.np_random.bit_generator.state,
+            "action_space_random_state": _space_random_state(self.action_space),
+            "observation_space_random_state": _space_random_state(
+                self.observation_space
+            ),
+            "boundary_observation_cached": (
+                self._boundary_controller_observation is not None
+            ),
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore every future environment and observation history value."""
+        self._seed = int(state["seed"])
+        self._ended = bool(state["ended"])
+        self.last_proposal = proposal_from_state(state["last_proposal"])
+        self.last_adjudication = adjudication_from_state(
+            state["last_adjudication"]
+        )
+        self.last_executed_action = executed_action_from_state(
+            state["last_executed_action"]
+        )
+        self.last_evaluator_observation = None
+        self._control_history = tuple(
+            build_history_entry(action) for action in state["control_history"]
+        )
+        self._intervention_history = [
+            InterventionRecord(
+                simulation_time=float(item["simulation_time"]),
+                decision=decision_from_state(item["decision"]),
+            )
+            for item in state["intervention_history"]
+        ]
+        self._cumulative_intervention_cost = float(
+            state["cumulative_intervention_cost"]
+        )
+        self._audit_interval = int(state["audit_interval"])
+        sampled = state["audit_sampled_time"]
+        self._audit_sampled_time = None if sampled is None else float(sampled)
+        self.np_random.bit_generator.state = state["environment_random_state"]
+        _restore_space_random_state(
+            self.action_space,
+            state["action_space_random_state"],
+        )
+        _restore_space_random_state(
+            self.observation_space,
+            state["observation_space_random_state"],
+        )
+        self._boundary_controller_observation = None
+        self._boundary_controller_fingerprint = None
+        self._static_public_evidence = None
+        if bool(state["boundary_observation_cached"]):
+            self.controller_observation()
+
     def step(
         self, action: Action
     ) -> tuple[Observation, float, bool, bool, dict[str, Any]]:
@@ -446,7 +542,7 @@ class AvalancheEnv(gym.Env):
             raise ValueError("the proposal time must match the simulation time")
 
         before = self._reward_snapshot()
-        before_checksum = self.sim.state_checksum()
+        before_checksum = self.sim.physical_state_checksum()
         before_time = self.sim.simulation_time
         before_step = self.sim.step
         adjudication = self.execute_proposal(
@@ -506,7 +602,7 @@ class AvalancheEnv(gym.Env):
                 "reward_parts": reward_result.parts.as_dict(),
                 "checksums": {
                     "before": transition.state_checksum,
-                    "after": self.sim.state_checksum(),
+                    "after": self.sim.physical_state_checksum(),
                 },
                 "action_proposal": transition.proposal,
                 "monitor_decision": transition.adjudication.decision,
@@ -719,7 +815,7 @@ class AvalancheEnv(gym.Env):
         return {
             "seed": self._seed,
             "movement_ticks_per_step": self.config.movement_ticks_per_step,
-            "state_checksum": self.sim.state_checksum(),
+            "state_checksum": self.sim.physical_state_checksum(),
             "metrics": self._metrics(),
             "control_permissions": deepcopy(observation["control_permissions"]),
             "reported_edge_available": observation["reported_edge_available"].copy(),
@@ -801,3 +897,32 @@ def _apply_route_weights(sim: MountainSim, weights: np.ndarray) -> None:
     if values.shape != sim.state.route_preferences.shape:
         raise ValueError("the route preferences must match the simulator state")
     sim.state.route_preferences[:] = np.clip(values, -1.0, 1.0)
+
+
+def _space_random_state(space: gym.Space) -> dict[str, Any]:
+    """Return one space random state and each nested space state."""
+    children = getattr(space, "spaces", None)
+    nested = {}
+    if isinstance(children, Mapping):
+        nested = {
+            str(name): _space_random_state(child) for name, child in children.items()
+        }
+    return {
+        "bit_generator_state": space.np_random.bit_generator.state,
+        "children": nested,
+    }
+
+
+def _restore_space_random_state(space: gym.Space, state: dict[str, Any]) -> None:
+    """Restore one space random state and each nested space state."""
+    space.np_random.bit_generator.state = state["bit_generator_state"]
+    children = getattr(space, "spaces", None)
+    nested = state["children"]
+    if not isinstance(children, Mapping):
+        if nested:
+            raise ValueError("a scalar space cannot restore nested random state")
+        return
+    if set(nested) != {str(name) for name in children}:
+        raise ValueError("the nested space random state is incompatible")
+    for name, child in children.items():
+        _restore_space_random_state(child, nested[str(name)])

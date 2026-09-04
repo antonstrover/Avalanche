@@ -267,11 +267,11 @@ def test_the_attack_controller_cannot_change_the_simulator(resolved_attack):
 
     observation = env.controller_observation()
     safe = observation_payload(observation)
-    checksum = env.sim.state_checksum()
+    checksum = env.sim.physical_state_checksum()
 
     proposal = controller.propose(observation)
 
-    assert env.sim.state_checksum() == checksum
+    assert env.sim.physical_state_checksum() == checksum
     assert proposal.simulation_time == env.sim.simulation_time
     assert observation_payload(observation) == safe
     assert observation_payload(env.controller_observation()) == safe
