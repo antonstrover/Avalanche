@@ -28,6 +28,11 @@ from avalanche.sim.hazards import HazardEvent
 from avalanche.sim.movement import DynamicState, MovementTransitions
 from avalanche.sim.population import SkierArrays
 
+_PERFORMANCE_METRIC_FIELDS = {
+    "monitor_latency_seconds_sum",
+    "intervention_latency_seconds_sum",
+}
+
 _DATACLASSES = {
     value.__name__: value
     for value in (
@@ -84,7 +89,8 @@ def capture_simulator_state(sim: MountainSim) -> dict[str, Any]:
         "metrics": {
             name: freeze_state(value)
             for name, value in sim.metrics.__dict__.items()
-            if name not in {"topology", "environment_context"}
+            if name
+            not in {"topology", "environment_context", *_PERFORMANCE_METRIC_FIELDS}
         },
         "route_sensor": {
             "latest": freeze_state(sim.route_sensor_channel.latest),
@@ -139,6 +145,8 @@ def restore_simulator_state(sim: MountainSim, state: dict[str, Any]) -> None:
     sim.delivered_audits = thaw_state(audit["delivered"])
     for name, value in state["metrics"].items():
         setattr(sim.metrics, name, thaw_state(value))
+    for name in _PERFORMANCE_METRIC_FIELDS:
+        setattr(sim.metrics, name, 0.0)
     sensor = state["route_sensor"]
     sim.route_sensor_channel = RouteSensorChannel(
         sim.route_sensor_config,

@@ -1,7 +1,4 @@
-import json
 from pathlib import Path
-
-import yaml
 
 from avalanche.config import ConfigurationResolver, make_run_dir, run_id
 
@@ -32,18 +29,7 @@ def test_running_twice_reuses_the_same_output_directory(tmp_path):
     first_dir = make_run_dir(resolved, outputs_root=tmp_path)
     second_dir = make_run_dir(resolved, outputs_root=tmp_path)
     assert first_dir == second_dir
-    written = yaml.safe_load((first_dir / "config.resolved.yaml").read_text())
-    assert written["resolved_configuration_sha256"] == (
-        resolved.resolved_configuration_sha256
-    )
-    metadata = json.loads((first_dir / "metadata.json").read_text())
-    assert metadata["run_id"] == run_id(resolved)
-    assert metadata["scientific_configuration_sha256"] == (
-        resolved.scientific_configuration_sha256
-    )
-    assert metadata["resolved_configuration_sha256"] == (
-        resolved.resolved_configuration_sha256
-    )
+    assert not tuple(first_dir.iterdir())
 
 
 def test_a_scientific_parameter_changes_both_digests():

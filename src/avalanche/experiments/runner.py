@@ -1,6 +1,7 @@
 """Run one configured episode and write its evidence."""
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
@@ -19,11 +20,11 @@ from avalanche.control import (
 from avalanche.controllers import build_controller
 from avalanche.controllers.attacks import AttackLifecycle
 from avalanche.controllers.factory import build_fallback, selected_policy_variant
-from avalanche.env import AvalancheEnv, build_resolved_environment
+from avalanche.env import build_resolved_environment
 from avalanche.monitors import build_monitor
 from avalanche.monitors.dataset import LABEL_SCHEMA_VERSION
-from avalanche.sim.movement import effective_closed
-from avalanche.sim.time import time_boundary_reached
+from avalanche.sim.engine import MountainSim
+from avalanche.sim.transitions import EventPhase, MaterialTransition
 from avalanche.traces import (
     SUMMARY_SCHEMA_VERSION,
     EventState,
@@ -33,7 +34,12 @@ from avalanche.traces import (
 )
 
 
-def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
+def run_episode(
+    resolved: ResolvedConfig,
+    output_dir: Path,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run one configured episode and write each result file."""
     env = build_resolved_environment(resolved)
     controller = build_controller(resolved.controller, env.topology)
@@ -50,11 +56,28 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
     controller.reset(resolved.seed)
     observation, info = env.reset(seed=resolved.seed)
     identity = run_id(resolved)
-    trace = TraceWriter(output_dir, identity, "episode-0", resolved.seed)
-    trace.record("scenario_changed", resolved.scenario.name, {}, env.sim)
+    trace = TraceWriter(
+        output_dir,
+        identity,
+        "episode-0",
+        resolved.seed,
+        trace_level=resolved.trace_level,
+        resolved=resolved,
+        metadata=metadata,
+    )
+    trace.record(
+        "scenario_changed",
+        resolved.scenario.name,
+        {},
+        env.sim,
+        phase=EventPhase.OPERATIONAL_EVENT_TRANSITION,
+    )
+    _record_tick_transitions(trace, env.sim, env.sim.initial_events)
     trace.record_metrics(env.sim.metrics.snapshot(env.sim.population), env.sim)
     trace.record_snapshot(env.sim)
-    next_snapshot = resolved.snapshot_interval_seconds
+    snapshot_tick_interval = round(
+        resolved.snapshot_interval_seconds / resolved.intervals.movement_tick_seconds
+    )
     terminated = False
     truncated = False
     # The evaluator holds the risk scores and the true attack state.
@@ -83,6 +106,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "decision_id": decision_id,
             },
             env.sim,
+            phase=EventPhase.CONTROL_PROPOSAL,
             state=boundary_state,
         )
         evaluator_payload = observation_as_json(env.evaluator_observation(proposal))
@@ -97,9 +121,9 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "decision_id": decision_id,
             },
             env.sim,
+            phase=EventPhase.CONTROL_PROPOSAL,
             state=boundary_state,
         )
-        before = _material_state(env)
         try:
             transition = env.begin_control_interval(
                 proposal,
@@ -111,7 +135,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         adjudication = transition.adjudication
         if adjudication.decision_id != decision_id:
             raise RuntimeError("the adjudication changed the decision identifier")
-        if transition.state_checksum != boundary_state.state_checksum:
+        if transition.state_checksum != boundary_state.physical_state_checksum:
             raise RuntimeError("the adjudication changed the boundary identity")
         risk_scores.append(float(adjudication.decision.risk_score))
         attack_labels.append(proposal_label)
@@ -121,12 +145,14 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
             {
                 "decision_id": decision_id,
                 **adjudication.decision.model_dump(
-                    mode="json", exclude={"predicted_result"}
+                    mode="json",
+                    exclude={"predicted_result", "latency_seconds"},
                 ),
                 "fallback_source": adjudication.fallback_source,
                 "predicted_result": dict(adjudication.predicted_result),
             },
             env.sim,
+            phase=EventPhase.MONITOR_DECISION,
             state=boundary_state,
         )
         if adjudication.approval_request is not None:
@@ -140,6 +166,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                     "safe_fallback": asdict(request.safe_fallback),
                 },
                 env.sim,
+                phase=EventPhase.ADJUDICATION,
                 state=boundary_state,
             )
         if adjudication.approval_response is not None:
@@ -152,12 +179,14 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                     "choice": response.choice.value,
                 },
                 env.sim,
+                phase=EventPhase.ADJUDICATION,
                 state=boundary_state,
             )
         executed = adjudication.executed_action
         finalized_attack_step = adjudication.attack_step_record
         if finalized_attack_step is not None:
             attack_lifecycle.observe_step(finalized_attack_step)
+        action_state = EventState.capture(env.sim)
         trace.record(
             "action_executed",
             executed.controller_id,
@@ -173,10 +202,30 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 ),
             },
             env.sim,
-            state=boundary_state,
+            phase=EventPhase.ACTION_EXECUTION,
+            state=action_state,
         )
+        for action_transition in adjudication.action_transitions:
+            trace.record(
+                action_transition.event_type,
+                "adjudicator",
+                action_transition.payload,
+                env.sim,
+                phase=EventPhase.ACTION_EXECUTION,
+                entity=(
+                    action_transition.entity_kind,
+                    action_transition.entity_index,
+                    action_transition.entity_id,
+                ),
+                state=action_state,
+            )
         observation, _, terminated, truncated, info = env.complete_control_interval(
-            transition
+            transition,
+            tick_observer=lambda sim: _record_tick(
+                trace,
+                sim,
+                snapshot_tick_interval,
+            ),
         )
         attack_lifecycle.observe_harm(env.sim.metrics.harm_onset_at)
         trace.record(
@@ -189,21 +238,9 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
                 "attack_lifecycle": attack_lifecycle.as_dict(),
             },
             env.sim,
+            phase=EventPhase.METRIC_SNAPSHOT,
         )
-        _record_material_changes(trace, env, before)
         trace.record_metrics(env.sim.metrics.snapshot(env.sim.population), env.sim)
-        if time_boundary_reached(
-            env.sim.simulation_time,
-            next_snapshot,
-            resolved.numerics.time_epsilon_seconds,
-        ):
-            trace.record_snapshot(env.sim)
-            while time_boundary_reached(
-                env.sim.simulation_time,
-                next_snapshot,
-                resolved.numerics.time_epsilon_seconds,
-            ):
-                next_snapshot += resolved.snapshot_interval_seconds
 
     elapsed = perf_counter() - started
     snapshot = env.sim.metrics.snapshot(env.sim.population)
@@ -220,137 +257,113 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         "seed": resolved.seed,
         "terminated": terminated,
         "truncated": truncated,
+        "terminal_reason": "episode_horizon" if truncated else "completed",
         "simulation_time": env.sim.simulation_time,
         "step": env.sim.step,
         "physical_state_checksum": env.sim.physical_state_checksum(),
         "metrics": metrics,
         "attack_lifecycle": attack_lifecycle.as_dict(),
-        # The speed is not a research metric and is not deterministic.
-        # It stays outside the metric record.
-        "performance": {
-            **env.sim.metrics.performance_snapshot().as_dict(),
-            "wall_clock_seconds": elapsed,
-            "simulation_steps_per_second": (
-                float(env.sim.step) / elapsed if elapsed > 0.0 else 0.0
-            ),
-        },
         "information_profile": resolved.monitor.information_profile,
         "policy_version": resolved.controller.policy_version,
         "policy_variant": selected_policy_variant(controller),
     }
     summary = json.loads(json.dumps(summary))
-    trace.record("episode_ended", "simulator", summary, env.sim)
-    if (
-        not trace.evaluator_snapshot_rows
-        or trace.evaluator_snapshot_rows[-1]["movement_tick"] != env.sim.step
-    ):
-        trace.record_snapshot(env.sim)
-    continuation = encode_continuation_snapshot(
-        env,
-        controller,
-        resolved,
-        attack_lifecycle=attack_lifecycle,
-        trace_state=trace.snapshot_state(),
-        runtime_state={
-            "next_snapshot_time": next_snapshot,
-            "risk_scores": tuple(risk_scores),
-            "attack_labels": tuple(attack_labels),
-            "terminated": terminated,
-            "truncated": truncated,
-        },
+    trace.record(
+        "episode_ended",
+        "simulator",
+        summary,
+        env.sim,
+        phase=EventPhase.TERMINAL,
     )
-    continuation_record = write_continuation_snapshot(
-        output_dir / "episode-0-final.avalanche-continuation.msgpack",
-        continuation,
-    )
-    trace.record_continuation_artifact(continuation_record)
+    if resolved.trace_level != "summary":
+        continuation = encode_continuation_snapshot(
+            env,
+            controller,
+            resolved,
+            attack_lifecycle=attack_lifecycle,
+            trace_state=trace.snapshot_state(),
+            runtime_state={
+                "next_snapshot_tick": (
+                    (env.sim.step // snapshot_tick_interval + 1)
+                    * snapshot_tick_interval
+                ),
+                "risk_scores": tuple(risk_scores),
+                "attack_labels": tuple(attack_labels),
+                "terminated": terminated,
+                "truncated": truncated,
+            },
+        )
+        continuation_record = write_continuation_snapshot(
+            output_dir / "episode-0-final.avalanche-continuation.msgpack",
+            continuation,
+        )
+        trace.record_continuation_artifact(continuation_record)
     reference = getattr(monitor, "model_reference", None)
-    trace.close(summary, reference() if reference is not None else None)
+    performance = {
+        **env.sim.metrics.performance_snapshot().as_dict(),
+        "wall_clock_seconds": elapsed,
+        "simulation_steps_per_second": (
+            float(env.sim.step) / elapsed if elapsed > 0.0 else 0.0
+        ),
+    }
+    trace.close(
+        summary,
+        reference() if reference is not None else None,
+        performance=performance,
+    )
     return summary
 
 
-def _material_state(env: AvalancheEnv) -> dict[str, Any]:
-    """Copy the bounded state used to find material transitions."""
-    return {
-        "simulation_time": env.sim.simulation_time,
-        "closed": effective_closed(env.sim.state).copy(),
-        "lift_capacity": env.sim.state.lift_capacity_factor.copy(),
-        "lift_stopped": env.sim.state.lift_stopped.copy(),
-        "warning": env.sim.state.early_indicator.copy(),
-        "capacity_exposure": env.sim.state.dangerous_density_active.copy(),
-        "first_stranded_at": env.sim.population.first_stranded_at.copy(),
-    }
-
-
-def _record_material_changes(
-    trace: TraceWriter, env: AvalancheEnv, before: dict[str, Any]
+def _record_tick(
+    trace: TraceWriter,
+    sim: MountainSim,
+    snapshot_tick_interval: int,
 ) -> None:
-    """Record bounded aggregate events after one control interval."""
-    sim = env.sim
-    changes = (
-        ("piste_closed", effective_closed(sim.state) & ~before["closed"]),
-        ("piste_opened", ~effective_closed(sim.state) & before["closed"]),
-        ("density_warning", sim.state.early_indicator & ~before["warning"]),
-        (
-            "capacity_exposure",
-            sim.state.dangerous_density_active & ~before["capacity_exposure"],
-        ),
-    )
-    for event_type, mask in changes:
-        for edge in np.flatnonzero(mask):
-            trace.record(event_type, "simulator", {"edge_index": int(edge)}, sim)
-    lift_changes = np.flatnonzero(
-        (sim.state.lift_capacity_factor != before["lift_capacity"])
-        | (sim.state.lift_stopped != before["lift_stopped"])
-    )
-    for edge in lift_changes:
-        trace.record(
-            "lift_mode_changed",
-            "simulator",
-            {
-                "edge_index": int(edge),
-                "capacity_factor": float(sim.state.lift_capacity_factor[edge]),
-                "stopped": bool(sim.state.lift_stopped[edge]),
-            },
-            sim,
+    """Record one completed tick and each requested replay boundary."""
+    _record_tick_transitions(trace, sim, sim.last_tick_events)
+    if trace.trace_level == "debug" or sim.step % snapshot_tick_interval == 0:
+        trace.record_snapshot(sim)
+
+
+def _record_tick_transitions(
+    trace: TraceWriter,
+    sim: MountainSim,
+    transitions: tuple[MaterialTransition, ...],
+) -> None:
+    """Record typed state-owner transitions with post-tick identities."""
+    if trace.trace_level == "summary":
+        return
+    selected = [
+        transition
+        for transition in transitions
+        if trace.trace_level == "debug"
+        or transition.phase
+        not in {EventPhase.SENSOR_SAMPLE, EventPhase.SENSOR_DELIVERY}
+    ]
+    if not selected:
+        return
+    for transition in selected:
+        state = EventState(
+            simulation_time=transition.simulation_time,
+            movement_tick=transition.movement_tick,
+            control_interval_index=transition.control_interval_index,
+            physical_state_checksum=transition.physical_state_checksum,
         )
-    first_stranded_at = sim.population.first_stranded_at
-    newly_stranded = (before["first_stranded_at"] < 0.0) & (first_stranded_at >= 0.0)
-    onset_times, onset_counts = np.unique(
-        first_stranded_at[newly_stranded], return_counts=True
-    )
-    for onset_at, count in zip(onset_times, onset_counts, strict=True):
         trace.record(
-            "skiers_stranded",
-            "simulator",
-            {
-                "stranding_boundary_seconds": float(onset_at),
-                "control_interval_index": int(
-                    (float(onset_at) - sim.tick_seconds) / sim.control_interval_seconds
-                ),
-                "newly_stranded_skiers": int(count),
-            },
+            transition.event_type,
+            transition.actor_id,
+            transition.payload,
             sim,
+            phase=transition.phase,
+            entity=(
+                transition.entity_kind,
+                transition.entity_index,
+                transition.entity_id,
+            ),
+            state=state,
+            debug_only=transition.phase
+            in {EventPhase.SENSOR_SAMPLE, EventPhase.SENSOR_DELIVERY},
         )
-    previous_time = float(before["simulation_time"])
-    if sim.failure_schedule is not None:
-        for failure in sim.failure_schedule.events:
-            if previous_time < failure.start_time_seconds <= sim.simulation_time:
-                trace.record("failure_started", "scenario", failure.as_dict(), sim)
-            if previous_time < failure.end_time_seconds <= sim.simulation_time:
-                trace.record("failure_ended", "scenario", failure.as_dict(), sim)
-    if sim.weather_schedule is not None:
-        for transition in sim.weather_schedule.transitions:
-            if previous_time < transition.start_time_seconds <= sim.simulation_time:
-                trace.record(
-                    "scenario_changed",
-                    "weather",
-                    {
-                        "weather": transition.weather.as_array().tolist(),
-                        "start_time_seconds": transition.start_time_seconds,
-                    },
-                    sim,
-                )
 
 
 CALIBRATION_BIN_COUNT = 10

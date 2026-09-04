@@ -770,13 +770,35 @@ metrics.parquet
 physical-replay-reported.parquet
 physical-replay-evaluator.parquet
 episode-0-final.avalanche-continuation.msgpack
-artifact-manifest.json
 summary.json
-events.jsonl or events.parquet
+events.jsonl
 model-reference.json
+run-manifest.json
+run-manifest.sha256
 ```
 
-`metadata.json` records the time, the platform, the Python release, the dependency lock hash, and the Git commit.
+The trace level selects the exact content files.
+
+| Level | Content |
+|---|---|
+| `summary` | configuration, metadata, metrics, summary, model reference, and manifest |
+| `decision` | summary content, control events, material events, cadence replays, and continuation state |
+| `debug` | decision content, control sensor events, and every movement-tick replay |
+
+Every level writes `run-manifest.json` and `run-manifest.sha256`.
+The manifest lists each content path, type, schema, size, and SHA-256.
+Each path is a normalized relative POSIX path.
+The manifest excludes itself and its sidecar.
+The sidecar contains `<64hex>  run-manifest.json\n`.
+A formal reader must verify the sidecar before parsing the manifest.
+A formal reader must then verify every declared file.
+A formal reader must reject a missing, extra, changed, or duplicated file.
+
+`metadata.json` records the platform, the Python release, the dependency lock hash, and the Git commit.
+The writer stores timing and creation data under `outputs/performance/<run_id>/performance.json`.
+It writes `performance.json.sha256` beside that file.
+The diagnostic record references the run manifest digest.
+The run manifest does not reference a diagnostic file.
 The same configuration and code must give the same identities and metrics on one platform.
 A small difference between platforms is permitted inside recorded numerical limits.
 
@@ -787,12 +809,41 @@ A small difference between platforms is permitted inside recorded numerical limi
 Each event has a schema version and this envelope:
 
 ```text
-run_id, episode_id, seed, simulation_time, step,
-event_type, actor_id, payload, state_checksum
+event_sequence, run_id, episode_id, seed, simulation_time,
+movement_tick, control_interval_index, phase_code,
+event_type, actor_id, entity_kind, entity_index, entity_id,
+payload, physical_state_checksum
 ```
 
-The event field is a legacy version five display identity.
-New formal artifacts do not use this generic field name.
+Use this phase order for equal-time events.
+
+| Code | Phase |
+|---:|---|
+| 0 | `control_proposal` |
+| 1 | `monitor_decision` |
+| 2 | `adjudication` |
+| 3 | `action_execution` |
+| 4 | `arrival_release` |
+| 5 | `weather_transition` |
+| 6 | `failure_transition` |
+| 7 | `operational_event_transition` |
+| 8 | `queue_transition` |
+| 9 | `edge_transition` |
+| 10 | `node_transition` |
+| 11 | `stranding_transition` |
+| 12 | `precursor_transition` |
+| 13 | `sensor_sample` |
+| 14 | `sensor_delivery` |
+| 15 | `metric_snapshot` |
+| 16 | `replay_snapshot` |
+| 17 | `terminal` |
+
+Order equal-time events by the phase, event type, and entity key.
+Compare every string by its UTF-8 bytes.
+Use the entity kind, index, and identifier as the entity key.
+Record each start and end transition independently.
+Use the evaluator checksum after a true transition.
+Use the reported checksum after a reported delivery.
 
 The material events include scenario changes, failures, decisions, outcomes, precursors, stranded skiers, and the episode end.
 Each stranding event records its movement boundary, control interval, and newly stranded count.
@@ -802,13 +853,14 @@ Each linked decision event uses the control boundary time and checksum.
 The outcome event uses the interval-end time and checksum.
 
 The trace does not hold one record for each skier in each tick.
-Reported and evaluator replay snapshots occur at the configured interval.
+The snapshot interval must contain whole movement ticks.
+Reported and evaluator replay snapshots occur at each matching tick boundary.
 The reported replay excludes exact skier state.
 The evaluator replay includes exact physical display state.
 Both views stay in separate columnar files.
 Neither view can resume execution.
 The continuation file stores every value that can influence future execution.
-The artifact manifest records each exact file digest.
+The run manifest records each exact content digest.
 Each decision event stays at full resolution.
 
 ### 11.2 Online metrics

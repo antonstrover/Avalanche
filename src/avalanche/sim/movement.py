@@ -51,6 +51,12 @@ class MovementTransitions:
 
     completed_skiers: np.ndarray
     edge_completed_at: np.ndarray
+    completed_edges: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
+    destination_nodes: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
     newly_stranded_indices: np.ndarray = field(
         default_factory=lambda: np.empty(0, dtype=np.int64)
     )
@@ -65,6 +71,21 @@ class RouteDecisionSummary:
     decision_count: int
     missing_sensor_decision_count: int
     missing_sensor_channel_counts: tuple[int, ...]
+    completed_skiers: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
+    entered_piste_skiers: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
+    joined_queue_skiers: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
+    entered_piste_edges: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
+    joined_queue_edges: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int64)
+    )
 
 
 # These two values calibrate the congestion of Stage 3.
@@ -312,15 +333,17 @@ def update_congestion(
     state.speed_factor[state.lift_stopped] = 0.0
 
 
-def start_arrivals(pop: SkierArrays, boundary_time: float) -> None:
+def start_arrivals(pop: SkierArrays, boundary_time: float) -> np.ndarray:
     """Release each skier that arrived by the current tick boundary.
 
     The arrival times increase with the index, so a search finds the new skiers.
     A released skier starts at its entry node.
     """
+    start = pop.arrived
     end = int(np.searchsorted(pop.arrival_time, boundary_time, side="right"))
-    pop.location_kind[pop.arrived : end] = LocationKind.NODE
+    pop.location_kind[start:end] = LocationKind.NODE
     pop.arrived = end
+    return np.arange(start, end, dtype=np.int64)
 
 
 def return_unavailable_lift_queues(
@@ -367,6 +390,8 @@ def serve_lift_queues(
     topology: Topology,
     state: DynamicState,
     tick_seconds: float,
+    *,
+    served_skiers: list[np.ndarray] | None = None,
 ) -> np.ndarray:
     """Move the served skiers from a lift queue onto the lift.
 
@@ -445,6 +470,8 @@ def serve_lift_queues(
         pop.chosen_edge[rejected] = NO_EDGE
         pop.locally_rejected_edge[rejected] = rejected_edges
         served = candidates[onward]
+        if served_skiers is not None:
+            served_skiers.append(served.copy())
 
         served_edges = pop.location_index[served]
         served_count = np.bincount(served_edges, minlength=topology.edge_count).astype(
@@ -506,7 +533,8 @@ def arrive_at_nodes(
         & (pop.remaining_travel_seconds <= epsilon_seconds)
     )
     completed_skiers = np.flatnonzero(finished)
-    destination = topology.edge_destination[pop.location_index[completed_skiers]]
+    completed_edges = pop.location_index[completed_skiers].copy()
+    destination = topology.edge_destination[completed_edges]
     edge_completed_at = np.full(
         completed_skiers.size,
         tick_start + tick_seconds,
@@ -518,7 +546,12 @@ def arrive_at_nodes(
     pop.remaining_travel_seconds[completed_skiers] = 0.0
     pop.chosen_edge[completed_skiers] = NO_EDGE
     pop.locally_rejected_edge[completed_skiers] = NO_EDGE
-    return MovementTransitions(completed_skiers, edge_completed_at)
+    return MovementTransitions(
+        completed_skiers,
+        edge_completed_at,
+        completed_edges,
+        destination.copy(),
+    )
 
 
 def select_next_edges(
@@ -742,7 +775,17 @@ def select_next_edges(
     pop.queue_ticket[joiners] = pop.next_ticket + np.arange(joiners.size)
     pop.queue_source_node[joiners] = topology.edge_source[taken[lift]]
     pop.next_ticket += int(joiners.size)
-    return route_decisions
+    entered_edges = pop.location_index[starters].copy()
+    return RouteDecisionSummary(
+        decision_count=route_decisions.decision_count,
+        missing_sensor_decision_count=(route_decisions.missing_sensor_decision_count),
+        missing_sensor_channel_counts=(route_decisions.missing_sensor_channel_counts),
+        completed_skiers=complete.copy(),
+        entered_piste_skiers=starters[~lift].copy(),
+        joined_queue_skiers=starters[lift].copy(),
+        entered_piste_edges=entered_edges[~lift],
+        joined_queue_edges=entered_edges[lift],
+    )
 
 
 def _summarize_route_decisions(

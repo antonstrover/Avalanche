@@ -921,6 +921,28 @@ class ResolvedConfig(StrictModel):
         return value
 
     @model_validator(mode="after")
+    def check_snapshot_cadence(self) -> ResolvedConfig:
+        """Require each replay cadence to end on a movement tick."""
+        tick = self.intervals.movement_tick_seconds
+        ratio = self.snapshot_interval_seconds / tick
+        tick_count = round(ratio) if isfinite(ratio) else 0
+        try:
+            expected = tick_count * tick
+        except OverflowError:
+            expected = 0.0
+        if tick_count < 1 or not isclose(
+            self.snapshot_interval_seconds,
+            expected,
+            rel_tol=0.0,
+            abs_tol=self.numerics.time_epsilon_seconds,
+        ):
+            raise ValueError(
+                f"the snapshot interval {self.snapshot_interval_seconds} must contain "
+                f"whole movement ticks of {tick}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_attack_trigger(self) -> ResolvedConfig:
         """Reject an attack trigger at or after the episode end."""
         attack = self.controller.attack

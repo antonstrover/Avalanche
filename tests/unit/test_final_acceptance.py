@@ -106,7 +106,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "continuation_schema_version": 1,
         "dataset_version": 7,
         "envelope_version": 1,
-        "event_schema_version": 5,
+        "event_schema_version": 6,
         "evaluation_version": 4,
         "feature_version": 4,
         "label_schema_version": 2,
@@ -120,7 +120,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "route_sensor_schema_version": 3,
         "sensor_policy_schema_version": 2,
         "shortcut_report_version": 2,
-        "summary_schema_version": 3,
+        "summary_schema_version": 4,
     }
 
 

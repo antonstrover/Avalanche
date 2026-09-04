@@ -652,7 +652,11 @@ class ConfigurationResolver:
             for item in error.errors(include_url=False):
                 pointer = _pointer(tuple(str(value) for value in item["loc"]))
                 error_owner = (
-                    "live" if pointer in live_values else _owner_for_pointer(pointer)
+                    "live"
+                    if pointer in live_values
+                    else (
+                        "configuration" if not pointer else _owner_for_pointer(pointer)
+                    )
                 )
                 formatted.append(f"{error_owner} {pointer}: {item['msg']}")
             raise ConfigurationResolutionError(formatted) from error

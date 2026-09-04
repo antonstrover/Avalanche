@@ -47,17 +47,17 @@ class WeatherSchedule:
     current: Weather
     next_transition: int = 0
 
-    def update(self, simulation_time: float) -> bool:
-        """Apply all changes at or before the current time."""
-        changed = False
+    def update(self, simulation_time: float) -> tuple[WeatherTransition, ...]:
+        """Apply and return all changes due at the current boundary."""
+        applied: list[WeatherTransition] = []
         while self.next_transition < len(self.transitions):
             transition = self.transitions[self.next_transition]
             if transition.start_time_seconds > simulation_time:
                 break
             self.current = transition.weather
             self.next_transition += 1
-            changed = True
-        return changed
+            applied.append(transition)
+        return tuple(applied)
 
 
 def resolve_weather_schedule(
