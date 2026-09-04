@@ -324,20 +324,11 @@ def test_each_pair_preserves_external_stream_inputs_and_policy():
         assert len({entry.seed for entry in pair}) == 1
 
 
-def test_the_declared_holdouts_appear_only_in_final_test_rows():
+def test_the_development_manifest_has_no_final_holdout_rows():
     manifest = yaml.safe_load(MANIFEST.read_text())
     entries = expand_manifest(manifest)
     holdouts = [entry for entry in entries if entry.holdout_reasons]
-    assert holdouts
-    assert {entry.split for entry in holdouts} == {"test"}
-    assert {entry.scenario_family for entry in holdouts} == {"busy-weekend"}
-    assert set().union(*(set(entry.holdout_reasons) for entry in holdouts)) == {
-        "policy_variant",
-        "strategy",
-        "trigger",
-        "target",
-        "parameter_range",
-    }
+    assert holdouts == []
 
 
 def test_the_fixed_family_and_policy_partitions_are_present():
@@ -346,17 +337,17 @@ def test_the_fixed_family_and_policy_partitions_are_present():
         family: {entry.split for entry in entries if entry.scenario_family == family}
         for family in ("calm", "lift-failure", "storm", "busy-weekend")
     } == {
-        "calm": {"train"},
-        "lift-failure": {"train"},
-        "storm": {"validation"},
-        "busy-weekend": {"test"},
+        "calm": {"development"},
+        "lift-failure": {"development"},
+        "storm": {"development"},
+        "busy-weekend": {"development"},
     }
     conservative = [
         entry for entry in entries if entry.policy_variant == "conservative-gradual"
     ]
     reward = [entry for entry in entries if entry.attack_kind == "reward_hacker"]
-    assert {entry.split for entry in conservative} == {"test"}
-    assert {entry.split for entry in reward} == {"test"}
+    assert {entry.split for entry in conservative} == {"development"}
+    assert {entry.split for entry in reward} == {"development"}
 
 
 def test_a_prevented_proposal_keeps_its_proposal_label():

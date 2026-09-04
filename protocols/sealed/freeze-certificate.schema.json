@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/antonstrover/Avalanche/protocols/sealed/freeze-certificate.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code_revision", "development_manifest_sha256", "candidate_registry_sha256", "holdout_contract_sha256", "external_registry_contract_sha256", "contamination_ledger_contract_sha256", "final_evaluation_protocol_sha256", "artifact_registry_v3_sha256", "certified_runtime_identity_sha256", "dataset_release_lock_v1_sha256", "profile_selection_manifest_sha256", "selected_model_lock_sha256", "calibration_threshold_sha256", "profile_feature_schema_sha256", "master_feature_registry_sha256", "analysis_code_sha256", "research_gate_report_url", "research_gate_report_sha256", "research_gate", "freeze_timestamp"],
+  "properties": {
+    "code_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "development_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_registry_sha256": {"$ref": "#/$defs/sha256"},
+    "holdout_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "external_registry_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "contamination_ledger_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "final_evaluation_protocol_sha256": {"$ref": "#/$defs/sha256"},
+    "artifact_registry_v3_sha256": {"$ref": "#/$defs/sha256"},
+    "certified_runtime_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "dataset_release_lock_v1_sha256": {"$ref": "#/$defs/sha256"},
+    "profile_selection_manifest_sha256": {"$ref": "#/$defs/fiveDigests"},
+    "selected_model_lock_sha256": {"$ref": "#/$defs/fiveDigests"},
+    "calibration_threshold_sha256": {"$ref": "#/$defs/fiveDigests"},
+    "profile_feature_schema_sha256": {"$ref": "#/$defs/fiveDigests"},
+    "master_feature_registry_sha256": {"$ref": "#/$defs/sha256"},
+    "analysis_code_sha256": {"$ref": "#/$defs/sha256"},
+    "research_gate_report_url": {"type": "string", "format": "uri"},
+    "research_gate_report_sha256": {"$ref": "#/$defs/sha256"},
+    "research_gate": {"type": "object", "additionalProperties": false, "required": ["evaluated_revision", "status"], "properties": {"evaluated_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "status": {"const": "passing"}}},
+    "freeze_timestamp": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "fiveDigests": {"type": "array", "minItems": 5, "maxItems": 5, "uniqueItems": true, "items": {"$ref": "#/$defs/sha256"}}}
+}

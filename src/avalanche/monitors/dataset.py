@@ -154,6 +154,7 @@ PUBLIC_EVENT_KINDS = frozenset(
         "crowd_surge",
         "telemetry_repair",
         "weather_safety",
+        "evacuation_cut_notice",
     }
 )
 PUBLIC_EVENT_TARGET_TYPES = {
@@ -164,6 +165,7 @@ PUBLIC_EVENT_TARGET_TYPES = {
     "crowd_surge": "node",
     "telemetry_repair": "edge",
     "weather_safety": "piste",
+    "evacuation_cut_notice": "edge_set",
 }
 PUBLIC_EVENT_PROVENANCE_ID = "controller_visible_operational_event"
 STRANDING_PROVENANCE_ID = "operational_stranding_sensor"
@@ -350,6 +352,11 @@ class RecordingMonitor:
                             "sample_time": event.sample_time,
                             "report_time": event.report_time,
                             "provenance_id": event.provenance_id,
+                            **(
+                                {"targets": list(event.targets)}
+                                if event.targets
+                                else {}
+                            ),
                         }
                         for event in evidence.events
                     ]
@@ -427,6 +434,9 @@ class DatasetEntry:
     attack_kind: str = "honest"
     attack_tier: str = "none"
     holdout_reasons: tuple[str, ...] = ()
+    root_id: str = ""
+    development_manifest_sha256: str = ""
+    manifest_cell_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -478,6 +488,9 @@ def require_current_formal_dataset_rows(
         "seed",
         "resolved_config_checksum",
         "pair_context_checksum",
+        "root_id",
+        "development_manifest_sha256",
+        "manifest_cell_sha256",
         *PAIR_CONTEXT_FIELDS,
     }
     if not required <= set(frame):
@@ -496,6 +509,7 @@ def require_current_formal_dataset_rows(
     if (frame[EXECUTED_ACTIVATION] > frame[ATTACK_LABEL]).any():
         raise ValueError(f"the {name} rows activate an unlabelled proposal")
     _require_pair_contexts(frame, name)
+    _require_development_manifest_provenance(frame, name)
     if set(frame["operational_evidence_schema_version"]) != {
         OBSERVATION_SCHEMA_VERSION
     }:
@@ -503,6 +517,32 @@ def require_current_formal_dataset_rows(
             f"the {name} rows have an invalid operational evidence version"
         )
     _require_operational_provenance(frame, name)
+
+
+def _require_development_manifest_provenance(frame: pd.DataFrame, name: str) -> None:
+    """Reject rows without one immutable root and manifest identity."""
+    if (
+        frame["root_id"].isna().any()
+        or not frame["root_id"]
+        .map(lambda value: isinstance(value, str) and bool(value))
+        .all()
+    ):
+        raise ValueError(f"the {name} rows have an invalid root identity")
+    for column in ("development_manifest_sha256", "manifest_cell_sha256"):
+        valid = frame[column].map(
+            lambda value: (
+                isinstance(value, str)
+                and len(value) == 64
+                and all(character in "0123456789abcdef" for character in value)
+            )
+        )
+        if not valid.all():
+            raise ValueError(f"the {name} rows have an invalid {column}")
+    if frame["development_manifest_sha256"].nunique() != 1:
+        raise ValueError(f"the {name} rows change the development manifest")
+    run_roots = frame.groupby("run_id", sort=False)["root_id"].nunique()
+    if bool((run_roots != 1).any()):
+        raise ValueError(f"the {name} rows change root inside one run")
 
 
 def _require_pair_contexts(frame: pd.DataFrame, name: str) -> None:
@@ -722,7 +762,10 @@ def _require_event_provenance(frame: pd.DataFrame, name: str) -> None:
 
 def _valid_event_record(record: Any, simulation_time: Any) -> bool:
     """Return whether one public event provenance record is valid."""
-    if not isinstance(record, dict) or set(record) != EVENT_PROVENANCE_FIELDS:
+    if not isinstance(record, dict):
+        return False
+    fields = set(record)
+    if fields not in (EVENT_PROVENANCE_FIELDS, EVENT_PROVENANCE_FIELDS | {"targets"}):
         return False
     if not _is_nonnegative_integer(record["schema_version"]):
         return False
@@ -733,6 +776,16 @@ def _valid_event_record(record: Any, simulation_time: Any) -> bool:
     if record["target_type"] != PUBLIC_EVENT_TARGET_TYPES[record["kind"]]:
         return False
     if not _is_nonnegative_integer(record["target"]):
+        return False
+    if record["target_type"] == "edge_set":
+        targets = record.get("targets")
+        if not isinstance(targets, list) or len(targets) != 2:
+            return False
+        if targets[0] != record["target"]:
+            return False
+        if not all(_is_nonnegative_integer(target) for target in targets):
+            return False
+    elif "targets" in record:
         return False
     if record["provenance_id"] != PUBLIC_EVENT_PROVENANCE_ID:
         return False
@@ -1071,6 +1124,9 @@ def _run_resolved_entry(
     if selected.pair_context is not None:
         for field, value in selected.pair_context.as_dict().items():
             frame[field] = value
+    frame["root_id"] = entry.root_id
+    frame["development_manifest_sha256"] = entry.development_manifest_sha256
+    frame["manifest_cell_sha256"] = entry.manifest_cell_sha256
     frame["_evaluator_unique_stranded_skiers"] = evaluator_unique_stranded
     frame["_proposal_label"] = proposal_labels
     frame["_executed_activation"] = executed_activations
@@ -1266,6 +1322,7 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     _repo_path(str(manifest["monitor"]))
     components = _component_manifest(manifest)
     controllers = _resolved_manifest_controllers(mountains)
+    development = _development_cell_index(manifest)
     if controllers and not strengths:
         raise ValueError("attack strengths are required for attack controllers")
     if not controllers and strengths:
@@ -1302,6 +1359,16 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                 "attack_tier": attack.tier,
                                 "holdout_reasons": reasons,
                             }
+                            manifest_fields = _manifest_entry_fields(
+                                development,
+                                mountain=str(mountain["id"]),
+                                family=str(family["id"]),
+                                attack_kind=attack.kind,
+                                attack_tier=attack.tier,
+                                strength=strength,
+                                policy=str(variant),
+                                seed=int(seed),
+                            )
                             entries.extend(
                                 (
                                     DatasetEntry(
@@ -1318,6 +1385,7 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                             components, int(seed)
                                         ),
                                         pair_role="honest",
+                                        **manifest_fields["honest"],
                                         **common,
                                     ),
                                     DatasetEntry(
@@ -1338,6 +1406,7 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
                                             components, int(seed)
                                         ),
                                         pair_role="attack",
+                                        **manifest_fields["attack"],
                                         **common,
                                     ),
                                 )
@@ -1353,6 +1422,89 @@ def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
         entries, mountains, families, controllers, variants, strengths
     )
     return entries
+
+
+def _development_cell_index(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Load exact public manifest cells when the matrix binds them."""
+    value = manifest.get("development_manifest")
+    if value is None:
+        return None
+    from avalanche.experiments.protocols import (
+        canonical_artifact_sha256,
+        load_development_manifest,
+    )
+
+    path = _repo_path(str(value))
+    development = load_development_manifest(path)
+    attacks = {}
+    honest = {}
+    for split in ("training", "validation"):
+        for record in development["episodes"][split]["attack"]:
+            key = (
+                record["mountain"],
+                record["development_family"],
+                record["attack_kind"],
+                record["attack_tier"],
+                float(record["attack_strength"]),
+                record["controller_policy_family"],
+                int(record["root_seed"]),
+            )
+            attacks[key] = record
+        for record in development["episodes"][split]["honest"]:
+            honest[record["run_identifier"]] = record
+    return {
+        "manifest_sha256": canonical_artifact_sha256(development),
+        "attacks": attacks,
+        "honest": honest,
+    }
+
+
+def _manifest_entry_fields(
+    development: dict[str, Any] | None,
+    *,
+    mountain: str,
+    family: str,
+    attack_kind: str,
+    attack_tier: str,
+    strength: float,
+    policy: str,
+    seed: int,
+) -> dict[str, dict[str, Any]]:
+    """Return exact provenance for one explicit attack and honest cell."""
+    if development is None:
+        return {"honest": {}, "attack": {}}
+    from avalanche.experiments.protocols import canonical_artifact_sha256
+
+    manifest_mountain = "medium-resort" if mountain == "val-tarin" else mountain
+    key = (
+        manifest_mountain,
+        family,
+        attack_kind,
+        attack_tier,
+        float(strength),
+        policy,
+        seed,
+    )
+    try:
+        attack = development["attacks"][key]
+        honest = development["honest"][attack["honest_run_identifier"]]
+    except KeyError as error:
+        message = "the dataset cell is absent from the development manifest"
+        raise ValueError(message) from error
+    common = {
+        "root_id": attack["root_id"],
+        "development_manifest_sha256": development["manifest_sha256"],
+    }
+    return {
+        "honest": {
+            **common,
+            "manifest_cell_sha256": canonical_artifact_sha256(honest),
+        },
+        "attack": {
+            **common,
+            "manifest_cell_sha256": canonical_artifact_sha256(attack),
+        },
+    }
 
 
 def _component_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -1530,13 +1682,9 @@ def _validate_expanded_axes(
 
 
 def _family_split(family: str) -> str:
-    """Return the fixed family partition."""
-    if family in {"calm", "lift-failure"}:
-        return "train"
-    if family == "storm":
-        return "validation"
-    if family == "busy-weekend":
-        return "test"
+    """Return the development role without assigning a root split."""
+    if family in {"calm", "lift-failure", "storm", "busy-weekend"}:
+        return "development"
     raise ValueError(f"the scenario family {family!r} has no declared split")
 
 

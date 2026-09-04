@@ -1,7 +1,13 @@
 [project]
 name = "avalanche"
-version = "0.1.0"
 description = "Ski-resort simulator with AI controllers and AI monitors"
+authors = [
+    {name = "Anton Strover", email = "as2792@susex.ac.uk"}
+    ]
+version = "0.1.0"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.md"]
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "numpy",

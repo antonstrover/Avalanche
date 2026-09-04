@@ -1,11 +1,8 @@
-"""Split the labelled traces without leakage between the parts.
+"""Split labelled traces through immutable development root identities."""
 
-The plan gives the rule in section 9.4.
-A split takes a whole scenario family. It never takes single rows.
-Two adjacent time steps of one run therefore stay in the same part.
-"""
-
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,6 +15,7 @@ FORMAL_RUN_COLUMN = "verified_run_identity"
 FORMAL_SPLIT_COLUMN = "split_identity"
 FORMAL_BOUNDARY_COLUMN = "control_boundary_index"
 FORMAL_PAIR_COLUMN = "pair_context_sha256"
+ROOT_COLUMN = "root_id"
 
 
 @dataclass(frozen=True)
@@ -45,10 +43,67 @@ class SplitAssignment:
 
 
 DECLARED_SPLITS = SplitAssignment(
-    train=("calm", "lift-failure"),
-    validation=("storm",),
-    test=("busy-weekend",),
+    train=("calm", "lift-failure", "storm", "busy-weekend"),
+    validation=(),
+    test=(),
 )
+
+
+def split_by_manifest_roots(
+    frame: pd.DataFrame,
+    manifest: Mapping[str, Any] | Path,
+) -> dict[str, pd.DataFrame]:
+    """Assign complete runs from immutable root identities."""
+    from avalanche.experiments.protocols import (
+        canonical_artifact_sha256,
+        load_development_manifest,
+    )
+
+    value = (
+        load_development_manifest(manifest) if isinstance(manifest, Path) else manifest
+    )
+    manifest_sha256 = canonical_artifact_sha256(value)
+    if "development_manifest_sha256" in frame:
+        if not frame["development_manifest_sha256"].eq(manifest_sha256).all():
+            raise ValueError("the endpoint rows bind another development manifest")
+    roots = value.get("roots")
+    if not isinstance(roots, Mapping):
+        raise ValueError("the development manifest misses its roots")
+    assignments = {}
+    for split in ("training", "validation"):
+        for record in roots.get(split, ()):
+            root_id = str(record["root_id"])
+            if root_id in assignments:
+                raise ValueError("a root identity appears in two splits")
+            assignments[root_id] = split
+    required = {FORMAL_RUN_COLUMN, ROOT_COLUMN}
+    if not required <= set(frame):
+        raise ValueError("the endpoint rows miss a manifest root identity")
+    assigned = frame.copy()
+    try:
+        authoritative = assigned[ROOT_COLUMN].map(assignments.__getitem__)
+    except KeyError as error:
+        raise ValueError("an endpoint row uses an undeclared root identity") from error
+    assigned[FORMAL_SPLIT_COLUMN] = authoritative
+    assigned["split"] = authoritative.map(
+        {"training": "train", "validation": "validation"}
+    )
+    require_complete_run_split_identity(assigned)
+    run_roots = assigned.groupby(FORMAL_RUN_COLUMN, sort=False)[ROOT_COLUMN].nunique()
+    if bool((run_roots != 1).any()):
+        raise ValueError("one verified run crosses a root identity")
+    if "resolved_config_checksum" in assigned:
+        digests = {
+            split: set(rows["resolved_config_checksum"])
+            for split, rows in assigned.groupby(FORMAL_SPLIT_COLUMN)
+        }
+        if digests.get("training", set()) & digests.get("validation", set()):
+            raise ValueError("a resolved configuration crosses the root split")
+    return {
+        "train": assigned[assigned[FORMAL_SPLIT_COLUMN] == "training"].copy(),
+        "validation": assigned[assigned[FORMAL_SPLIT_COLUMN] == "validation"].copy(),
+        "test": assigned.iloc[0:0].copy(),
+    }
 
 
 def assign_families(

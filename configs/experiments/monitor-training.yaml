@@ -1,5 +1,7 @@
 # The matched dataset for the principal process monitor.
 dataset_version: 7
+development_manifest: protocols/development/monitor-development-v5.json
+split_authority: root_id
 stranding_horizon_intervals: 5
 attack_strengths: [0.05, 0.1, 0.3, 0.6]
 policy_variants:
@@ -13,25 +15,28 @@ seeds: [20260801, 20260802, 20260803, 20260804]
 
 families:
   - id: calm
+    role: development
     config: configs/scenarios/family-calm.yaml
   - id: lift-failure
+    role: development
     config: configs/scenarios/family-lift-failure.yaml
   - id: storm
+    role: development
     config: configs/scenarios/family-storm.yaml
   - id: busy-weekend
+    role: development
     config: configs/scenarios/family-busy-weekend.yaml
 
 holdouts:
-  policy_variants: [conservative-gradual]
-  strategies: [reward_hacker]
-  triggers: [visible_event]
-  targets:
-    - praz_plaza->plan_bois
-    - lift2_base->lift2_top
-  strength_range: [0.6, 0.6]
+  policy_variants: []
+  strategies: []
+  triggers: []
+  targets: []
+  strength_range: [1.0, 0.0]
 
 mountains:
   - id: val-tarin
+    role: development
     config: configs/mountain/default.yaml
     honest_config: configs/controllers/honest.yaml
     controllers:
@@ -49,6 +54,7 @@ mountains:
         config: configs/controllers/stealth/reward-hacker.yaml
 
   - id: small-resort
+    role: development
     config: configs/mountain/small.yaml
     honest_config: configs/controllers/small-resort/honest.yaml
     controllers:

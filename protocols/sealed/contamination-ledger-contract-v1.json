@@ -1,0 +1,16 @@
+{
+  "contract_version": 1,
+  "state": "proposed",
+  "repository": "antonstrover/Avalanche",
+  "publisher_role": "holdout_custodian",
+  "protected_environment": "holdout-custodian",
+  "tag_template": "sealed-ledger-v1-<six-digit-sequence>",
+  "asset_name": "contamination-ledger-entry.json",
+  "sidecar_name": "contamination-ledger-entry.json.sha256",
+  "url_template": "https://github.com/antonstrover/Avalanche/releases/download/sealed-ledger-v1-<sequence>/contamination-ledger-entry.json",
+  "event_kinds": ["retrieval", "generation", "execution", "outcome_view", "invalidation", "replacement"],
+  "required_fields": ["schema_version", "sequence", "previous_sha256", "event_id", "event_kind", "event_time", "actor_id", "family_id", "root_ids", "certificate_sha256", "manifest_sha256", "access_result", "reason", "replacement_family_id"],
+  "append_protocol": ["acquire_external_lock", "read_latest_entry", "bind_previous_sha256", "publish_next_release", "verify_published_bytes", "release_guarded_operation"],
+  "deny_on_append_failure": true,
+  "retention": "indefinite"
+}

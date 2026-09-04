@@ -156,14 +156,8 @@ def validate_acceptance_matrix(entries: Sequence[DatasetEntry]) -> None:
         "attack_tiers": set(ATTACK_TIERS),
         "policy_variants": set(POLICY_VARIANTS),
         "families": {"calm", "lift-failure", "storm", "busy-weekend"},
-        "splits": {"train", "validation", "test"},
-        "holdouts": {
-            "policy_variant",
-            "strategy",
-            "trigger",
-            "target",
-            "parameter_range",
-        },
+        "splits": {"development"},
+        "holdouts": set(),
     }
     observed = {
         "mountains": {entry.mountain for entry in attacks},

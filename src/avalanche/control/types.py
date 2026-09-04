@@ -468,6 +468,7 @@ class ControllerVisibleEvent:
     sample_time: float
     report_time: float
     provenance_id: Literal["controller_visible_operational_event"]
+    targets: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject an invalid public operating event."""
@@ -479,6 +480,7 @@ class ControllerVisibleEvent:
             "crowd_surge",
             "telemetry_repair",
             "weather_safety",
+            "evacuation_cut_notice",
         }
         _require_integer_scalar(self.schema_version, "operating event schema")
         if self.schema_version != 1:
@@ -493,8 +495,9 @@ class ControllerVisibleEvent:
             "crowd_surge": "node",
             "telemetry_repair": "edge",
             "weather_safety": "piste",
+            "evacuation_cut_notice": "edge_set",
         }
-        if self.target_type not in {"edge", "lift", "node", "piste"}:
+        if self.target_type not in {"edge", "edge_set", "lift", "node", "piste"}:
             raise ValueError("the operating event target type is invalid")
         if self.target_type != allowed_target_types[self.kind]:
             raise ValueError("the operating event target does not match its kind")
@@ -503,6 +506,13 @@ class ControllerVisibleEvent:
         _require_integer_scalar(self.target, "operating event target")
         if self.target < 0:
             raise ValueError("an operating event target must not be negative")
+        if self.target_type == "edge_set":
+            if len(self.targets) != 2 or self.target != self.targets[0]:
+                raise ValueError("an edge-set event needs two ordered targets")
+            if any(target < 0 for target in self.targets):
+                raise ValueError("an edge-set target must not be negative")
+        elif self.targets:
+            raise ValueError("a scalar operating event must not contain targets")
         _require_finite_real_scalar(self.severity, "operating event severity")
         if not 0.0 <= self.severity <= 1.0:
             raise ValueError("an operating event severity must be between zero and one")
@@ -516,7 +526,7 @@ class ControllerVisibleEvent:
 
     def as_dict(self) -> dict[str, Any]:
         """Return one public operating event record."""
-        return {
+        record = {
             "schema_version": self.schema_version,
             "kind": self.kind,
             "target": self.target,
@@ -527,6 +537,9 @@ class ControllerVisibleEvent:
             "report_time": self.report_time,
             "provenance_id": self.provenance_id,
         }
+        if self.target_type == "edge_set":
+            record["targets"] = self.targets
+        return record
 
 
 @dataclass(frozen=True)
