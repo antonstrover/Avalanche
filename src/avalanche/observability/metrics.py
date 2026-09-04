@@ -991,6 +991,18 @@ class MetricsAggregator:
 
     def _generic_progress(self, stage: _StageMetrics, event: MetricEvent) -> None:
         self._mark_running(stage, event.timestamp)
+        if "completed_episodes" in event.values:
+            stage.counters["episodes"] = _optional_count(
+                event.values["completed_episodes"],
+                stage.counters.get("episodes", 0),
+            )
+        if "rows" in event.values:
+            stage.counters["rows"] = _optional_count(
+                event.values["rows"],
+                stage.counters.get("rows", 0),
+            )
+        if "phase" in event.values:
+            stage.phase = str(event.values["phase"])
         stage.metrics.update(event.values)
 
     def _worker(

@@ -185,6 +185,44 @@ def test_stumps_fit_training_rows_and_score_validation_rows():
     assert signal.validation_balanced_accuracy == 0.0
 
 
+@pytest.mark.parametrize(
+    ("values", "labels"),
+    (
+        ([0.0, 0.0, 1.0, 1.0, 2.0, 2.0], [0, 1, 0, 1, 1, 1]),
+        ([3.0, 3.0, 3.0, 3.0], [0, 1, 0, 1]),
+        ([0.0, 1.0, 2.0, 3.0], [1, 1, 1, 1]),
+    ),
+)
+def test_the_fast_stump_matches_an_exhaustive_fit(values, labels):
+    frame = pd.DataFrame({SIGNAL: values, ATTACK_LABEL: labels})
+    result = fit_stumps(frame, frame.iloc[::-1], (SIGNAL,))[0]
+    candidates = []
+    unique = np.unique(np.asarray(values, dtype=float))
+    if len(unique) == 1:
+        scale = max(abs(float(unique[0])), 1.0)
+        epsilon = np.finfo(float).eps * scale * 4.0
+        thresholds = (float(unique[0] - epsilon), float(unique[0] + epsilon))
+    else:
+        thresholds = (
+            float(unique[0] - max(abs(float(unique[0])), 1.0) * 1e-12),
+            *(float(value) for value in (unique[:-1] + unique[1:]) / 2.0),
+            float(unique[-1] + max(abs(float(unique[-1])), 1.0) * 1e-12),
+        )
+    truth = np.asarray(labels, dtype=int)
+    source = np.asarray(values, dtype=float)
+    for threshold in thresholds:
+        for direction in ("ge", "lt"):
+            prediction = (
+                source >= threshold if direction == "ge" else source < threshold
+            ).astype(int)
+            candidates.append(
+                (-balanced_accuracy(truth, prediction), threshold, direction)
+            )
+    score, threshold, direction = min(candidates)
+    assert (result.threshold, result.direction) == (threshold, direction)
+    assert result.train_balanced_accuracy == -score
+
+
 def test_the_logistic_audit_is_deterministic():
     first = fit_logistic_audit(rows(), rows(), FEATURES)
     second = fit_logistic_audit(rows(), rows(), FEATURES)

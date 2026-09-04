@@ -141,23 +141,16 @@ def fit_stumps(
     for feature in feature_names:
         train_values = train[feature].to_numpy(dtype=float)
         validation_values = validation[feature].to_numpy(dtype=float)
-        candidates = _thresholds(train_values)
-        choices = []
-        for threshold in candidates:
-            for direction in ("ge", "lt"):
-                predictions = _stump_predict(train_values, threshold, direction)
-                score = balanced_accuracy(train_labels, predictions)
-                choices.append((-score, threshold, direction))
-        _, threshold, direction = min(choices)
+        threshold, direction, train_score = _best_stump(
+            train_values,
+            train_labels,
+        )
         results.append(
             StumpResult(
                 feature=feature,
                 threshold=float(threshold),
                 direction=direction,
-                train_balanced_accuracy=balanced_accuracy(
-                    train_labels,
-                    _stump_predict(train_values, threshold, direction),
-                ),
+                train_balanced_accuracy=train_score,
                 validation_balanced_accuracy=balanced_accuracy(
                     validation_labels,
                     _stump_predict(validation_values, threshold, direction),
@@ -165,6 +158,36 @@ def fit_stumps(
             )
         )
     return tuple(results)
+
+
+def _best_stump(
+    values: np.ndarray,
+    labels: np.ndarray,
+) -> tuple[float, str, float]:
+    """Find one exact stump through sorted cumulative class counts."""
+    unique, inverse = np.unique(values, return_inverse=True)
+    thresholds = _thresholds(values)
+    negative = np.bincount(inverse, weights=labels == 0, minlength=len(unique))
+    positive = np.bincount(inverse, weights=labels == 1, minlength=len(unique))
+    negative_below = np.concatenate(([0.0], np.cumsum(negative)))
+    positive_below = np.concatenate(([0.0], np.cumsum(positive)))
+    negative_total = float(negative_below[-1])
+    positive_total = float(positive_below[-1])
+    class_count = int(negative_total > 0) + int(positive_total > 0)
+    choices = []
+    for index, threshold in enumerate(thresholds):
+        ge_score = 0.0
+        lt_score = 0.0
+        if negative_total:
+            ge_score += negative_below[index] / negative_total
+            lt_score += (negative_total - negative_below[index]) / negative_total
+        if positive_total:
+            ge_score += (positive_total - positive_below[index]) / positive_total
+            lt_score += positive_below[index] / positive_total
+        choices.append((-ge_score / class_count, threshold, "ge"))
+        choices.append((-lt_score / class_count, threshold, "lt"))
+    negative_score, threshold, direction = min(choices)
+    return float(threshold), direction, float(-negative_score)
 
 
 def fit_logistic_audit(
@@ -178,25 +201,28 @@ def fit_logistic_audit(
     penalty: float = 1e-3,
 ) -> LogisticResult:
     """Fit one deterministic logistic audit model on training rows."""
-    train_values = train.loc[:, list(feature_names)].to_numpy(dtype=float)
-    validation_values = validation.loc[:, list(feature_names)].to_numpy(dtype=float)
+    train_values = _feature_matrix(train, feature_names)
+    validation_values = _feature_matrix(validation, feature_names)
     labels = train[label].to_numpy(dtype=float)
     mean = train_values.mean(axis=0)
-    deviation = np.where(
-        train_values.std(axis=0) < 1e-12, 1.0, train_values.std(axis=0)
-    )
-    inputs = (train_values - mean) / deviation
-    evaluate_on = (validation_values - mean) / deviation
-    coefficients = np.zeros(inputs.shape[1], dtype=float)
+    standard_deviation = train_values.std(axis=0)
+    deviation = np.where(standard_deviation < 1e-12, 1.0, standard_deviation)
+    train_values -= mean
+    train_values /= deviation
+    validation_values -= mean
+    validation_values /= deviation
+    coefficients = np.zeros(train_values.shape[1], dtype=float)
     intercept = 0.0
     for _ in range(iterations):
-        scores = _sigmoid(inputs @ coefficients + intercept)
+        scores = _sigmoid(train_values @ coefficients + intercept)
         error = scores - labels
-        gradient = inputs.T @ error / len(inputs) + penalty * coefficients
+        gradient = train_values.T @ error / len(train_values) + penalty * coefficients
         intercept_gradient = float(np.mean(error))
         coefficients -= learning_rate * gradient
         intercept -= learning_rate * intercept_gradient
-    predictions = (_sigmoid(evaluate_on @ coefficients + intercept) >= 0.5).astype(int)
+    predictions = (
+        _sigmoid(validation_values @ coefficients + intercept) >= 0.5
+    ).astype(int)
     return LogisticResult(
         validation_balanced_accuracy=balanced_accuracy(
             validation[label].to_numpy(dtype=int), predictions
@@ -204,6 +230,17 @@ def fit_logistic_audit(
         intercept=float(intercept),
         coefficients=tuple(float(value) for value in coefficients),
     )
+
+
+def _feature_matrix(
+    frame: pd.DataFrame,
+    feature_names: tuple[str, ...],
+) -> np.ndarray:
+    """Copy selected columns without one temporary pandas frame."""
+    values = np.empty((len(frame), len(feature_names)), dtype=float)
+    for index, name in enumerate(feature_names):
+        values[:, index] = frame[name].to_numpy(dtype=float, copy=False)
+    return values
 
 
 def run_shortcut_audit(
@@ -215,10 +252,13 @@ def run_shortcut_audit(
     profile: FeatureProfile | str = FeatureProfile.PRINCIPAL_FULL,
     feature_registry: FeatureRegistry | None = None,
     dataset_checksums: dict[str, str] | None = None,
+    _validated_rows: bool = False,
+    _stumps: tuple[StumpResult, ...] | None = None,
 ) -> dict[str, Any]:
     """Run every shortcut audit and write deterministic reports."""
-    require_current_formal_dataset_rows(train, name="training")
-    require_current_formal_dataset_rows(validation, name="validation")
+    if not _validated_rows:
+        require_current_formal_dataset_rows(train, name="training")
+        require_current_formal_dataset_rows(validation, name="validation")
     selected_profile = FeatureProfile(profile)
     registry = feature_registry or feature_registry_for(selected_profile)
     _require_registry(registry, selected_profile, feature_names)
@@ -235,7 +275,9 @@ def run_shortcut_audit(
             f"the shortcut audit prohibits these feature fields: {', '.join(fields)}"
         )
     _require_columns(train, validation, feature_names)
-    stumps = fit_stumps(train, validation, feature_names)
+    stumps = _stumps or fit_stumps(train, validation, feature_names)
+    if tuple(result.feature for result in stumps) != feature_names:
+        raise ValueError("the fitted stumps do not match the feature registry")
     logistic = fit_logistic_audit(train, validation, feature_names)
     strong = sorted(
         result.feature

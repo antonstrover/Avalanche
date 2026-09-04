@@ -76,6 +76,30 @@ I added an offline fetch command for the verified dataset cache.
 
 Formal training now accepts only a content-addressed release lock and its verified cache.
 
+## Generation performance
+
+I reused parsed configuration sources during the matrix preflight.
+
+I also resolved each identical configuration once.
+
+The progress view now reports the resolved entry count, rate, and estimated time.
+
+I run each identical honest scientific episode once.
+
+I then bind its immutable result to each matched attack context.
+
+An equivalence test compares a reused honest frame with an independent run.
+
+The generator validates and writes each episode without retaining the full dataset.
+
+The shortcut command also validates the Parquet file in bounded batches.
+
+It loads only the columns required by the five audits.
+
+The stump audit now uses sorted cumulative class counts.
+
+It fits each master feature once and reuses that result across profiles.
+
 ## Validation
 
 I tested the registries, shortcut rejection, split authority, labels, release flow, and model artifacts.

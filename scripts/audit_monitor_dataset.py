@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 
 import pandas as pd
 
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
-from avalanche.monitors.dataset import validate_generated_dataset
+from avalanche.monitors.dataset import (
+    ATTACK_LABEL,
+    STRANDING_MASK,
+    validate_generated_dataset_file,
+)
 from avalanche.monitors.features import (
     FEATURE_REGISTRIES,
     MASTER_FEATURE_REGISTRY,
 )
-from avalanche.monitors.shortcut_audit import run_shortcut_audit
-from avalanche.monitors.splits import split_by_manifest_roots
+from avalanche.monitors.shortcut_audit import fit_stumps, run_shortcut_audit
 
 DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "audit" / "monitor-development-v5"
 DEVELOPMENT_MANIFEST = (
@@ -35,17 +39,50 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Audit one generated principal dataset."""
     args = build_parser().parse_args(argv)
-    frame = pd.read_parquet(args.rows)
-    checksums = validate_generated_dataset(
+    checksums = validate_generated_dataset_file(
         args.rows,
-        frame,
         InformationProfile.PRINCIPAL,
     )
-    parts = split_by_manifest_roots(frame, DEVELOPMENT_MANIFEST)
-    train = parts["train"].reset_index(drop=True)
-    validation = parts["validation"].reset_index(drop=True)
+    development = json.loads(DEVELOPMENT_MANIFEST.read_text(encoding="utf-8"))
+    roots = development["roots"]
+    train_roots = [record["root_id"] for record in roots["training"]]
+    validation_roots = [record["root_id"] for record in roots["validation"]]
+    columns = list(
+        dict.fromkeys(
+            (
+                *MASTER_FEATURE_REGISTRY.names,
+                ATTACK_LABEL,
+                STRANDING_MASK,
+                "simulation_time",
+                "step",
+                "attack_kind",
+                "attack_tier",
+                "controller_kind",
+                "root_id",
+                "resolved_config_checksum",
+            )
+        )
+    )
+    train = pd.read_parquet(
+        args.rows,
+        columns=columns,
+        filters=[("root_id", "in", train_roots)],
+    )
+    validation = pd.read_parquet(
+        args.rows,
+        columns=columns,
+        filters=[("root_id", "in", validation_roots)],
+    )
     if train.empty or validation.empty:
         raise ValueError("the shortcut audit needs training and validation rows")
+    if set(train["root_id"]) != set(train_roots):
+        raise ValueError("the shortcut audit misses a training root")
+    if set(validation["root_id"]) != set(validation_roots):
+        raise ValueError("the shortcut audit misses a validation root")
+    if set(train["resolved_config_checksum"]) & set(
+        validation["resolved_config_checksum"]
+    ):
+        raise ValueError("a resolved configuration crosses the root split")
     common = {
         **checksums,
         "development_manifest_sha256": _sha256(DEVELOPMENT_MANIFEST),
@@ -56,6 +93,14 @@ def main(argv: list[str] | None = None) -> int:
         "label_schema_sha256": _sha256(
             REPO_ROOT / "protocols/development/monitor-labels-v2.json"
         ),
+    }
+    master_stumps = {
+        result.feature: result
+        for result in fit_stumps(
+            train,
+            validation,
+            MASTER_FEATURE_REGISTRY.names,
+        )
     }
     args.output.mkdir(parents=True, exist_ok=True)
     for profile, registry in FEATURE_REGISTRIES.items():
@@ -70,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
                 **common,
                 "profile_feature_registry_sha256": registry.sha256,
             },
+            _validated_rows=True,
+            _stumps=tuple(master_stumps[name] for name in registry.names),
         )
         if not report["approved"]:
             raise ValueError(f"the {profile.value} shortcut audit did not pass")

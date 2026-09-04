@@ -7,6 +7,7 @@ The sleeper fixture has a known trigger time, so its label rate is known.
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,7 @@ from avalanche.monitors.dataset import (
     DatasetEntry,
     RecordingMonitor,
     ResolvedDatasetEntry,
+    _rebind_honest_frame,
     _run_entries,
     _run_resolved_entry,
     _run_resolved_entry_observed,
@@ -33,9 +35,11 @@ from avalanche.monitors.dataset import (
     generate_dataset,
     label_attack_activity,
     pair_context_checksum,
+    resolve_dataset_entries,
     resolve_entry,
     run_entry,
     validate_generated_dataset,
+    validate_generated_dataset_file,
 )
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.observability import NullMetricEmitter
@@ -275,6 +279,10 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
         "dataset_manifest_sha256",
         "dataset_summary_sha256",
     }
+    assert validate_generated_dataset_file(
+        output,
+        InformationProfile.PRINCIPAL,
+    ) == validate_generated_dataset(output, frame, InformationProfile.PRINCIPAL)
 
     obsolete = frame.assign(harm_count=0)
     with pytest.raises(ValueError, match="obsolete harm field"):
@@ -473,6 +481,52 @@ def test_worker_entries_are_resolved_before_pool_creation(monkeypatch):
 
     assert observed == [8]
     assert frames[0]["validated"].tolist() == [1]
+
+
+def test_dataset_resolution_reuses_each_identical_configuration(monkeypatch):
+    calls = 0
+    original = ConfigurationResolver.resolve
+
+    def counted(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ConfigurationResolver, "resolve", counted)
+    duplicate = replace(SLEEPER, pair_id="", pair_role="unpaired")
+
+    selected = resolve_dataset_entries((duplicate, duplicate))
+
+    assert len(selected) == 2
+    assert calls == 1
+
+
+def test_a_reused_honest_frame_matches_an_independent_short_episode():
+    entries = expand_manifest(yaml.safe_load(MANIFEST.read_text()))
+    source_entry = next(entry for entry in entries if entry.pair_role == "honest")
+    target_entry = next(
+        entry
+        for entry in entries
+        if entry.pair_role == "honest"
+        and entry.config_paths == source_entry.config_paths
+        and entry.override_path == source_entry.override_path
+        and entry.pair_id != source_entry.pair_id
+    )
+    resolved = resolve_entry(source_entry).model_copy(
+        update={"episode_duration_seconds": 120.0}
+    )
+    source = ResolvedDatasetEntry(source_entry, resolved)
+    target = ResolvedDatasetEntry(target_entry, resolved)
+
+    reused = _rebind_honest_frame(
+        _run_resolved_entry(source, HORIZON, "principal"),
+        target,
+    )
+    independent = _run_resolved_entry(target, HORIZON, "principal")
+
+    pd.testing.assert_frame_equal(reused, independent)
+    reused.iloc[0, 0] = "changed"
+    assert independent.iloc[0, 0] != "changed"
 
 
 def test_dataset_rejects_mixed_resolved_worker_counts():
