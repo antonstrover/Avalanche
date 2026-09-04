@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/antonstrover/Avalanche/artifacts/monitor/selection-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "selection_version",
+    "profile",
+    "role",
+    "eligible_completed_attempts",
+    "cutoff_overrun_attempts",
+    "selected_attempt",
+    "gate_passed",
+    "metrics",
+    "tie_evidence",
+    "candidate_registry_sha256",
+    "development_manifest_sha256",
+    "candidate_cutoff",
+    "campaign_close_identity_sha256",
+    "campaign_close_release_id",
+    "campaign_close_release_tag",
+    "campaign_close_release_api_url",
+    "campaign_close_published_at",
+    "campaign_close_reason",
+    "campaign_close_request_sha256",
+    "campaign_incomplete_executions_sha256"
+  ],
+  "properties": {
+    "selection_version": {"const": 2},
+    "profile": {"$ref": "#/$defs/profile"},
+    "role": {"enum": ["selected_pass", "negative_core_baseline", "failed_profile_ablation"]},
+    "eligible_completed_attempts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/attempt"}},
+    "cutoff_overrun_attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}},
+    "selected_attempt": {"$ref": "#/$defs/attempt"},
+    "gate_passed": {"type": "boolean"},
+    "metrics": {"$ref": "#/$defs/metrics"},
+    "tie_evidence": {"type": "array", "items": {"type": "string"}},
+    "candidate_registry_sha256": {"$ref": "#/$defs/sha256"},
+    "development_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_cutoff": {"type": "string", "format": "date-time"},
+    "campaign_close_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "campaign_close_release_id": {"type": "string", "minLength": 1},
+    "campaign_close_release_tag": {"type": "string", "minLength": 1},
+    "campaign_close_release_api_url": {"type": "string", "format": "uri"},
+    "campaign_close_published_at": {"type": "string", "format": "date-time"},
+    "campaign_close_reason": {"enum": ["terminal_completion", "cutoff_elapsed"]},
+    "campaign_close_request_sha256": {"$ref": "#/$defs/sha256"},
+    "campaign_incomplete_executions_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "profile": {"enum": ["principal-full", "proposal-only", "operational-state-only", "operational-context-only", "no-history"]},
+    "candidate": {"enum": ["mlp-64x32-paired-v4", "mlp-128x64-paired-v4", "gru32-window8-paired-v4"]},
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_name", "attempt_lock_path", "attempt_lock_sha256"],
+      "properties": {
+        "candidate_name": {"$ref": "#/$defs/candidate"},
+        "attempt_lock_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "attempt_lock_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sleeper_recall", "episode_false_alarm_rate", "recall_margin", "alarm_margin", "minimum_gate_margin", "brier_score", "expected_calibration_error"],
+      "properties": {
+        "sleeper_recall": {"$ref": "#/$defs/quantized"},
+        "episode_false_alarm_rate": {"$ref": "#/$defs/quantized"},
+        "recall_margin": {"$ref": "#/$defs/quantized"},
+        "alarm_margin": {"$ref": "#/$defs/quantized"},
+        "minimum_gate_margin": {"$ref": "#/$defs/quantized"},
+        "brier_score": {"$ref": "#/$defs/quantized"},
+        "expected_calibration_error": {"$ref": "#/$defs/quantized"}
+      }
+    },
+    "quantized": {"type": "string", "pattern": "^-?[0-9]+\\.[0-9]{12}$"}
+  }
+}

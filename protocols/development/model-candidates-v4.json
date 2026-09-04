@@ -1,0 +1,263 @@
+{
+  "registry_version": 4,
+  "name": "model-candidates-v4",
+  "candidates": [
+    {
+      "order": 1,
+      "name": "mlp-64x32-paired-v4",
+      "seed": 20260901,
+      "epochs": 80,
+      "batch_size": 256,
+      "architecture": {
+        "kind": "perceptron",
+        "hidden_sizes": [64, 32],
+        "window_length": null,
+        "gru_hidden_size": null,
+        "gru_layers": null,
+        "bidirectional": false,
+        "activation": "relu",
+        "dropout": 0.0
+      },
+      "optimizer": {
+        "name": "AdamW",
+        "learning_rate": 0.001,
+        "weight_decay": 0.0001,
+        "betas": [0.9, 0.999],
+        "epsilon": 0.00000001,
+        "amsgrad": false,
+        "maximize": false,
+        "capturable": false,
+        "differentiable": false,
+        "foreach": false,
+        "fused": false,
+        "decay_parameters": "weight_matrices",
+        "no_decay_parameters": "biases",
+        "gradient_clipping": null,
+        "scheduler": null
+      }
+    },
+    {
+      "order": 2,
+      "name": "mlp-128x64-paired-v4",
+      "seed": 20260902,
+      "epochs": 80,
+      "batch_size": 256,
+      "architecture": {
+        "kind": "perceptron",
+        "hidden_sizes": [128, 64],
+        "window_length": null,
+        "gru_hidden_size": null,
+        "gru_layers": null,
+        "bidirectional": false,
+        "activation": "relu",
+        "dropout": 0.0
+      },
+      "optimizer": {
+        "name": "AdamW",
+        "learning_rate": 0.0005,
+        "weight_decay": 0.0001,
+        "betas": [0.9, 0.999],
+        "epsilon": 0.00000001,
+        "amsgrad": false,
+        "maximize": false,
+        "capturable": false,
+        "differentiable": false,
+        "foreach": false,
+        "fused": false,
+        "decay_parameters": "weight_matrices",
+        "no_decay_parameters": "biases",
+        "gradient_clipping": null,
+        "scheduler": null
+      }
+    },
+    {
+      "order": 3,
+      "name": "gru32-window8-paired-v4",
+      "seed": 20260903,
+      "epochs": 60,
+      "batch_size": 256,
+      "architecture": {
+        "kind": "gru",
+        "hidden_sizes": [],
+        "window_length": 8,
+        "gru_hidden_size": 32,
+        "gru_layers": 1,
+        "bidirectional": false,
+        "activation": "none",
+        "dropout": 0.0
+      },
+      "optimizer": {
+        "name": "AdamW",
+        "learning_rate": 0.001,
+        "weight_decay": 0.0001,
+        "betas": [0.9, 0.999],
+        "epsilon": 0.00000001,
+        "amsgrad": false,
+        "maximize": false,
+        "capturable": false,
+        "differentiable": false,
+        "foreach": false,
+        "fused": false,
+        "decay_parameters": "weight_matrices",
+        "no_decay_parameters": "biases",
+        "gradient_clipping": null,
+        "scheduler": null
+      }
+    }
+  ],
+  "objective": {
+    "binary_cross_entropy_coefficient": 1.0,
+    "binary_cross_entropy_reduction": "weighted_primary_mean",
+    "binary_cross_entropy_denominator": 256,
+    "binary_cross_entropy_target": "uniform_unique_eligible_endpoints",
+    "importance_weight_dtype": "float64_then_float32",
+    "divide_by_random_weight_sum": false,
+    "pairwise_coefficient": 0.5,
+    "pairwise_margin_logits": 0.5,
+    "pairwise_reduction": "unweighted_positive_occurrence_mean",
+    "pairwise_boundary": "malicious_proposal",
+    "target_label": "proposal_label",
+    "excluded_target": "executed_activation",
+    "class_weight": null,
+    "pos_weight": null
+  },
+  "sampler": {
+    "algorithm": "hierarchical-coverage-remainder-v1",
+    "batch_size": 256,
+    "group_batch_counts": {
+      "profit_biased": 64,
+      "sleeper_saboteur": 64,
+      "reward_hacker": 64,
+      "negative": 64
+    },
+    "group_epoch_mass": {
+      "profit_biased": 0.25,
+      "sleeper_saboteur": 0.25,
+      "reward_hacker": 0.25,
+      "negative": 0.25
+    },
+    "negative_source_mass": {
+      "honest": 0.5,
+      "inactive_attack": 0.5
+    },
+    "epoch_size_formula": "256*ceil(4*largest_group_size/256)",
+    "quota_method": "largest_remainder",
+    "tie_break": "canonical_stratum_identity",
+    "components": ["coverage", "balanced_remainder"],
+    "positive_hierarchy": [
+      "attack_kind",
+      "attack_tier",
+      "attack_strength",
+      "mountain",
+      "development_family",
+      "controller_policy_family",
+      "proposal_phase",
+      "run_id",
+      "endpoint_id"
+    ],
+    "negative_hierarchy": [
+      "negative_source",
+      "mountain",
+      "development_family",
+      "controller_policy_family",
+      "run_id",
+      "endpoint_id"
+    ],
+    "phase_intervals": ["0-4", "5-14", "15-29", "30-plus"],
+    "honest_storage": "unique_endpoint",
+    "pair_join": ["pair_context_sha256", "control_boundary_index"],
+    "split_rule": "complete_run_before_sampling"
+  },
+  "normalization": {
+    "fit_split": "training_roots",
+    "statistic_dtype": "float64",
+    "variance": "population",
+    "ddof": 0,
+    "deviation_floor": 0.00000001,
+    "floor_replacement": 1.0,
+    "output_dtype": "float32",
+    "batch_normalization": false,
+    "layer_normalization": false
+  },
+  "initialization": {
+    "linear_distribution": "uniform",
+    "linear_bounds": "[-1/sqrt(fan_in),1/sqrt(fan_in)]",
+    "linear_bias_bounds": "same_as_linear_matrix",
+    "gru_distribution": "uniform",
+    "gru_bounds": "[-1/sqrt(32),1/sqrt(32)]",
+    "stream_purpose": "model_init"
+  },
+  "streams": {
+    "namespace": "avalanche-monitor-training-v4",
+    "hash": "sha256",
+    "encoding": "utf-8",
+    "separator_hex": "00",
+    "trailing_separator": false,
+    "integer_encoding": "base10_no_leading_zeros",
+    "epoch_indexing": "zero_based",
+    "purposes": ["model_init", "sampler"],
+    "torch_seed_bytes": 8,
+    "sampler_seed_bytes": 16,
+    "sampler_generator": "PCG64DXSM"
+  },
+  "numerical": {
+    "device": "cpu",
+    "model_dtype": "float32",
+    "deterministic_algorithms": true,
+    "torch_threads": 1,
+    "torch_interop_threads": 1,
+    "formal_byte_equality": "certified_runtime_only",
+    "diagnostic_absolute_tolerance": 0.000001,
+    "diagnostic_relative_tolerance": 0.000001
+  },
+  "compatibility": {
+    "names": ["all-zero", "repeating-minus-one-zero-one"],
+    "mlp_shape": "(1,feature_count)",
+    "gru_shape": "(1,8,feature_count)",
+    "fill_order": "C",
+    "input_encoding": "ieee754-float32-little-endian",
+    "logit_encoding": "ieee754-float32-little-endian-hex"
+  },
+  "selection": {
+    "profile_order": [
+      "principal-full",
+      "proposal-only",
+      "operational-state-only",
+      "operational-context-only",
+      "no-history"
+    ],
+    "candidate_order": [
+      "mlp-64x32-paired-v4",
+      "mlp-128x64-paired-v4",
+      "gru32-window8-paired-v4"
+    ],
+    "sleeper_recall_gate": 0.8,
+    "episode_false_alarm_budget": 0.05,
+    "execution_order": "sequential_profile_then_candidate",
+    "stop_rule": "first_passing_candidate",
+    "score_epoch": "final",
+    "checkpoint_selection": false,
+    "failure_primary_metric": "greater_minimum_gate_margin",
+    "tie_metrics": ["brier_score", "expected_calibration_error"],
+    "tie_endpoint_set": "complete_shared_validation_endpoints",
+    "gru_warmup_probability": 0.0,
+    "ece_bins": 10,
+    "ece_bin_rule": "left_closed_last_includes_one",
+    "metric_quantization_places": 12,
+    "metric_rounding": "ROUND_HALF_EVEN",
+    "final_tie_break": "candidate_order",
+    "cutoff_location": "development_manifest",
+    "completion_time_source": "release_api_published_at",
+    "cutoff_comparison": "completed_at<=cutoff"
+  },
+  "versions": {
+    "model": 2,
+    "attempt_lock": 3,
+    "selection_manifest": 2,
+    "artifact_registry": 3,
+    "dataset": 5,
+    "feature": 3,
+    "label": 2,
+    "shortcut_report": 3
+  }
+}

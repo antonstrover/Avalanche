@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/antonstrover/Avalanche/artifacts/monitor/registry-v3.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "registry_version",
+    "campaign_identity_sha256",
+    "candidate_registry_sha256",
+    "development_manifest_sha256",
+    "certified_runtime_sha256",
+    "dataset_release_lock_sha256",
+    "dataset_manifest_sha256",
+    "master_feature_registry_sha256",
+    "campaign_close_identity_sha256",
+    "campaign_close_release_id",
+    "campaign_close_release_tag",
+    "campaign_close_release_api_url",
+    "campaign_close_published_at",
+    "campaign_close_reason",
+    "campaign_close_request_sha256",
+    "campaign_incomplete_executions_sha256",
+    "attempts",
+    "selections"
+  ],
+  "properties": {
+    "registry_version": {"const": 3},
+    "campaign_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_registry_sha256": {"$ref": "#/$defs/sha256"},
+    "development_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "certified_runtime_sha256": {"$ref": "#/$defs/sha256"},
+    "dataset_release_lock_sha256": {"$ref": "#/$defs/sha256"},
+    "dataset_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "master_feature_registry_sha256": {"$ref": "#/$defs/sha256"},
+    "campaign_close_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "campaign_close_release_id": {"type": "string", "minLength": 1},
+    "campaign_close_release_tag": {"type": "string", "minLength": 1},
+    "campaign_close_release_api_url": {"type": "string", "format": "uri"},
+    "campaign_close_published_at": {"type": "string", "format": "date-time"},
+    "campaign_close_reason": {"enum": ["terminal_completion", "cutoff_elapsed"]},
+    "campaign_close_request_sha256": {"$ref": "#/$defs/sha256"},
+    "campaign_incomplete_executions_sha256": {"$ref": "#/$defs/sha256"},
+    "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}},
+    "selections": {"type": "array", "minItems": 5, "maxItems": 5, "items": {"$ref": "#/$defs/selection"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_name", "profile", "candidate_name", "attempt_lock_path", "attempt_lock_sha256", "attempt_lock_url", "gate_status", "selection_eligibility", "completed_at", "release_id", "release_tag", "release_api_url", "cutoff", "cutoff_comparison", "campaign_close_identity_sha256", "campaign_close_published_at", "campaign_close_reason"],
+      "properties": {
+        "attempt_name": {"type": "string"},
+        "profile": {"type": "string"},
+        "candidate_name": {"type": "string"},
+        "attempt_lock_path": {"type": "string"},
+        "attempt_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "attempt_lock_url": {"type": "string", "format": "uri"},
+        "gate_status": {"enum": ["passed", "failed"]},
+        "selection_eligibility": {"enum": ["eligible", "cutoff_overrun"]},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "release_id": {"type": "string"},
+        "release_tag": {"type": "string"},
+        "release_api_url": {"type": "string", "format": "uri"},
+        "cutoff": {"type": "string", "format": "date-time"},
+        "cutoff_comparison": {"enum": ["at_or_before", "after"]},
+        "campaign_close_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "campaign_close_published_at": {"type": "string", "format": "date-time"},
+        "campaign_close_reason": {"enum": ["terminal_completion", "cutoff_elapsed"]}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "selection_manifest_path", "selection_manifest_sha256"],
+      "properties": {
+        "profile": {"type": "string"},
+        "selection_manifest_path": {"type": "string"},
+        "selection_manifest_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

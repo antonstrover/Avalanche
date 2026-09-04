@@ -10,7 +10,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import torch
+from torch import nn
 
+from avalanche.monitors.artifacts import load_candidate_registry
 from avalanche.monitors.dataset import load_nonformal_legacy_dataset_v4_fixture
 from avalanche.monitors.features import FEATURE_VERSION
 from avalanche.monitors.perceptron import (
@@ -18,6 +21,7 @@ from avalanche.monitors.perceptron import (
     TrainingConfig,
     average_precision,
     brier_score,
+    build_network,
     constant_baseline,
     evaluate,
     feature_matrix,
@@ -26,10 +30,15 @@ from avalanche.monitors.perceptron import (
     train_perceptron,
 )
 from avalanche.monitors.splits import split_by_family
+from avalanche.monitors.training import build_adamw_v4, build_candidate_network_v4
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "monitor-dataset.parquet"
 SEED = 20260825
 CONFIG = TrainingConfig(seed=SEED, epochs=12, label="attack_active")
+CANDIDATE_REGISTRY = (
+    Path(__file__).resolve().parents[2]
+    / "protocols/development/model-candidates-v4.json"
+)
 
 
 @pytest.fixture(scope="module")
@@ -136,3 +145,60 @@ def test_the_loader_rejects_an_incompatible_profile(model, tmp_path):
 
     with pytest.raises(ValueError, match="information profile"):
         load_model(path, expected_information_profile="oracle_true_state")
+
+
+@pytest.mark.parametrize(
+    ("candidate_name", "widths"),
+    (
+        ("mlp-64x32-paired-v4", ((5, 64), (64, 32), (32, 1))),
+        ("mlp-128x64-paired-v4", ((5, 128), (128, 64), (64, 1))),
+    ),
+)
+def test_both_declared_mlp_shapes_are_exact(candidate_name, widths):
+    registry = load_candidate_registry(CANDIDATE_REGISTRY)
+    network = build_candidate_network_v4(
+        5,
+        registry.candidate(candidate_name),
+        profile="principal-full",
+    )
+    layers = tuple(
+        (module.in_features, module.out_features)
+        for module in network
+        if isinstance(module, nn.Linear)
+    )
+    assert layers == widths
+    assert not any(isinstance(module, nn.Dropout) for module in network)
+
+
+def test_formal_initialization_is_deterministic_without_global_draws():
+    registry = load_candidate_registry(CANDIDATE_REGISTRY)
+    candidate = registry.candidates[0]
+    torch.manual_seed(17)
+    before = torch.random.get_rng_state().clone()
+    first = build_candidate_network_v4(5, candidate, profile="principal-full")
+    after = torch.random.get_rng_state()
+    second = build_candidate_network_v4(5, candidate, profile="principal-full")
+    assert torch.equal(before, after)
+    for first_parameter, second_parameter in zip(
+        first.parameters(),
+        second.parameters(),
+        strict=True,
+    ):
+        assert torch.equal(first_parameter, second_parameter)
+
+
+def test_adamw_decays_only_weight_matrices():
+    registry = load_candidate_registry(CANDIDATE_REGISTRY)
+    candidate = registry.candidates[0]
+    network = build_network(5, candidate.architecture.hidden_sizes)
+    optimizer = build_adamw_v4(network, candidate)
+    assert [group["weight_decay"] for group in optimizer.param_groups] == [
+        0.0001,
+        0.0,
+    ]
+    assert all(parameter.ndim >= 2 for parameter in optimizer.param_groups[0]["params"])
+    assert all(parameter.ndim == 1 for parameter in optimizer.param_groups[1]["params"])
+    assert optimizer.defaults["betas"] == (0.9, 0.999)
+    assert optimizer.defaults["eps"] == 0.00000001
+    assert optimizer.defaults["foreach"] is False
+    assert optimizer.defaults["fused"] is False

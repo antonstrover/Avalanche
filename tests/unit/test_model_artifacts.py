@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,29 @@ from pydantic import ValidationError
 
 from avalanche.config.models import ModelLockReference, MonitorConfig
 from avalanche.control import InformationProfile
+from avalanche.monitors.artifacts import (
+    PROFILES,
+    ArtifactContractError,
+    ArtifactRegistryV3,
+    AttemptLockV3,
+    CandidateRegistryV4,
+    SelectionManifestV2,
+    TrainingRuntimeV1,
+    build_compatibility_expectations,
+    canonical_json_bytes,
+    canonical_sha256,
+    compatibility_input_sha256,
+    compatibility_inputs,
+    float32_logit_hex,
+    load_artifact_registry_v3,
+    load_attempt_lock_v3,
+    load_candidate_registry,
+    load_selection_manifest_v2,
+    parse_unique_json,
+    require_compatibility_expectations,
+    require_runtime_identity,
+    resolve_training_runtime,
+)
 from avalanche.monitors.dataset import ATTACK_LABEL, DATASET_VERSION
 from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
 from avalanche.monitors.learned import read_legacy_model_reference
@@ -609,3 +633,395 @@ def test_preparation_verifies_downloads_before_atomic_cache_moves(
     assert len(prepared) == 2
     assert model_path.read_bytes() == model_bytes
     assert calibration_path.read_bytes() == calibration_bytes
+
+
+def _attempt_v3() -> dict[str, object]:
+    """Return one complete version three attempt lock."""
+    profile = "principal-full"
+    candidate = "mlp-64x32-paired-v4"
+    tag = f"monitor-attempt-v3-{profile}--{candidate}"
+    base = f"https://github.com/antonstrover/Avalanche/releases/download/{tag}"
+    digests = {
+        "model.pt": "1" * 64,
+        "calibration.json": "2" * 64,
+        "threshold.json": "3" * 64,
+        "execution-journal-v1.jsonl": "4" * 64,
+    }
+    zero_input, repeated_input = compatibility_inputs("perceptron", 1)
+    return {
+        "lock_version": 3,
+        "attempt_name": f"{profile}--{candidate}",
+        "model_kind": "perceptron",
+        "information_profile": profile,
+        "candidate_name": candidate,
+        "feature_names": ["feature-a"],
+        "normalization": {
+            "fit_split": "training_roots",
+            "statistic_dtype": "float64",
+            "output_dtype": "float32",
+            "ddof": 0,
+            "deviation_floor": 0.00000001,
+            "floor_replacement": 1.0,
+            "mean": [0.0],
+            "variance": [1.0],
+            "deviation": [1.0],
+        },
+        "training_diagnostics": {
+            "final_training_loss": 0.1,
+            "best_training_loss": 0.09,
+            "optimizer_update_count": 1,
+            "batch_counts": [1],
+        },
+        "model_filename": "model.pt",
+        "model_sha256": digests["model.pt"],
+        "calibration_filename": "calibration.json",
+        "calibration_sha256": digests["calibration.json"],
+        "threshold_filename": "threshold.json",
+        "threshold_sha256": digests["threshold.json"],
+        "dataset_sha256": "5" * 64,
+        "split_manifest_sha256": "6" * 64,
+        "feature_schema_sha256": "7" * 64,
+        "training_configuration_sha256": "8" * 64,
+        "shortcut_report_sha256": "9" * 64,
+        "candidate_registry_sha256": "a" * 64,
+        "development_manifest_sha256": "b" * 64,
+        "dataset_release_lock_sha256": "c" * 64,
+        "dataset_manifest_sha256": "d" * 64,
+        "master_feature_registry_sha256": "e" * 64,
+        "profile_feature_registry_sha256": "9" * 64,
+        "label_schema_sha256": "f" * 64,
+        "calibration_protocol_sha256": "0" * 64,
+        "certified_runtime_sha256": "1" * 64,
+        "epoch_sampler_occurrence_sha256": ["2" * 64],
+        "execution_journal_url": f"{base}/execution-journal-v1.jsonl",
+        "execution_journal_sha256": digests["execution-journal-v1.jsonl"],
+        "compatibility": [
+            {
+                "name": "all-zero",
+                "input_sha256": compatibility_input_sha256(zero_input),
+                "expected_logit_hex": "00000000",
+            },
+            {
+                "name": "repeating-minus-one-zero-one",
+                "input_sha256": compatibility_input_sha256(repeated_input),
+                "expected_logit_hex": "0000803f",
+            },
+        ],
+        "assets": [
+            {"name": name, "url": f"{base}/{name}", "sha256": digest}
+            for name, digest in digests.items()
+        ],
+        "release_id": "1",
+        "release_tag": tag,
+        "release_api_url": "https://api.github.com/repos/antonstrover/Avalanche/releases/1",
+        "source_code_revision": "5" * 40,
+        "gate_name": "sleeper-recall-at-episode-false-alarm-budget",
+        "gate_thresholds": {"false_alarm_budget": 0.05, "sleeper_recall": 0.8},
+        "gate_passed": True,
+        "gate_margins": {"false_alarm_budget": 0.001, "sleeper_recall": 0.01},
+        "creation_command": (
+            "uv run python scripts/run_monitor_campaign.py run "
+            "--campaign outputs/formal-monitor-staging/campaign.json"
+        ),
+        "schema_versions": {
+            "calibration": 2,
+            "dataset": 5,
+            "feature": 3,
+            "label": 2,
+            "lock": 3,
+            "model": 2,
+            "shortcut_report": 3,
+        },
+        "release_url": base,
+    }
+
+
+def _selection_v2(profile: str = "principal-full") -> dict[str, object]:
+    """Return one complete version two selection manifest."""
+    cutoff = datetime(2026, 11, 30, 23, 59, 59, tzinfo=UTC)
+    candidate = "mlp-64x32-paired-v4"
+    reference = {
+        "candidate_name": candidate,
+        "attempt_lock_path": f"artifacts/monitor/locks/{profile}--{candidate}.json",
+        "attempt_lock_sha256": "1" * 64,
+    }
+    passed = profile == "principal-full"
+    recall = "0.810000000000" if passed else "0.790000000000"
+    recall_margin = "0.010000000000" if passed else "-0.010000000000"
+    minimum_margin = "0.001000000000" if passed else "-0.010000000000"
+    return {
+        "selection_version": 2,
+        "profile": profile,
+        "role": ("selected_pass" if passed else "failed_profile_ablation"),
+        "eligible_completed_attempts": [reference],
+        "cutoff_overrun_attempts": [],
+        "selected_attempt": reference,
+        "gate_passed": passed,
+        "metrics": {
+            "sleeper_recall": recall,
+            "episode_false_alarm_rate": "0.049000000000",
+            "recall_margin": recall_margin,
+            "alarm_margin": "0.001000000000",
+            "minimum_gate_margin": minimum_margin,
+            "brier_score": "0.100000000000",
+            "expected_calibration_error": "0.020000000000",
+        },
+        "tie_evidence": [candidate],
+        "candidate_registry_sha256": "2" * 64,
+        "development_manifest_sha256": "3" * 64,
+        "candidate_cutoff": cutoff,
+        "campaign_close_identity_sha256": "4" * 64,
+        "campaign_close_release_id": "close-1",
+        "campaign_close_release_tag": f"monitor-campaign-close-v1-{'4' * 64}",
+        "campaign_close_release_api_url": (
+            "https://api.github.com/repos/antonstrover/Avalanche/releases/close-1"
+        ),
+        "campaign_close_published_at": cutoff,
+        "campaign_close_reason": "terminal_completion",
+        "campaign_close_request_sha256": "5" * 64,
+        "campaign_incomplete_executions_sha256": "6" * 64,
+    }
+
+
+def _runtime_v1() -> dict[str, object]:
+    """Return one complete certified runtime identity."""
+    return {
+        "runtime_version": 1,
+        "platform": {
+            "operating_system_name": "test-os",
+            "operating_system_version": "1",
+            "operating_system_build": "1A",
+            "machine_architecture": "test-arch",
+            "cpu_brand": "test-cpu",
+        },
+        "libraries": {
+            "python_version": "3.14.3",
+            "pytorch_version": "2",
+            "numpy_version": "2",
+            "blas_version": "test-blas",
+            "uv_lock_sha256": "1" * 64,
+        },
+        "threads": {
+            "torch_intraop": 1,
+            "torch_interop": 1,
+            "environment": {
+                "MKL_NUM_THREADS": "1",
+                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "VECLIB_MAXIMUM_THREADS": "1",
+            },
+        },
+        "deterministic_algorithms": True,
+        "dtypes": {
+            "model": "float32",
+            "normalization_statistics": "float64",
+            "normalized_features": "float32",
+        },
+    }
+
+
+def test_candidate_registry_has_the_exact_order_and_digest():
+    path = REPO_ROOT / "protocols/development/model-candidates-v4.json"
+    registry = load_candidate_registry(path)
+    assert isinstance(registry, CandidateRegistryV4)
+    assert [candidate.order for candidate in registry.candidates] == [1, 2, 3]
+    assert [candidate.name for candidate in registry.candidates] == list(
+        registry.selection.candidate_order
+    )
+    assert canonical_sha256(registry) == canonical_sha256(
+        registry.model_dump(mode="json")
+    )
+
+
+def test_candidate_registry_has_the_exact_adamw_contract():
+    registry = load_candidate_registry(
+        REPO_ROOT / "protocols/development/model-candidates-v4.json"
+    )
+    for candidate in registry.candidates:
+        optimizer = candidate.optimizer
+        assert optimizer.name == "AdamW"
+        assert optimizer.betas == (0.9, 0.999)
+        assert optimizer.epsilon == 0.00000001
+        assert optimizer.weight_decay == 0.0001
+        assert optimizer.decay_parameters == "weight_matrices"
+        assert optimizer.no_decay_parameters == "biases"
+        assert optimizer.gradient_clipping is None
+        assert optimizer.scheduler is None
+        assert not any(
+            (
+                optimizer.amsgrad,
+                optimizer.maximize,
+                optimizer.capturable,
+                optimizer.differentiable,
+                optimizer.foreach,
+                optimizer.fused,
+            )
+        )
+
+
+def test_candidate_registry_rejects_unknown_and_missing_settings():
+    registry = json.loads(
+        (REPO_ROOT / "protocols/development/model-candidates-v4.json").read_text()
+    )
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        CandidateRegistryV4.model_validate({**registry, "later_candidate": {}})
+    del registry["normalization"]["ddof"]
+    with pytest.raises(ValidationError, match="ddof"):
+        CandidateRegistryV4.model_validate(registry)
+
+
+def test_canonical_parser_rejects_duplicate_object_keys():
+    with pytest.raises(ArtifactContractError, match="repeats"):
+        parse_unique_json(b'{"value":1,"value":2}')
+
+
+def test_every_version_three_lock_binding_is_required():
+    values = _attempt_v3()
+    required = set(AttemptLockV3.model_json_schema()["required"])
+    for field in required:
+        changed = dict(values)
+        del changed[field]
+        with pytest.raises(ValidationError):
+            AttemptLockV3.model_validate(changed)
+
+
+def test_version_three_lock_binds_exact_assets_and_expectations():
+    lock = AttemptLockV3.model_validate(_attempt_v3())
+    assert [item.name for item in lock.assets] == [
+        "model.pt",
+        "calibration.json",
+        "threshold.json",
+        "execution-journal-v1.jsonl",
+    ]
+    assert [item.name for item in lock.compatibility] == [
+        "all-zero",
+        "repeating-minus-one-zero-one",
+    ]
+
+
+def test_selection_two_supports_all_five_profiles():
+    for profile in PROFILES:
+        values = _selection_v2(profile)
+        selection = SelectionManifestV2.model_validate(values)
+        assert selection.profile == profile
+
+
+def test_cutoff_equality_passes_and_later_terminal_closure_fails():
+    values = _selection_v2()
+    SelectionManifestV2.model_validate(values)
+    values["campaign_close_published_at"] = values["candidate_cutoff"] + timedelta(
+        microseconds=1
+    )
+    with pytest.raises(ValidationError, match="after the cutoff"):
+        SelectionManifestV2.model_validate(values)
+
+
+def test_runtime_identity_mismatch_fails():
+    runtime = TrainingRuntimeV1.model_validate(_runtime_v1())
+    require_runtime_identity(canonical_sha256(runtime), runtime)
+    with pytest.raises(ArtifactContractError, match="does not match"):
+        require_runtime_identity("f" * 64, runtime)
+
+
+def test_runtime_resolution_binds_the_complete_lockfile(tmp_path):
+    lockfile = tmp_path / "uv.lock"
+    lockfile.write_bytes(b"nonformal lock fixture\n")
+    runtime = resolve_training_runtime(lockfile)
+    assert runtime.libraries.uv_lock_sha256 == _sha256(lockfile.read_bytes())
+    assert runtime.threads.torch_intraop == runtime.threads.torch_interop == 1
+    assert set(runtime.threads.environment.values()) == {"1"}
+
+
+def test_new_formal_loaders_reject_legacy_schema_versions(tmp_path):
+    values = (
+        (load_attempt_lock_v3, {"lock_version": 2}),
+        (load_selection_manifest_v2, {"selection_version": 1}),
+        (load_artifact_registry_v3, {"registry_version": 2}),
+    )
+    for index, (loader, value) in enumerate(values):
+        path = tmp_path / f"legacy-{index}.json"
+        path.write_bytes(canonical_json_bytes(value))
+        with pytest.raises(ArtifactContractError, match="contract"):
+            loader(path)
+
+
+def test_both_compatibility_vectors_have_exact_bytes():
+    zeros, repeated = compatibility_inputs("perceptron", 4)
+    assert zeros.shape == (1, 4)
+    assert repeated.tolist() == [[-1.0, 0.0, 1.0, -1.0]]
+    assert compatibility_input_sha256(zeros) == _sha256(zeros.tobytes(order="C"))
+    assert float32_logit_hex(1.0) == "0000803f"
+    gru = compatibility_inputs("gru", 2)[1]
+    assert gru.shape == (1, 8, 2)
+
+
+def test_compatibility_logits_require_exact_float32_bytes():
+    network = torch.nn.Linear(2, 1)
+    with torch.no_grad():
+        network.weight.copy_(torch.tensor([[0.5, -0.25]]))
+        network.bias.copy_(torch.tensor([0.125]))
+    expectations = build_compatibility_expectations(network, "perceptron", 2)
+    assert [item.name for item in expectations] == [
+        "all-zero",
+        "repeating-minus-one-zero-one",
+    ]
+    require_compatibility_expectations(network, "perceptron", 2, expectations)
+    changed = (
+        expectations[0].model_copy(update={"expected_logit_hex": "00000000"}),
+        expectations[1],
+    )
+    with pytest.raises(ArtifactContractError, match="logits changed"):
+        require_compatibility_expectations(network, "perceptron", 2, changed)
+
+
+def test_registry_three_rejects_an_unknown_selection_role():
+    cutoff = datetime(2026, 11, 30, 23, 59, 59, tzinfo=UTC)
+    values = {
+        "registry_version": 3,
+        "campaign_identity_sha256": "0" * 64,
+        "candidate_registry_sha256": "1" * 64,
+        "development_manifest_sha256": "2" * 64,
+        "certified_runtime_sha256": "3" * 64,
+        "dataset_release_lock_sha256": "4" * 64,
+        "dataset_manifest_sha256": "5" * 64,
+        "master_feature_registry_sha256": "6" * 64,
+        "campaign_close_identity_sha256": "7" * 64,
+        "campaign_close_release_id": "close-1",
+        "campaign_close_release_tag": f"monitor-campaign-close-v1-{'7' * 64}",
+        "campaign_close_release_api_url": (
+            "https://api.github.com/repos/antonstrover/Avalanche/releases/close-1"
+        ),
+        "campaign_close_published_at": cutoff,
+        "campaign_close_reason": "terminal_completion",
+        "campaign_close_request_sha256": "9" * 64,
+        "campaign_incomplete_executions_sha256": "a" * 64,
+        "attempts": [],
+        "selections": [
+            {
+                "profile": profile,
+                "selection_manifest_path": f"artifacts/monitor/{profile}.json",
+                "selection_manifest_sha256": "8" * 64,
+            }
+            for profile in PROFILES
+        ],
+    }
+    ArtifactRegistryV3.model_validate(values)
+    values["attempts"] = [{"selection_eligibility": "incomplete"}]
+    with pytest.raises(ValidationError):
+        ArtifactRegistryV3.model_validate(values)
+
+
+def test_registry_and_runtime_schemas_are_strict():
+    paths = (
+        "protocols/development/training-runtime-v1.schema.json",
+        "artifacts/monitor/attempt-lock-v3.schema.json",
+        "artifacts/monitor/selection-v2.schema.json",
+        "artifacts/monitor/registry-v3.schema.json",
+    )
+    for relative in paths:
+        schema = json.loads((REPO_ROOT / relative).read_text())
+        assert schema["additionalProperties"] is False
+
+
+def test_canonical_bytes_append_one_newline():
+    assert canonical_json_bytes({"b": 1, "a": "£"}) == ('{"a":"£","b":1}\n'.encode())

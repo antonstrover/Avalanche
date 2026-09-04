@@ -1,15 +1,20 @@
 """Check validation calibration, model gates, and artifact locks."""
 
 import json
+import runpy
+from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from avalanche.config.models import AuditConfig, SensorPolicyConfig
 from avalanche.control import OBSERVATION_SCHEMA_VERSION, InformationProfile
 from avalanche.control.types import OPERATIONAL_SENSOR_SPECS, public_policy_identity
 from avalanche.experiments.protocols import PAIR_CONTEXT_VERSION, PairContext
+from avalanche.monitors.artifacts import canonical_sha256, load_candidate_registry
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     DATASET_VERSION,
@@ -32,6 +37,7 @@ from avalanche.monitors.perceptron import (
     train_perceptron,
 )
 from avalanche.monitors.shortcut_audit import run_shortcut_audit
+from avalanche.monitors.splits import verified_endpoint_joins
 from avalanche.monitors.training import (
     CALIBRATION_VERSION,
     FALSE_ALARM_BUDGET,
@@ -41,11 +47,18 @@ from avalanche.monitors.training import (
     ArtifactError,
     GRUNetwork,
     ModelGateError,
+    RankedAttemptV4,
     TrainedGRU,
     build_run_windows,
     calibrate_and_gate,
+    expected_calibration_error_v4,
     fit_temperature,
+    normalization_v4,
+    normalize_features_v4,
+    paired_monitor_objective,
+    select_best_failed_attempt_v4,
     select_threshold,
+    shared_validation_metrics_v4,
     train_gru,
     train_locked_monitor,
     verify_locked_artifacts,
@@ -57,6 +70,13 @@ DATASET_CHECKSUMS = {
     "manifest_sha256": "b" * 64,
     "summary_sha256": "c" * 64,
 }
+CANDIDATE_REGISTRY = (
+    Path(__file__).resolve().parents[2]
+    / "protocols/development/model-candidates-v4.json"
+)
+TRAINING_COMMAND = runpy.run_path(
+    str(Path(__file__).resolve().parents[2] / "scripts/train_monitor.py")
+)
 
 
 def _with_pair_context(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1052,4 +1072,166 @@ def test_locked_training_preserves_each_oracle_profile(profile, tmp_path, monkey
     assert (
         verify_locked_artifacts(output / "lock.json")["information_profile"]
         == profile.value
+    )
+
+
+def test_version_four_candidates_keep_the_exact_frozen_order():
+    registry = load_candidate_registry(CANDIDATE_REGISTRY)
+    assert [(item.order, item.name) for item in registry.candidates] == [
+        (1, "mlp-64x32-paired-v4"),
+        (2, "mlp-128x64-paired-v4"),
+        (3, "gru32-window8-paired-v4"),
+    ]
+
+
+def test_formal_command_settings_come_only_from_the_registry():
+    resolved = TRAINING_COMMAND["resolve_registry_candidate"](
+        CANDIDATE_REGISTRY,
+        "mlp-128x64-paired-v4",
+        seed=None,
+        epochs=None,
+    )
+    assert resolved.seed == 20260902
+    assert resolved.epochs == 80
+    assert resolved.optimizer.learning_rate == 0.0005
+    with pytest.raises(ValueError, match="rejects seed"):
+        TRAINING_COMMAND["resolve_registry_candidate"](
+            CANDIDATE_REGISTRY,
+            "mlp-128x64-paired-v4",
+            seed=1,
+            epochs=None,
+        )
+
+
+def test_verified_pairs_join_only_at_the_exact_integer_boundary():
+    rows = pd.DataFrame(
+        {
+            "verified_run_identity": ("honest", "attack"),
+            "split_identity": ("training", "training"),
+            "control_boundary_index": (4, 4),
+            "pair_context_sha256": ("a" * 64, "a" * 64),
+            "pair_role": ("honest", "attack"),
+            "proposal_label": (0, 1),
+        }
+    )
+    assert verified_endpoint_joins(rows)[0].honest_index == 0
+    rows.loc[1, "control_boundary_index"] = 5
+    with pytest.raises(ValueError, match="exact honest endpoint"):
+        verified_endpoint_joins(rows)
+
+
+def test_a_blocked_malicious_proposal_stays_positive():
+    rows = pd.DataFrame(
+        {
+            "verified_run_identity": ("honest", "attack"),
+            "split_identity": ("training", "training"),
+            "control_boundary_index": (4, 4),
+            "pair_context_sha256": ("a" * 64, "a" * 64),
+            "pair_role": ("honest", "attack"),
+            "proposal_label": (0, 1),
+            "executed_activation": (0, 0),
+        }
+    )
+    joined = verified_endpoint_joins(rows)
+    assert joined[0].positive_index == 1
+    assert rows.loc[joined[0].positive_index, "executed_activation"] == 0
+
+
+def test_a_correctly_ranked_pair_has_lower_frozen_loss():
+    labels = torch.tensor([1.0] * 192 + [0.0] * 64)
+    weights = torch.ones(256)
+    negative_logits = torch.zeros(64)
+    bad_logits = torch.cat((torch.zeros(192), negative_logits))
+    good_logits = torch.cat((torch.ones(192), negative_logits))
+    bad, _bad_binary, _bad_pair = paired_monitor_objective(
+        bad_logits,
+        labels,
+        weights,
+        torch.ones(192),
+    )
+    good, _good_binary, _good_pair = paired_monitor_objective(
+        good_logits,
+        labels,
+        weights,
+        torch.zeros(192),
+    )
+    assert good < bad
+
+
+def test_frozen_objective_uses_256_as_the_weighted_denominator():
+    logits = torch.zeros(256)
+    labels = torch.tensor([1.0] * 192 + [0.0] * 64)
+    _total, binary, _pair = paired_monitor_objective(
+        logits,
+        labels,
+        torch.full((256,), 2.0),
+        torch.zeros(192),
+    )
+    assert binary.item() == pytest.approx(2.0 * np.log(2.0))
+
+
+def test_version_four_normalization_uses_float64_population_statistics():
+    values = np.asarray([[1.0, 4.0], [3.0, 4.0]], dtype=np.float32)
+    normalization = normalization_v4(values)
+    normalized = normalize_features_v4(values, normalization)
+    assert normalization.mean.dtype == np.float64
+    assert normalization.variance.tolist() == [1.0, 0.0]
+    assert normalization.deviation.tolist() == [1.0, 1.0]
+    assert normalized.dtype == np.float32
+
+
+def test_every_nested_registry_change_changes_the_protocol_digest():
+    value = json.loads(CANDIDATE_REGISTRY.read_text())
+    baseline = canonical_sha256(value)
+    changes = (
+        (("candidates", 0, "seed"), 20260999),
+        (("candidates", 0, "architecture", "dropout"), 0.1),
+        (("candidates", 0, "optimizer", "epsilon"), 0.000001),
+        (("objective", "pairwise_margin_logits"), 0.6),
+        (("sampler", "quota_method"), "another"),
+        (("normalization", "ddof"), 1),
+        (("initialization", "stream_purpose"), "another"),
+        (("streams", "separator_hex"), "ff"),
+        (("numerical", "torch_threads"), 2),
+        (("compatibility", "fill_order"), "F"),
+        (("selection", "ece_bins"), 11),
+        (("versions", "feature"), 4),
+    )
+    for path, replacement in changes:
+        changed = deepcopy(value)
+        target = changed
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = replacement
+        assert canonical_sha256(changed) != baseline
+
+
+def test_failed_candidate_ranking_uses_all_frozen_ties():
+    attempts = (
+        RankedAttemptV4("mlp-64x32-paired-v4", 1, 0.79, 0.04, 0.11, 0.02),
+        RankedAttemptV4("mlp-128x64-paired-v4", 2, 0.79, 0.04, 0.10, 0.03),
+        RankedAttemptV4("gru32-window8-paired-v4", 3, 0.79, 0.04, 0.10, 0.01),
+    )
+    selected = select_best_failed_attempt_v4(attempts)
+    assert selected.candidate_name == "gru32-window8-paired-v4"
+
+
+def test_gru_tie_metrics_use_the_complete_shared_endpoint_set():
+    identities = ("first", "second", "third")
+    metrics = shared_validation_metrics_v4(
+        identities,
+        np.asarray([1.0, 0.0, 1.0]),
+        {"third": 0.8},
+        gru_warmup_endpoint_ids=("first", "second"),
+    )
+    assert metrics.probabilities.tolist() == [0.0, 0.0, 0.8]
+    assert metrics.brier_score == pytest.approx((1.0 + 0.0 + 0.04) / 3.0)
+
+
+def test_expected_calibration_error_uses_ten_left_closed_bins():
+    probabilities = np.asarray([0.0, 0.099, 0.1, 1.0])
+    labels = np.asarray([0.0, 0.0, 1.0, 1.0])
+    expected = 0.25 * (0.0495 * 2.0 + 0.9)
+    assert expected_calibration_error_v4(probabilities, labels) == pytest.approx(
+        expected
     )
