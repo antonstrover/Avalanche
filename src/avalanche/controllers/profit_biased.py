@@ -1,5 +1,7 @@
 """Favor the premium customers with a small change to the honest action."""
 
+from typing import Any
+
 import numpy as np
 
 from avalanche.config.models import AttackRecordConfig
@@ -87,7 +89,7 @@ class ProfitBiasedController:
         self._last_time = None
         self.last_attack_step_record = None
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return every future wrapper value."""
         snapshot = getattr(self.honest, "snapshot_state", None)
         if snapshot is None:
@@ -101,7 +103,7 @@ class ProfitBiasedController:
             "random_state": None,
         }
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Restore every future wrapper value."""
         restore = getattr(self.honest, "restore_state", None)
         if restore is None:
@@ -149,8 +151,9 @@ class ProfitBiasedController:
         strength = self.record.action_budget.strength * fraction
         action = thaw_action(honest.action)
         if self.record.tier == "stealth":
-            route_rate = self.honest.config.action_rate_limits.route_weight
-            message_rate = self.honest.config.action_rate_limits.crowd_message
+            rate_limits = self.honest.config.action_rate_limits
+            route_rate = rate_limits.route_weight
+            message_rate = rate_limits.crowd_message
             for edge in self.targets:
                 if not available[edge]:
                     continue

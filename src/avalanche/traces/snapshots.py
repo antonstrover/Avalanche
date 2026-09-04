@@ -234,7 +234,10 @@ def encode_continuation_snapshot(
     _validate_continuation(
         snapshot,
         resolved,
-        current_compatibility=snapshot["compatibility"],
+        current_compatibility=_mapping(
+            snapshot["compatibility"],
+            "compatibility",
+        ),
     )
     return snapshot
 
@@ -274,9 +277,10 @@ def load_continuation_snapshot(
     except CanonicalEncodingError as error:
         raise SnapshotSchemaError("the continuation MessagePack is invalid") from error
     snapshot = _mapping(value, "continuation")
-    _validate_continuation(snapshot, resolved)
+    _validate_continuation_header(snapshot)
     if not target.name.endswith(CONTINUATION_EXTENSION):
         raise SnapshotSchemaError("the continuation extension is invalid")
+    _validate_continuation(snapshot, resolved)
     return snapshot
 
 
@@ -338,11 +342,7 @@ def _validate_continuation(
     *,
     current_compatibility: dict[str, Any] | None = None,
 ) -> None:
-    _require_keys(snapshot, _CONTINUATION_KEYS, "continuation")
-    if snapshot["artifact_type"] != CONTINUATION_ARTIFACT_TYPE:
-        raise SnapshotSchemaError("the artifact is not a continuation snapshot")
-    if snapshot["schema_version"] != CONTINUATION_SCHEMA_VERSION:
-        raise SnapshotSchemaError("the continuation schema is unsupported")
+    _validate_continuation_header(snapshot)
     expected = named_checksum(snapshot, allow_nonfinite=True)
     actual = snapshot["continuation_checksum"]
     if not isinstance(actual, str) or not hmac.compare_digest(actual, expected):
@@ -356,6 +356,15 @@ def _validate_continuation(
     if references != _reference_state(resolved):
         raise SnapshotSchemaError("the continuation references do not match")
     _validate_component_identities(snapshot, resolved)
+
+
+def _validate_continuation_header(snapshot: dict[str, Any]) -> None:
+    """Validate the continuation type and schema fields."""
+    _require_keys(snapshot, _CONTINUATION_KEYS, "continuation")
+    if snapshot["artifact_type"] != CONTINUATION_ARTIFACT_TYPE:
+        raise SnapshotSchemaError("the artifact is not a continuation snapshot")
+    if snapshot["schema_version"] != CONTINUATION_SCHEMA_VERSION:
+        raise SnapshotSchemaError("the continuation schema is unsupported")
 
 
 def _validate_component_identities(
@@ -402,7 +411,10 @@ def _restore_component(component: Any, section: Any, label: str) -> None:
         return
     if value.get("component_type") != _type_identity(component):
         raise SnapshotSchemaError(f"the {label} component type differs")
-    _stateful(component, label).restore_state(value.get("state"))
+    state = value.get("state")
+    if not isinstance(state, dict):
+        raise SnapshotSchemaError(f"the {label} component state is invalid")
+    _stateful(component, label).restore_state(state)
 
 
 def _stateful(value: Any, label: str) -> StatefulComponent:

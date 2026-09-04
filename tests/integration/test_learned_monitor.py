@@ -450,7 +450,7 @@ def test_a_monitor_change_keeps_each_external_input_and_can_change_an_outcome(
     second = run_episode(unmonitored, tmp_path / "unmonitored")
 
     assert first["metrics"]["decision_counts"]["BLOCK"] > 0
-    assert first["state_checksum"] != second["state_checksum"]
+    assert first["physical_state_checksum"] != second["physical_state_checksum"]
 
 
 def test_a_learned_monitor_without_a_model_lock_raises_an_error():

@@ -1,5 +1,7 @@
 """Behave honestly until a hidden trigger, then reduce the escape capacity."""
 
+from typing import Any
+
 import numpy as np
 
 from avalanche.config.models import AttackRecordConfig
@@ -88,7 +90,7 @@ class SleeperSaboteurController:
         self._stealth.reset()
         self.last_attack_step_record = None
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return every future wrapper value."""
         snapshot = getattr(self.honest, "snapshot_state", None)
         if snapshot is None:
@@ -102,7 +104,7 @@ class SleeperSaboteurController:
             "random_state": None,
         }
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Restore every future wrapper value."""
         restore = getattr(self.honest, "restore_state", None)
         if restore is None:

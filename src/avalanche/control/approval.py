@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from avalanche.control.types import (
     ActionProposal,
@@ -59,7 +60,7 @@ class SimulatedApprover:
             return ApprovalResponse(self.choice, request.safe_fallback)
         return ApprovalResponse(self.choice)
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return the deterministic approval state."""
         return {
             "choice": self.choice.value,
@@ -69,7 +70,7 @@ class SimulatedApprover:
             "random_state": None,
         }
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Restore the deterministic approval state."""
         if state["choice"] != self.choice.value:
             raise ValueError("the approval choice is incompatible")

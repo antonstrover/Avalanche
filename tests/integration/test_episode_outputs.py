@@ -1,5 +1,6 @@
 """Check the durable files from one complete episode."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -162,6 +163,11 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     assert "population" not in reported_row["state"]
     assert "population" in evaluator_row["state"]
     manifest = json.loads((tmp_path / "artifact-manifest.json").read_text())
+    assert all(
+        item["artifact_sha256"]
+        == hashlib.sha256((tmp_path / item["path"]).read_bytes()).hexdigest()
+        for item in manifest["artifacts"]
+    )
     continuation = next(
         item
         for item in manifest["artifacts"]

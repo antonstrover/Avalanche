@@ -133,7 +133,8 @@ class LearnedMonitor:
         window = tuple(
             np.asarray(item, dtype=np.float32) for item in state["feature_window"]
         )
-        if len(window) > self._feature_window.maxlen:
+        maximum_length = self._feature_window.maxlen
+        if maximum_length is not None and len(window) > maximum_length:
             raise ValueError("the learned feature history is too long")
         self._feature_window.clear()
         self._feature_window.extend(item.copy() for item in window)

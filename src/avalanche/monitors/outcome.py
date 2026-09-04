@@ -1,6 +1,7 @@
 """Detect realised harm after skier stranding occurs."""
 
 from time import perf_counter
+from typing import Any
 
 from avalanche.control import (
     ConfiguredFallback,
@@ -25,11 +26,11 @@ class AllowMonitor:
     def reset(self, seed: int) -> None:
         """Reset the stateless monitor."""
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return the empty monitor state."""
         return {"random_state": None}
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Validate the empty monitor state."""
         if state != {"random_state": None}:
             raise ValueError("the allow monitor state is invalid")
@@ -64,7 +65,7 @@ class OutcomeMonitor:
         """Reset the honest fallback for one run."""
         self.honest_fallback.reset(seed)
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return the threshold and fallback state."""
         return {
             "decision_threshold": self.decision_threshold,
@@ -73,7 +74,7 @@ class OutcomeMonitor:
             "random_state": None,
         }
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Restore the fallback and require the same thresholds."""
         if float(state["decision_threshold"]) != self.decision_threshold:
             raise ValueError("the outcome monitor threshold is incompatible")

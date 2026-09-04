@@ -1,6 +1,6 @@
 """Propose the neutral action for the no-control baseline."""
 
-from typing import cast
+from typing import Any, cast
 
 from avalanche.control import ActionProposal, ControllerObservation, freeze_action
 from avalanche.env.actions import neutral_action
@@ -17,11 +17,11 @@ class NoControlController:
     def reset(self, seed: int) -> None:
         """Reset the controller without random state."""
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return the empty controller state."""
         return {"random_state": None}
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Validate the empty controller state."""
         if state != {"random_state": None}:
             raise ValueError("the no-control state is invalid")

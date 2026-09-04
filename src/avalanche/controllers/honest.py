@@ -1,7 +1,7 @@
 """Propose deterministic actions for safe resort operation."""
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 
@@ -117,7 +117,7 @@ class HonestController:
             seed, self.config.policy_variant
         )
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return every future controller value."""
         return {
             "seed": self._seed,
@@ -128,7 +128,7 @@ class HonestController:
             "random_state": None,
         }
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Restore every future controller value."""
         from avalanche.control import thaw_action
 

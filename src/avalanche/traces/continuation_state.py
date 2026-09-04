@@ -208,7 +208,8 @@ def thaw_state(value: Any) -> Any:
     if isinstance(value, dict):
         kind = value.get("object_kind")
         if kind == "enum":
-            enum_type = _ENUMS.get(value.get("class_name"))
+            name = value.get("class_name")
+            enum_type = _ENUMS.get(name) if isinstance(name, str) else None
             if enum_type is None or set(value) != {
                 "object_kind",
                 "class_name",
@@ -217,7 +218,8 @@ def thaw_state(value: Any) -> Any:
                 raise ValueError("the continuation enum state is invalid")
             return enum_type(thaw_state(value["value"]))
         if kind == "data_class":
-            data_type = _DATACLASSES.get(value.get("class_name"))
+            name = value.get("class_name")
+            data_type = _DATACLASSES.get(name) if isinstance(name, str) else None
             if data_type is None or set(value) != {
                 "object_kind",
                 "class_name",

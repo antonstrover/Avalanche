@@ -1,5 +1,7 @@
 """Select a safe action after a monitor intervention."""
 
+from typing import Any
+
 from avalanche.control.protocols import Controller
 from avalanche.control.state import executed_action_from_state, executed_action_state
 from avalanche.control.types import (
@@ -24,7 +26,7 @@ class ConfiguredFallback:
         self.honest_controller.reset(seed)
         self.last_safe = None
 
-    def snapshot_state(self) -> dict[str, object]:
+    def snapshot_state(self) -> dict[str, Any]:
         """Return every future fallback value."""
         snapshot = getattr(self.honest_controller, "snapshot_state", None)
         if snapshot is None:
@@ -36,7 +38,7 @@ class ConfiguredFallback:
             "random_state": None,
         }
 
-    def restore_state(self, state: dict[str, object]) -> None:
+    def restore_state(self, state: dict[str, Any]) -> None:
         """Restore every future fallback value."""
         if state["policy"] != self.policy:
             raise ValueError("the fallback policy is incompatible")
