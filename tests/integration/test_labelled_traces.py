@@ -25,6 +25,7 @@ from avalanche.monitors.dataset import (
     STRANDING_LABEL,
     STRANDING_MASK,
     DatasetEntry,
+    DatasetSummary,
     RecordingMonitor,
     ResolvedDatasetEntry,
     _rebind_honest_frame,
@@ -283,6 +284,13 @@ def test_the_generator_writes_the_rows_and_the_summary(tmp_path, monkeypatch):
         output,
         InformationProfile.PRINCIPAL,
     ) == validate_generated_dataset(output, frame, InformationProfile.PRINCIPAL)
+
+    summary_check = DatasetSummary(InformationProfile.PRINCIPAL)
+    member = frame.loc[frame["run_id"] == frame["run_id"].iloc[0]].copy()
+    summary_check.add(member)
+    changed_root = member.assign(root_id="another-root")
+    with pytest.raises(ValueError, match="change root inside one run"):
+        summary_check.add(changed_root)
 
     obsolete = frame.assign(harm_count=0)
     with pytest.raises(ValueError, match="obsolete harm field"):

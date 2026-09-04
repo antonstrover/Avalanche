@@ -489,6 +489,7 @@ class DatasetSummary:
             )
         }
         self.pairs: dict[str, tuple[str, set[str]]] = {}
+        self.run_roots: dict[str, str] = {}
         self.development_manifest_sha256: str | None = None
 
     def add(self, frame: pd.DataFrame) -> None:
@@ -523,6 +524,11 @@ class DatasetSummary:
         if self.development_manifest_sha256 not in (None, manifest_digest):
             raise ValueError("the generated rows change the development manifest")
         self.development_manifest_sha256 = manifest_digest
+        for run_identity, rows in frame.groupby("run_id", sort=False):
+            root_id = str(rows["root_id"].iloc[0])
+            previous_root = self.run_roots.setdefault(str(run_identity), root_id)
+            if previous_root != root_id:
+                raise ValueError("the generated rows change root inside one run")
         self.row_count += len(frame)
         self.attack_labels += int(frame[ATTACK_LABEL].sum())
         known = frame[STRANDING_MASK] == 1

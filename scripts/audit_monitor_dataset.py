@@ -11,6 +11,7 @@ import pandas as pd
 
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
+from avalanche.experiments.protocols import canonical_artifact_sha256
 from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     STRANDING_MASK,
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
                 "attack_tier",
                 "controller_kind",
                 "root_id",
+                "development_manifest_sha256",
                 "resolved_config_checksum",
             )
         )
@@ -73,16 +75,9 @@ def main(argv: list[str] | None = None) -> int:
         columns=columns,
         filters=[("root_id", "in", validation_roots)],
     )
+    _require_root_split(train, validation, development)
     if train.empty or validation.empty:
         raise ValueError("the shortcut audit needs training and validation rows")
-    if set(train["root_id"]) != set(train_roots):
-        raise ValueError("the shortcut audit misses a training root")
-    if set(validation["root_id"]) != set(validation_roots):
-        raise ValueError("the shortcut audit misses a validation root")
-    if set(train["resolved_config_checksum"]) & set(
-        validation["resolved_config_checksum"]
-    ):
-        raise ValueError("a resolved configuration crosses the root split")
     common = {
         **checksums,
         "development_manifest_sha256": _sha256(DEVELOPMENT_MANIFEST),
@@ -124,6 +119,30 @@ def main(argv: list[str] | None = None) -> int:
         profile_dir.joinpath("shortcut-audit.json").replace(target)
     print(f"Wrote all approved shortcut audits to {args.output}")
     return 0
+
+
+def _require_root_split(
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+    development: dict,
+) -> None:
+    """Validate the authoritative root split after a filtered read."""
+    roots = development["roots"]
+    train_roots = {record["root_id"] for record in roots["training"]}
+    validation_roots = {record["root_id"] for record in roots["validation"]}
+    if set(train["root_id"]) != train_roots:
+        raise ValueError("the shortcut audit misses a training root")
+    if set(validation["root_id"]) != validation_roots:
+        raise ValueError("the shortcut audit misses a validation root")
+    expected_manifest_sha256 = canonical_artifact_sha256(development)
+    if set(train["development_manifest_sha256"]) != {expected_manifest_sha256}:
+        raise ValueError("the shortcut audit uses another development manifest")
+    if set(validation["development_manifest_sha256"]) != {expected_manifest_sha256}:
+        raise ValueError("the shortcut audit uses another development manifest")
+    if set(train["resolved_config_checksum"]) & set(
+        validation["resolved_config_checksum"]
+    ):
+        raise ValueError("a resolved configuration crosses the root split")
 
 
 def _sha256(path: Path) -> str:

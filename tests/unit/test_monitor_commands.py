@@ -4,12 +4,14 @@ import json
 import runpy
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from avalanche.control import InformationProfile
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATION = runpy.run_path(str(ROOT / "scripts" / "generate_monitor_dataset.py"))
+AUDIT = runpy.run_path(str(ROOT / "scripts" / "audit_monitor_dataset.py"))
 TRAINING = runpy.run_path(str(ROOT / "scripts" / "train_monitor.py"))
 FINAL_EVALUATION = runpy.run_path(str(ROOT / "scripts" / "run_final_evaluation.py"))
 
@@ -53,6 +55,33 @@ def test_monitor_commands_can_disable_the_live_report():
 
     assert generation.no_progress
     assert training.no_progress
+
+
+def test_shortcut_audit_rejects_rows_from_another_manifest():
+    development = {
+        "roots": {
+            "training": [{"root_id": "training-root"}],
+            "validation": [{"root_id": "validation-root"}],
+        }
+    }
+    digest = AUDIT["canonical_artifact_sha256"](development)
+    train = pd.DataFrame(
+        {
+            "root_id": ["training-root"],
+            "development_manifest_sha256": [digest],
+            "resolved_config_checksum": ["1" * 64],
+        }
+    )
+    validation = pd.DataFrame(
+        {
+            "root_id": ["validation-root"],
+            "development_manifest_sha256": ["f" * 64],
+            "resolved_config_checksum": ["2" * 64],
+        }
+    )
+
+    with pytest.raises(ValueError, match="another development manifest"):
+        AUDIT["_require_root_split"](train, validation, development)
 
 
 def test_final_evaluation_requires_three_content_addressed_references(tmp_path):
