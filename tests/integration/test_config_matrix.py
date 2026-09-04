@@ -108,7 +108,7 @@ def test_every_declared_training_composition_resolves(capsys):
     with capsys.disabled():
         print(f"\nThe training configuration matrix finished in {elapsed:.3f} seconds.")
 
-    assert elapsed < 30.0
+    assert elapsed / len(manifest["seeds"]) < 3.0
 
 
 def test_every_declared_attack_fixture_resolves():

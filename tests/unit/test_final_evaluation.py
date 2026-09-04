@@ -192,7 +192,7 @@ def final_records(seed_count: int = 2) -> pd.DataFrame:
                         "information_profile": (
                             profile.replace("-", "_")
                             if profile.startswith("oracle-")
-                            else "principal"
+                            else "principal-full"
                         ),
                         "feature_blocks": [],
                         "attack_kind": attack,
@@ -410,11 +410,11 @@ def model_lock(tmp_path, name, information_profile):
 def model_locks(tmp_path):
     return {
         "principal": model_lock(tmp_path, "model", "principal"),
-        "oracle-fallback": model_lock(
-            tmp_path, "oracle-fallback-model", "oracle_fallback"
+        "fallback_oracle": model_lock(
+            tmp_path, "oracle-fallback-model", "fallback_oracle"
         ),
-        "oracle-true-state": model_lock(
-            tmp_path, "oracle-true-state-model", "oracle_true_state"
+        "true_state_oracle": model_lock(
+            tmp_path, "oracle-true-state-model", "true_state_oracle"
         ),
     }
 
@@ -1315,29 +1315,29 @@ def test_fallback_and_true_state_profiles_are_oracle_results():
     labels = {
         cell["feature_profile"]: cell["oracle_result"] for cell in result["cells"]
     }
-    assert labels["oracle-fallback"]
-    assert labels["oracle-true-state"]
-    assert not labels["principal"]
+    assert labels["fallback_oracle"]
+    assert labels["true_state_oracle"]
+    assert not labels["principal-full"]
 
 
 def test_each_ablation_uses_its_declared_feature_blocks():
     row_count = 2
-    principal_names = evaluation_feature_names("principal")
+    principal_names = evaluation_feature_names("principal-full")
     frame = pd.DataFrame(
         {name: np.ones(row_count, dtype=np.float32) for name in principal_names}
     )
-    actions = principal_ablation_matrix(frame, "action-only")
-    action_names = evaluation_feature_names("action-only")
+    actions = principal_ablation_matrix(frame, "proposal-only")
+    action_names = evaluation_feature_names("proposal-only")
     assert action_names
     assert all(name.startswith("action_") for name in action_names)
     assert np.count_nonzero(actions) == row_count * len(action_names)
     assert any(
-        name.startswith("oracle_fallback_")
-        for name in evaluation_feature_names("oracle-fallback")
+        name.startswith("fallback_oracle_")
+        for name in evaluation_feature_names("fallback_oracle")
     )
     assert any(
-        name.startswith("oracle_true_")
-        for name in evaluation_feature_names("oracle-true-state")
+        name.startswith("true_state_oracle_")
+        for name in evaluation_feature_names("true_state_oracle")
     )
 
 
@@ -1386,7 +1386,7 @@ def test_censored_attack_delays_stay_out_of_bootstrap_inputs():
     rows = final_records()
     first = rows[
         (rows["pair_role"] == "attack")
-        & (rows["feature_profile"] == "principal")
+        & (rows["feature_profile"] == "principal-full")
         & (rows["attack_kind"] == "profit_biased")
         & (rows["attack_tier"] == "overt")
         & (rows["root_seed"] == 1000)
@@ -1405,7 +1405,7 @@ def test_censored_attack_delays_stay_out_of_bootstrap_inputs():
     metrics = next(
         cell["metrics"]
         for cell in result["cells"]
-        if cell["feature_profile"] == "principal"
+        if cell["feature_profile"] == "principal-full"
         and cell["attack_kind"] == "profit_biased"
         and cell["attack_tier"] == "overt"
     )

@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import subprocess
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -62,8 +63,11 @@ from avalanche.controllers.honest import HONEST_POLICY_VERSION
 from avalanche.env import build_resolved_environment
 from avalanche.monitors.features import (
     FEATURE_VERSION,
+    MASTER_FEATURE_REGISTRY,
     FeatureExtractor,
+    FeatureProfile,
     feature_names_for,
+    feature_registry_for,
 )
 from avalanche.monitors.outcome import AllowMonitor
 from avalanche.monitors.rules import RuleMonitor
@@ -79,9 +83,12 @@ EXECUTED_ACTIVATION = "executed_activation"
 LABEL_SCHEMA_VERSION = 2
 STRANDING_LABEL = "stranding_in_horizon"
 STRANDING_MASK = "stranding_label_known"
-DATASET_VERSION = 7
+DATASET_VERSION = 5
 LEGACY_DATASET_FIXTURE_VERSION = 4
 LEGACY_DATASET_FEATURE_VERSION = 2
+LABEL_SCHEMA_SHA256 = hashlib.sha256(
+    (REPO_ROOT / "protocols/development/monitor-labels-v2.json").read_bytes()
+).hexdigest()
 OBSOLETE_FORMAL_DATASET_FIELDS = frozenset(
     {
         "harm_in_horizon",
@@ -93,8 +100,8 @@ OBSOLETE_FORMAL_DATASET_FIELDS = frozenset(
 )
 DATASET_CHECKSUM_NAMES = (
     "dataset_sha256",
-    "manifest_sha256",
-    "summary_sha256",
+    "dataset_manifest_sha256",
+    "dataset_summary_sha256",
 )
 SENSOR_PROVENANCE_FIELDS = frozenset(
     {
@@ -301,6 +308,12 @@ class RecordingMonitor:
         evidence = observation.operational_evidence
         row.update(
             {
+                "feature_profile": self.extractor.feature_profile.value,
+                "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+                "profile_feature_registry_sha256": feature_registry_for(
+                    self.extractor.feature_profile
+                ).sha256,
+                "label_schema_sha256": LABEL_SCHEMA_SHA256,
                 "operational_evidence_schema_version": evidence.schema_version,
                 "control_interval_seconds": (evidence.packet.control_interval_seconds),
                 "sensor_packet_identity": evidence.packet_identity,
@@ -456,10 +469,88 @@ class LabelSelection:
     removed_rows: int
 
 
+class DatasetSummary:
+    """Accumulate dataset checks without retaining generated frames."""
+
+    def __init__(self, profile: InformationProfile) -> None:
+        self.profile = profile
+        self.row_count = 0
+        self.attack_labels = 0
+        self.known_stranding_labels = 0
+        self.positive_stranding_labels = 0
+        self.counts = {
+            name: Counter()
+            for name in (
+                "split",
+                "pair_role",
+                "policy_variant",
+                "attack_kind",
+                "attack_strength",
+            )
+        }
+        self.pairs: dict[str, tuple[str, set[str]]] = {}
+        self.run_roots: dict[str, str] = {}
+        self.development_manifest_sha256: str | None = None
+
+    def add(self, frame: pd.DataFrame) -> None:
+        """Validate and add one complete episode frame."""
+        require_current_formal_dataset_rows(
+            frame,
+            name="generated",
+            require_complete_pairs=False,
+        )
+        if set(frame["information_profile"]) != {self.profile.value}:
+            raise ValueError("the generated rows have an invalid information profile")
+        expected_features = set(feature_names_for(self.profile))
+        if not expected_features <= set(frame):
+            raise ValueError("the generated rows miss a declared feature")
+        for (pair_id, role), member in frame.groupby(
+            ["pair_id", "pair_role"],
+            sort=False,
+        ):
+            _require_pair_member_context(member, "generated")
+            checksum = str(member["pair_context_checksum"].iloc[0])
+            previous = self.pairs.get(str(pair_id))
+            if previous is None:
+                self.pairs[str(pair_id)] = (checksum, {str(role)})
+            else:
+                previous_checksum, roles = previous
+                if previous_checksum != checksum:
+                    raise ValueError(
+                        f"the generated pair {pair_id} changes its pair context"
+                    )
+                roles.add(str(role))
+        manifest_digest = str(frame["development_manifest_sha256"].iloc[0])
+        if self.development_manifest_sha256 not in (None, manifest_digest):
+            raise ValueError("the generated rows change the development manifest")
+        self.development_manifest_sha256 = manifest_digest
+        for run_identity, rows in frame.groupby("run_id", sort=False):
+            root_id = str(rows["root_id"].iloc[0])
+            previous_root = self.run_roots.setdefault(str(run_identity), root_id)
+            if previous_root != root_id:
+                raise ValueError("the generated rows change root inside one run")
+        self.row_count += len(frame)
+        self.attack_labels += int(frame[ATTACK_LABEL].sum())
+        known = frame[STRANDING_MASK] == 1
+        self.known_stranding_labels += int(known.sum())
+        self.positive_stranding_labels += int(frame.loc[known, STRANDING_LABEL].sum())
+        for name, counter in self.counts.items():
+            counter.update(frame[name].tolist())
+
+    def finish(self) -> None:
+        """Reject incomplete pairs after the final episode."""
+        if self.row_count == 0:
+            raise ValueError("the dataset entry subset must not be empty")
+        for pair_id, (_, roles) in self.pairs.items():
+            if roles != {"honest", "attack"}:
+                raise ValueError(f"the generated pair {pair_id} is incomplete")
+
+
 def require_current_formal_dataset_rows(
     frame: pd.DataFrame,
     *,
     name: str,
+    require_complete_pairs: bool = True,
 ) -> None:
     """Reject rows outside the current formal dataset schema."""
     from avalanche.experiments.protocols import PAIR_CONTEXT_FIELDS
@@ -472,6 +563,10 @@ def require_current_formal_dataset_rows(
         "dataset_version",
         "label_schema_version",
         "feature_version",
+        "feature_profile",
+        "master_feature_registry_sha256",
+        "profile_feature_registry_sha256",
+        "label_schema_sha256",
         "operational_evidence_schema_version",
         "control_interval_seconds",
         "simulation_time",
@@ -503,12 +598,25 @@ def require_current_formal_dataset_rows(
         raise ValueError(f"the {name} rows have an invalid label schema version")
     if set(frame["feature_version"]) != {FEATURE_VERSION}:
         raise ValueError(f"the {name} rows have an invalid feature version")
+    if set(frame["feature_profile"]) != {FeatureProfile.PRINCIPAL_FULL.value}:
+        raise ValueError(f"the {name} rows have an invalid feature profile")
+    expected_registry_digests = {
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
+    }
+    for column, expected in expected_registry_digests.items():
+        if set(frame[column]) != {expected}:
+            raise ValueError(f"the {name} rows have an invalid {column}")
     for column in (ATTACK_LABEL, EXECUTED_ACTIVATION):
         if frame[column].isna().any() or not frame[column].isin((0, 1)).all():
             raise ValueError(f"the {name} rows have an invalid {column}")
     if (frame[EXECUTED_ACTIVATION] > frame[ATTACK_LABEL]).any():
         raise ValueError(f"the {name} rows activate an unlabelled proposal")
-    _require_pair_contexts(frame, name)
+    if require_complete_pairs:
+        _require_pair_contexts(frame, name)
     _require_development_manifest_provenance(frame, name)
     if set(frame["operational_evidence_schema_version"]) != {
         OBSERVATION_SCHEMA_VERSION
@@ -547,8 +655,6 @@ def _require_development_manifest_provenance(frame: pd.DataFrame, name: str) -> 
 
 def _require_pair_contexts(frame: pd.DataFrame, name: str) -> None:
     """Reject incomplete or inconsistent formal pair contexts."""
-    from avalanche.experiments.protocols import PAIR_CONTEXT_FIELDS, PairContext
-
     valid_pair_ids = frame["pair_id"].map(
         lambda value: isinstance(value, str) and bool(value)
     )
@@ -557,25 +663,37 @@ def _require_pair_contexts(frame: pd.DataFrame, name: str) -> None:
     for pair_id, rows in frame.groupby("pair_id", sort=False):
         if set(rows["pair_role"]) != {"honest", "attack"}:
             raise ValueError(f"the {name} pair {pair_id} is incomplete")
-        if any(rows[field].nunique(dropna=False) != 1 for field in PAIR_CONTEXT_FIELDS):
-            raise ValueError(f"the {name} pair {pair_id} changes its pair context")
-        context = PairContext.from_mapping(rows.iloc[0])
-        if not rows["pair_context_checksum"].eq(context.pair_context_sha256).all():
-            raise ValueError(
-                f"the {name} pair {pair_id} has an invalid pair context checksum"
-            )
-        if not rows["seed"].eq(context.root_seed).all():
-            raise ValueError(f"the {name} pair {pair_id} changes its root seed")
-        expected_digests = {
-            "honest": context.honest_resolved_configuration_sha256,
-            "attack": context.attack_resolved_configuration_sha256,
-        }
-        for role, expected in expected_digests.items():
-            member_rows = rows.loc[rows["pair_role"] == role]
-            if not member_rows["resolved_config_checksum"].eq(expected).all():
-                raise ValueError(
-                    f"the {name} pair {pair_id} changes its resolved config digest"
-                )
+        for _, member_rows in rows.groupby("pair_role", sort=False):
+            _require_pair_member_context(member_rows, name)
+
+
+def _require_pair_member_context(frame: pd.DataFrame, name: str) -> None:
+    """Validate one pair member without requiring its counterpart."""
+    from avalanche.experiments.protocols import PAIR_CONTEXT_FIELDS, PairContext
+
+    pair_ids = set(frame["pair_id"])
+    roles = set(frame["pair_role"])
+    if len(pair_ids) != 1 or len(roles) != 1:
+        raise ValueError(f"the {name} rows mix pair members")
+    pair_id = next(iter(pair_ids))
+    if any(frame[field].nunique(dropna=False) != 1 for field in PAIR_CONTEXT_FIELDS):
+        raise ValueError(f"the {name} pair {pair_id} changes its pair context")
+    context = PairContext.from_mapping(frame.iloc[0])
+    if not frame["pair_context_checksum"].eq(context.pair_context_sha256).all():
+        raise ValueError(
+            f"the {name} pair {pair_id} has an invalid pair context checksum"
+        )
+    if not frame["seed"].eq(context.root_seed).all():
+        raise ValueError(f"the {name} pair {pair_id} changes its root seed")
+    role = next(iter(roles))
+    expected = {
+        "honest": context.honest_resolved_configuration_sha256,
+        "attack": context.attack_resolved_configuration_sha256,
+    }.get(role)
+    if expected is None or not frame["resolved_config_checksum"].eq(expected).all():
+        raise ValueError(
+            f"the {name} pair {pair_id} changes its resolved config digest"
+        )
 
 
 def _require_operational_provenance(frame: pd.DataFrame, name: str) -> None:
@@ -1284,35 +1402,33 @@ def reference_controller(resolved: ResolvedConfig) -> ControllerConfig:
     )
 
 
-def resolve_entry(entry: DatasetEntry) -> ResolvedConfig:
+def resolve_entry(
+    entry: DatasetEntry,
+    *,
+    resolver: ConfigurationResolver | None = None,
+) -> ResolvedConfig:
     """Resolve one matrix entry into an immutable run configuration."""
     if len(entry.config_paths) != 4:
         raise ValueError("a dataset entry must select four configuration components")
     mountain, scenario, controller, monitor = entry.config_paths
-    resolved = ConfigurationResolver().resolve(
+    selected_resolver = resolver or ConfigurationResolver()
+    resolved = selected_resolver.resolve(
         mountain,
         scenario,
         controller,
         monitor,
         entry.override_path,
     )
-    if resolved.seed != entry.seed:
-        raise ValueError("the formal override has the wrong dataset seed")
-    if (
-        entry.policy_variant is not None
-        and resolved.controller.policy_variant != entry.policy_variant
-    ):
-        raise ValueError("the controller component has the wrong policy variant")
-    attack = resolved.controller.attack
-    if attack is not None and attack.action_budget.strength != entry.attack_strength:
-        raise ValueError("the controller component has the wrong attack strength")
+    _validate_resolved_entry(entry, resolved)
     return resolved
 
 
 def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     """Expand explicit honest and attack pairs from the declared axes."""
     if int(manifest.get("dataset_version", 0)) != DATASET_VERSION:
-        raise ValueError(f"the dataset manifest must use version {DATASET_VERSION}")
+        raise ValueError(
+            f"the dataset generation configuration must use version {DATASET_VERSION}"
+        )
     _stranding_horizon(manifest)
     strengths = [float(value) for value in manifest.get("attack_strengths", ())]
     variants = _required_axis(manifest, "policy_variants")
@@ -1763,7 +1879,11 @@ def generate_dataset_entries(
         profile=profile.value,
     )
     try:
-        selected = resolve_dataset_entries(entries)
+        selected = resolve_dataset_entries(
+            entries,
+            emitter=emitter,
+            stage_id=stage,
+        )
     except Exception as error:
         _emit_metric(
             emitter,
@@ -1787,12 +1907,53 @@ def generate_dataset_entries(
 
 def resolve_dataset_entries(
     entries: Sequence[DatasetEntry],
+    *,
+    emitter: MetricEmitter | None = None,
+    stage_id: str = "",
 ) -> tuple[ResolvedDatasetEntry, ...]:
     """Resolve every dataset entry before execution starts."""
-    selected = tuple(
-        ResolvedDatasetEntry(entry, resolve_entry(entry)) for entry in entries
-    )
-    return _bind_pair_contexts(selected)
+    resolver = ConfigurationResolver()
+    cache: dict[tuple[tuple[str, ...], str], ResolvedConfig] = {}
+    selected = []
+    started = perf_counter()
+    total = len(entries)
+    for index, entry in enumerate(entries, start=1):
+        key = (entry.config_paths, entry.override_path)
+        resolved = cache.get(key)
+        if resolved is None:
+            resolved = resolve_entry(entry, resolver=resolver)
+            cache[key] = resolved
+        else:
+            _validate_resolved_entry(entry, resolved)
+        selected.append(ResolvedDatasetEntry(entry, resolved))
+        if emitter is not None and (index == total or index % 32 == 0):
+            elapsed = perf_counter() - started
+            _emit_metric(
+                emitter,
+                "stage_progress",
+                stage_id,
+                phase="resolving configurations",
+                completed_episodes=index,
+                total_episodes=total,
+                unique_configurations=len(cache),
+                episodes_per_second=index / max(elapsed, 1e-12),
+                eta_seconds=(elapsed / index) * (total - index),
+            )
+    return _bind_pair_contexts(tuple(selected))
+
+
+def _validate_resolved_entry(entry: DatasetEntry, resolved: ResolvedConfig) -> None:
+    """Validate one entry against a cached resolved configuration."""
+    if resolved.seed != entry.seed:
+        raise ValueError("the formal override has the wrong dataset seed")
+    if (
+        entry.policy_variant is not None
+        and resolved.controller.policy_variant != entry.policy_variant
+    ):
+        raise ValueError("the controller component has the wrong policy variant")
+    attack = resolved.controller.attack
+    if attack is not None and attack.action_budget.strength != entry.attack_strength:
+        raise ValueError("the controller component has the wrong attack strength")
 
 
 def generate_resolved_dataset_entries(
@@ -1829,40 +1990,65 @@ def generate_resolved_dataset_entries(
         rejected=0,
         failures=0,
     )
+    _emit_metric(
+        emitter,
+        "stage_progress",
+        stage,
+        phase="generating",
+        completed_episodes=0,
+        rows=0,
+    )
     phase = "generating"
     writer = BufferedParquetWriter(
         output_path,
         on_progress=_parquet_progress_callback(emitter, stage),
     )
+    summary = DatasetSummary(profile)
+    write_frame = _parquet_frame_callback(writer, emitter, stage)
+
+    def accept_frame(frame: pd.DataFrame) -> None:
+        """Validate, summarize, and write one generated episode."""
+        summary.add(frame)
+        write_frame(frame)
+
     try:
-        frames = _run_entries(
+        _run_entries(
             selected,
             horizon,
             profile,
             emitter=emitter,
             stage_id=stage,
-            on_frame=_parquet_frame_callback(writer, emitter, stage),
+            on_frame=accept_frame,
+            retain_frames=False,
         )
-        if not frames:
-            raise ValueError("the dataset entry subset must not be empty")
+        summary.finish()
         phase = "finalizing_parquet"
         _emit_metric(emitter, "stage_phase", stage, phase=phase)
         writer.close()
         phase = "summarizing"
         _emit_metric(emitter, "stage_phase", stage, phase=phase)
-        frame = pd.concat(frames, ignore_index=True)
         _write_manifest_summary(
-            frame,
+            summary,
             selected,
             output_path,
             manifest_path,
             manifest,
             profile,
         )
-        _write_fixture_metadata(frame, entries, output_path, manifest_path, profile)
+        _write_fixture_metadata(
+            summary.row_count,
+            entries,
+            output_path,
+            manifest_path,
+            profile,
+        )
         phase = "validating"
         _emit_metric(emitter, "stage_phase", stage, phase=phase)
-        validate_generated_dataset(output_path, frame, profile)
+        _validate_generated_dataset_artifacts(
+            output_path,
+            profile,
+            row_count=summary.row_count,
+        )
     except Exception as error:
         writer.abort()
         if phase != "generating":
@@ -1889,12 +2075,12 @@ def generate_resolved_dataset_entries(
         "stage_completed",
         stage,
         phase="complete",
-        episodes=len(frames),
-        rows=len(frame),
+        episodes=len(selected),
+        rows=summary.row_count,
         expected_rows=expected_rows,
         output_bytes=output_path.stat().st_size,
         output_path=str(output_path),
-        **_generation_semantic_summary(profile, len(frame)),
+        **_generation_semantic_summary(profile, summary.row_count),
     )
     return output_path
 
@@ -1907,17 +2093,21 @@ def _run_entries(
     emitter: MetricEmitter | None = None,
     stage_id: str = "",
     on_frame: Callable[[pd.DataFrame], None] | None = None,
+    retain_frames: bool = True,
 ) -> list[pd.DataFrame]:
     """Run each entry, in one process or in a pool."""
     profile = InformationProfile(information_profile)
     if emitter is not None and not stage_id:
         stage_id = _generation_stage_id(profile)
     workers = _worker_count(entries)
+    groups = _simulation_groups(entries)
+    representatives = tuple(group[0] for group in groups)
     results: Iterable[pd.DataFrame]
     if workers <= 1:
         if emitter is None:
             results = (
-                _run_resolved_entry(entry, horizon, profile) for entry in entries
+                _run_resolved_entry(entry, horizon, profile)
+                for entry in representatives
             )
         else:
             results = (
@@ -1928,41 +2118,144 @@ def _run_entries(
                     emitter,
                     stage_id,
                 )
-                for entry in entries
+                for entry in representatives
             )
-        return _collect_frames(results, on_frame)
+        return _collect_frames(
+            results,
+            groups,
+            on_frame,
+            retain_frames=retain_frames,
+            emitter=emitter,
+            stage_id=stage_id,
+            profile=profile,
+        )
     # ponytail: a plain pool. The sweep executor of the next stage supersedes it.
     with ProcessPoolExecutor(max_workers=workers) as pool:
         if emitter is None:
             results = pool.map(
                 _run_resolved_entry,
-                entries,
-                [horizon] * len(entries),
-                [profile] * len(entries),
+                representatives,
+                [horizon] * len(representatives),
+                [profile] * len(representatives),
             )
         else:
             results = pool.map(
                 _run_resolved_entry_observed,
-                entries,
-                [horizon] * len(entries),
-                [profile] * len(entries),
-                [emitter] * len(entries),
-                [stage_id] * len(entries),
+                representatives,
+                [horizon] * len(representatives),
+                [profile] * len(representatives),
+                [emitter] * len(representatives),
+                [stage_id] * len(representatives),
             )
-        return _collect_frames(results, on_frame)
+        return _collect_frames(
+            results,
+            groups,
+            on_frame,
+            retain_frames=retain_frames,
+            emitter=emitter,
+            stage_id=stage_id,
+            profile=profile,
+        )
 
 
 def _collect_frames(
     results: Iterable[pd.DataFrame],
+    groups: Sequence[Sequence[ResolvedDatasetEntry]],
     on_frame: Callable[[pd.DataFrame], None] | None,
+    *,
+    retain_frames: bool,
+    emitter: MetricEmitter | None,
+    stage_id: str,
+    profile: InformationProfile,
 ) -> list[pd.DataFrame]:
-    """Keep each ordered frame and notify the parent writer."""
+    """Expand reusable honest frames and notify the parent writer."""
     frames = []
-    for frame in results:
-        if on_frame is not None:
-            on_frame(frame)
-        frames.append(frame)
+    for source, group in zip(results, groups, strict=True):
+        for index, selected in enumerate(group):
+            frame = source if index == 0 else _rebind_honest_frame(source, selected)
+            if on_frame is not None:
+                on_frame(frame)
+            if retain_frames:
+                frames.append(frame)
+        reused = len(group) - 1
+        if reused:
+            _emit_metric(
+                emitter,
+                "episode_completed",
+                stage_id,
+                count=reused,
+                rows=reused * len(source),
+                phase="reused",
+            )
+            _emit_profile_counts(
+                emitter,
+                stage_id,
+                profile,
+                reused * len(source),
+                "reuse",
+            )
     return frames
+
+
+def _simulation_groups(
+    entries: Sequence[ResolvedDatasetEntry],
+) -> tuple[tuple[ResolvedDatasetEntry, ...], ...]:
+    """Group equal honest scientific episodes for one execution."""
+    groups: list[list[ResolvedDatasetEntry]] = []
+    honest_groups: dict[str, list[ResolvedDatasetEntry]] = {}
+    for selected in entries:
+        if selected.entry.pair_role != "honest":
+            groups.append([selected])
+            continue
+        key = _resolved_checksum(selected.resolved)
+        group = honest_groups.get(key)
+        if group is None:
+            group = [selected]
+            honest_groups[key] = group
+            groups.append(group)
+        else:
+            group.append(selected)
+    return tuple(tuple(group) for group in groups)
+
+
+def _rebind_honest_frame(
+    source: pd.DataFrame,
+    selected: ResolvedDatasetEntry,
+) -> pd.DataFrame:
+    """Bind one immutable honest result to another pair context."""
+    if selected.entry.pair_role != "honest" or selected.resolved.controller.attack:
+        raise ValueError("only an honest episode can reuse a scientific result")
+    frame = source.copy(deep=True)
+    entry = selected.entry
+    values = {
+        "run_id": _entry_identity(selected),
+        "scenario_family": entry.scenario_family,
+        "controller_kind": entry.controller_kind,
+        "mountain": entry.mountain,
+        "attack_strength": entry.attack_strength or 0.0,
+        "seed": entry.seed,
+        "pair_id": entry.pair_id,
+        "pair_role": entry.pair_role,
+        "split": entry.split or _family_split(entry.scenario_family),
+        "policy_variant": entry.policy_variant or "not-applicable",
+        "attack_kind": entry.attack_kind,
+        "attack_tier": entry.attack_tier,
+        "holdout_reasons": ",".join(entry.holdout_reasons),
+        "resolved_config_checksum": _resolved_checksum(selected.resolved),
+        "pair_context_checksum": (
+            pair_context_checksum(entry, resolved=selected.resolved)
+            if selected.pair_context is None
+            else selected.pair_context.pair_context_sha256
+        ),
+        "root_id": entry.root_id,
+        "development_manifest_sha256": entry.development_manifest_sha256,
+        "manifest_cell_sha256": entry.manifest_cell_sha256,
+    }
+    if selected.pair_context is not None:
+        values.update(selected.pair_context.as_dict())
+    for name, value in values.items():
+        frame[name] = value
+    return frame
 
 
 def _worker_count(entries: Sequence[ResolvedDatasetEntry]) -> int:
@@ -2085,6 +2378,7 @@ def _bind_pair_contexts(
         if selected.entry.pair_id:
             groups.setdefault(selected.entry.pair_id, []).append(selected)
     contexts: dict[str, PairContext] = {}
+    code_revision = _code_revision()
     for pair_id, group in groups.items():
         by_role = {selected.entry.pair_role: selected for selected in group}
         if len(group) != 2 or set(by_role) != {"honest", "attack"}:
@@ -2102,7 +2396,7 @@ def _bind_pair_contexts(
         contexts[pair_id] = build_pair_context(
             honest,
             attack,
-            code_revision=_code_revision(),
+            code_revision=code_revision,
             artifact_sha256=artifact_sha256,
         )
     return tuple(
@@ -2138,7 +2432,7 @@ def _resolved_checksum(resolved: ResolvedConfig) -> str:
 
 
 def _write_manifest_summary(
-    frame: pd.DataFrame,
+    statistics: DatasetSummary,
     selected: Sequence[ResolvedDatasetEntry],
     output_path: Path,
     source_path: Path,
@@ -2164,19 +2458,23 @@ def _write_manifest_summary(
                 ),
             }
         )
-    known_stranding = frame.loc[frame[STRANDING_MASK] == 1, STRANDING_LABEL]
     summary = {
         "dataset_version": DATASET_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
         "feature_names": list(feature_names_for(information_profile)),
         "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
         "policy_version": HONEST_POLICY_VERSION,
         "observation_version": OBSERVATION_SCHEMA_VERSION,
         "proposal_version": 1,
         "audit_version": AUDIT_SCHEMA_VERSION,
         "route_sensor_version": ROUTE_SENSOR_SCHEMA_VERSION,
         "information_profile": information_profile.value,
-        "row_count": int(len(frame)),
+        "row_count": statistics.row_count,
         "run_count": len(entries),
         "pair_count": len({entry.pair_id for entry in entries}),
         "families": sorted({entry.scenario_family for entry in entries}),
@@ -2190,24 +2488,22 @@ def _write_manifest_summary(
                 if entry.attack_strength is not None
             }
         ),
-        "attack_rate": float(frame[ATTACK_LABEL].mean()),
+        "attack_rate": statistics.attack_labels / statistics.row_count,
         "stranding_rate": (
-            float(known_stranding.mean()) if len(known_stranding) else None
+            statistics.positive_stranding_labels / statistics.known_stranding_labels
+            if statistics.known_stranding_labels
+            else None
         ),
         "row_counts": {
-            "by_split": frame.groupby("split", dropna=False).size().to_dict(),
-            "by_pair_role": frame.groupby("pair_role", dropna=False).size().to_dict(),
-            "by_policy_variant": frame.groupby("policy_variant", dropna=False)
-            .size()
-            .to_dict(),
-            "known_stranding_labels": int(frame[STRANDING_MASK].sum()),
-            "unknown_stranding_labels": int((frame[STRANDING_MASK] == 0).sum()),
-            "by_attack_kind": frame.groupby("attack_kind", dropna=False)
-            .size()
-            .to_dict(),
-            "by_attack_strength": frame.groupby("attack_strength", dropna=False)
-            .size()
-            .to_dict(),
+            "by_split": dict(statistics.counts["split"]),
+            "by_pair_role": dict(statistics.counts["pair_role"]),
+            "by_policy_variant": dict(statistics.counts["policy_variant"]),
+            "known_stranding_labels": statistics.known_stranding_labels,
+            "unknown_stranding_labels": (
+                statistics.row_count - statistics.known_stranding_labels
+            ),
+            "by_attack_kind": dict(statistics.counts["attack_kind"]),
+            "by_attack_strength": dict(statistics.counts["attack_strength"]),
         },
         "checksums": {
             "dataset_sha256": _file_checksum(output_path),
@@ -2242,7 +2538,12 @@ def load_dataset_fixture(
     expected = {
         "dataset_version": DATASET_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
         "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(InformationProfile.PRINCIPAL)),
         "observation_version": OBSERVATION_SCHEMA_VERSION,
@@ -2320,27 +2621,11 @@ def validate_generated_dataset(
 ) -> dict[str, str]:
     """Validate the generated rows and their complete provenance."""
     profile = InformationProfile(information_profile)
-    manifest_path = dataset_path.with_suffix(".manifest.json")
-    summary_path = dataset_path.with_suffix(".summary.json")
-    manifest = _artifact_mapping(manifest_path, "dataset manifest")
-    summary = _artifact_mapping(summary_path, "dataset summary")
-    expected_features = list(feature_names_for(profile))
-    expected = {
-        "dataset_version": DATASET_VERSION,
-        "label_schema_version": LABEL_SCHEMA_VERSION,
-        "feature_version": FEATURE_VERSION,
-        "information_profile": profile.value,
-        "feature_names": expected_features,
-        "code_revision": _code_revision(),
-        "observation_version": OBSERVATION_SCHEMA_VERSION,
-        "audit_version": AUDIT_SCHEMA_VERSION,
-        "route_sensor_version": ROUTE_SENSOR_SCHEMA_VERSION,
-    }
-    for name, value in expected.items():
-        if summary.get(name) != value or manifest.get(name) != value:
-            raise ValueError(f"the generated dataset has an invalid {name}")
-    if int(summary.get("row_count", -1)) != len(frame):
-        raise ValueError("the generated dataset has an invalid row count")
+    checksums = _validate_generated_dataset_artifacts(
+        dataset_path,
+        profile,
+        row_count=len(frame),
+    )
     if frame.empty:
         raise ValueError("the generated dataset must contain rows")
     require_current_formal_dataset_rows(frame, name="generated")
@@ -2351,8 +2636,64 @@ def validate_generated_dataset(
         raise ValueError("the generated rows miss a declared label")
     if OBSOLETE_FORMAL_DATASET_FIELDS & set(frame):
         raise ValueError("the generated rows contain an obsolete harm field")
-    if not set(expected_features).issubset(frame.columns):
+    if not set(feature_names_for(profile)).issubset(frame.columns):
         raise ValueError("the generated rows miss a declared feature")
+    return checksums
+
+
+def validate_generated_dataset_file(
+    dataset_path: Path,
+    information_profile: InformationProfile | str,
+) -> dict[str, str]:
+    """Validate one generated dataset through bounded row batches."""
+    import pyarrow.parquet as parquet
+
+    profile = InformationProfile(information_profile)
+    statistics = DatasetSummary(profile)
+    source = parquet.ParquetFile(dataset_path)
+    for batch in source.iter_batches():
+        statistics.add(batch.to_pandas())
+    statistics.finish()
+    return _validate_generated_dataset_artifacts(
+        dataset_path,
+        profile,
+        row_count=statistics.row_count,
+    )
+
+
+def _validate_generated_dataset_artifacts(
+    dataset_path: Path,
+    profile: InformationProfile,
+    *,
+    row_count: int,
+) -> dict[str, str]:
+    """Validate generated artifacts after streamed row checks."""
+    manifest_path = dataset_path.with_suffix(".manifest.json")
+    summary_path = dataset_path.with_suffix(".summary.json")
+    manifest = _artifact_mapping(manifest_path, "dataset manifest")
+    summary = _artifact_mapping(summary_path, "dataset summary")
+    expected_features = list(feature_names_for(profile))
+    expected = {
+        "dataset_version": DATASET_VERSION,
+        "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
+        "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
+        "information_profile": profile.value,
+        "feature_names": expected_features,
+        "code_revision": _code_revision(),
+        "observation_version": OBSERVATION_SCHEMA_VERSION,
+        "audit_version": AUDIT_SCHEMA_VERSION,
+        "route_sensor_version": ROUTE_SENSOR_SCHEMA_VERSION,
+    }
+    for name, value in expected.items():
+        if summary.get(name) != value or manifest.get(name) != value:
+            raise ValueError(f"the generated dataset has an invalid {name}")
+    if int(summary.get("row_count", -1)) != row_count:
+        raise ValueError("the generated dataset has an invalid row count")
     checksums = generated_dataset_checksums(dataset_path)
     recorded_checksums = summary.get("checksums")
     if not isinstance(recorded_checksums, Mapping):
@@ -2367,8 +2708,8 @@ def generated_dataset_checksums(dataset_path: Path) -> dict[str, str]:
     """Return the three required generated dataset checksums."""
     paths = {
         "dataset_sha256": dataset_path,
-        "manifest_sha256": dataset_path.with_suffix(".manifest.json"),
-        "summary_sha256": dataset_path.with_suffix(".summary.json"),
+        "dataset_manifest_sha256": dataset_path.with_suffix(".manifest.json"),
+        "dataset_summary_sha256": dataset_path.with_suffix(".summary.json"),
     }
     return {name: _file_checksum(path) for name, path in paths.items()}
 
@@ -2408,7 +2749,7 @@ def _validate_resolved_runs(manifest: Mapping[str, Any], run_count: int) -> None
 
 
 def _write_fixture_metadata(
-    frame: pd.DataFrame,
+    row_count: int,
     entries: Sequence[DatasetEntry],
     output_path: Path,
     source_path: Path,
@@ -2419,7 +2760,12 @@ def _write_fixture_metadata(
     metadata = {
         "dataset_version": DATASET_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
+        "label_schema_sha256": LABEL_SCHEMA_SHA256,
         "feature_version": FEATURE_VERSION,
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
         "honest_policy_version": HONEST_POLICY_VERSION,
         "feature_names": list(feature_names_for(information_profile)),
         "observation_version": OBSERVATION_SCHEMA_VERSION,
@@ -2428,7 +2774,7 @@ def _write_fixture_metadata(
         "code_revision": _code_revision(),
         "generation_configuration": str(relative_source),
         "seeds": sorted({entry.seed for entry in entries}),
-        "row_count": int(len(frame)),
+        "row_count": row_count,
         "dataset_sha256": _file_checksum(output_path),
     }
     output_path.with_suffix(".metadata.json").write_text(

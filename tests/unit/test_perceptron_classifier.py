@@ -144,7 +144,7 @@ def test_the_loader_rejects_an_incompatible_profile(model, tmp_path):
     path = save_model(model, tmp_path / "monitor.pt")
 
     with pytest.raises(ValueError, match="information profile"):
-        load_model(path, expected_information_profile="oracle_true_state")
+        load_model(path, expected_information_profile="true_state_oracle")
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-from collections.abc import Collection
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -17,11 +16,42 @@ from avalanche.monitors.dataset import (
     STRANDING_MASK,
     require_current_formal_dataset_rows,
 )
-from avalanche.monitors.features import FEATURE_VERSION
+from avalanche.monitors.features import (
+    FEATURE_VERSION,
+    FeatureProfile,
+    FeatureRegistry,
+    feature_registry_for,
+)
 
-SHORTCUT_REPORT_VERSION = 2
+SHORTCUT_REPORT_VERSION = 3
 SHORTCUT_GATE = 0.80
 PERFECT_GATE = 0.99
+SHORTCUT_INPUT_DIGESTS = (
+    "dataset_sha256",
+    "dataset_manifest_sha256",
+    "dataset_summary_sha256",
+    "development_manifest_sha256",
+    "candidate_registry_sha256",
+    "master_feature_registry_sha256",
+    "profile_feature_registry_sha256",
+    "label_schema_sha256",
+)
+PROHIBITED_SOURCE_TOKENS = frozenset(
+    {
+        "attack",
+        "controller_id",
+        "decision",
+        "evaluator",
+        "executed_activation",
+        "fallback",
+        "harm",
+        "label",
+        "pair_role",
+        "risk",
+        "split",
+        "true_",
+    }
+)
 PROHIBITED_FEATURES = frozenset(
     {
         ATTACK_LABEL,
@@ -111,23 +141,16 @@ def fit_stumps(
     for feature in feature_names:
         train_values = train[feature].to_numpy(dtype=float)
         validation_values = validation[feature].to_numpy(dtype=float)
-        candidates = _thresholds(train_values)
-        choices = []
-        for threshold in candidates:
-            for direction in ("ge", "lt"):
-                predictions = _stump_predict(train_values, threshold, direction)
-                score = balanced_accuracy(train_labels, predictions)
-                choices.append((-score, threshold, direction))
-        _, threshold, direction = min(choices)
+        threshold, direction, train_score = _best_stump(
+            train_values,
+            train_labels,
+        )
         results.append(
             StumpResult(
                 feature=feature,
                 threshold=float(threshold),
                 direction=direction,
-                train_balanced_accuracy=balanced_accuracy(
-                    train_labels,
-                    _stump_predict(train_values, threshold, direction),
-                ),
+                train_balanced_accuracy=train_score,
                 validation_balanced_accuracy=balanced_accuracy(
                     validation_labels,
                     _stump_predict(validation_values, threshold, direction),
@@ -135,6 +158,36 @@ def fit_stumps(
             )
         )
     return tuple(results)
+
+
+def _best_stump(
+    values: np.ndarray,
+    labels: np.ndarray,
+) -> tuple[float, str, float]:
+    """Find one exact stump through sorted cumulative class counts."""
+    unique, inverse = np.unique(values, return_inverse=True)
+    thresholds = _thresholds(values)
+    negative = np.bincount(inverse, weights=labels == 0, minlength=len(unique))
+    positive = np.bincount(inverse, weights=labels == 1, minlength=len(unique))
+    negative_below = np.concatenate(([0.0], np.cumsum(negative)))
+    positive_below = np.concatenate(([0.0], np.cumsum(positive)))
+    negative_total = float(negative_below[-1])
+    positive_total = float(positive_below[-1])
+    class_count = int(negative_total > 0) + int(positive_total > 0)
+    choices = []
+    for index, threshold in enumerate(thresholds):
+        ge_score = 0.0
+        lt_score = 0.0
+        if negative_total:
+            ge_score += negative_below[index] / negative_total
+            lt_score += (negative_total - negative_below[index]) / negative_total
+        if positive_total:
+            ge_score += (positive_total - positive_below[index]) / positive_total
+            lt_score += positive_below[index] / positive_total
+        choices.append((-ge_score / class_count, threshold, "ge"))
+        choices.append((-lt_score / class_count, threshold, "lt"))
+    negative_score, threshold, direction = min(choices)
+    return float(threshold), direction, float(-negative_score)
 
 
 def fit_logistic_audit(
@@ -148,25 +201,28 @@ def fit_logistic_audit(
     penalty: float = 1e-3,
 ) -> LogisticResult:
     """Fit one deterministic logistic audit model on training rows."""
-    train_values = train.loc[:, list(feature_names)].to_numpy(dtype=float)
-    validation_values = validation.loc[:, list(feature_names)].to_numpy(dtype=float)
+    train_values = _feature_matrix(train, feature_names)
+    validation_values = _feature_matrix(validation, feature_names)
     labels = train[label].to_numpy(dtype=float)
     mean = train_values.mean(axis=0)
-    deviation = np.where(
-        train_values.std(axis=0) < 1e-12, 1.0, train_values.std(axis=0)
-    )
-    inputs = (train_values - mean) / deviation
-    evaluate_on = (validation_values - mean) / deviation
-    coefficients = np.zeros(inputs.shape[1], dtype=float)
+    standard_deviation = train_values.std(axis=0)
+    deviation = np.where(standard_deviation < 1e-12, 1.0, standard_deviation)
+    train_values -= mean
+    train_values /= deviation
+    validation_values -= mean
+    validation_values /= deviation
+    coefficients = np.zeros(train_values.shape[1], dtype=float)
     intercept = 0.0
     for _ in range(iterations):
-        scores = _sigmoid(inputs @ coefficients + intercept)
+        scores = _sigmoid(train_values @ coefficients + intercept)
         error = scores - labels
-        gradient = inputs.T @ error / len(inputs) + penalty * coefficients
+        gradient = train_values.T @ error / len(train_values) + penalty * coefficients
         intercept_gradient = float(np.mean(error))
         coefficients -= learning_rate * gradient
         intercept -= learning_rate * intercept_gradient
-    predictions = (_sigmoid(evaluate_on @ coefficients + intercept) >= 0.5).astype(int)
+    predictions = (
+        _sigmoid(validation_values @ coefficients + intercept) >= 0.5
+    ).astype(int)
     return LogisticResult(
         validation_balanced_accuracy=balanced_accuracy(
             validation[label].to_numpy(dtype=int), predictions
@@ -176,19 +232,37 @@ def fit_logistic_audit(
     )
 
 
+def _feature_matrix(
+    frame: pd.DataFrame,
+    feature_names: tuple[str, ...],
+) -> np.ndarray:
+    """Copy selected columns without one temporary pandas frame."""
+    values = np.empty((len(frame), len(feature_names)), dtype=float)
+    for index, name in enumerate(feature_names):
+        values[:, index] = frame[name].to_numpy(dtype=float, copy=False)
+    return values
+
+
 def run_shortcut_audit(
     train: pd.DataFrame,
     validation: pd.DataFrame,
     output_dir: Path,
     *,
     feature_names: tuple[str, ...],
-    accepted_justifications: dict[str, str] | None = None,
-    reviewed_perfect_separation: Collection[str] = (),
+    profile: FeatureProfile | str = FeatureProfile.PRINCIPAL_FULL,
+    feature_registry: FeatureRegistry | None = None,
     dataset_checksums: dict[str, str] | None = None,
+    _validated_rows: bool = False,
+    _stumps: tuple[StumpResult, ...] | None = None,
 ) -> dict[str, Any]:
     """Run every shortcut audit and write deterministic reports."""
-    require_current_formal_dataset_rows(train, name="training")
-    require_current_formal_dataset_rows(validation, name="validation")
+    if not _validated_rows:
+        require_current_formal_dataset_rows(train, name="training")
+        require_current_formal_dataset_rows(validation, name="validation")
+    selected_profile = FeatureProfile(profile)
+    registry = feature_registry or feature_registry_for(selected_profile)
+    _require_registry(registry, selected_profile, feature_names)
+    checksums = _require_input_digests(dataset_checksums)
     prohibited = sorted(set(feature_names) & PROHIBITED_FEATURES)
     privileged = sorted(
         name
@@ -201,28 +275,22 @@ def run_shortcut_audit(
             f"the shortcut audit prohibits these feature fields: {', '.join(fields)}"
         )
     _require_columns(train, validation, feature_names)
-    justifications = accepted_justifications or {}
-    stumps = fit_stumps(train, validation, feature_names)
+    stumps = _stumps or fit_stumps(train, validation, feature_names)
+    if tuple(result.feature for result in stumps) != feature_names:
+        raise ValueError("the fitted stumps do not match the feature registry")
     logistic = fit_logistic_audit(train, validation, feature_names)
     strong = sorted(
         result.feature
         for result in stumps
         if result.validation_balanced_accuracy > SHORTCUT_GATE
     )
-    unexplained = [name for name in strong if not justifications.get(name, "").strip()]
-    if (
-        logistic.validation_balanced_accuracy > SHORTCUT_GATE
-        and not justifications.get("__logistic__", "").strip()
-    ):
-        unexplained.append("__logistic__")
-    # A near-perfect feature needs a separate and explicit review.
-    # A written reason alone must not approve it.
-    reviewed = frozenset(reviewed_perfect_separation)
+    failures = list(strong)
+    if logistic.validation_balanced_accuracy > SHORTCUT_GATE:
+        failures.append("__logistic__")
     perfect = sorted(
         result.feature
         for result in stumps
         if result.validation_balanced_accuracy >= PERFECT_GATE
-        and result.feature not in reviewed
     )
     audits = _field_audits(train, validation, feature_names)
     report = {
@@ -230,9 +298,10 @@ def run_shortcut_audit(
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
         "information_profile": "principal",
+        "feature_profile": selected_profile.value,
         "gate_balanced_accuracy": SHORTCUT_GATE,
         "perfect_gate_balanced_accuracy": PERFECT_GATE,
-        "approved": not unexplained and not perfect,
+        "approved": not failures,
         "train_rows": int(len(train)),
         "validation_rows": int(len(validation)),
         "stumps": [asdict(result) for result in stumps],
@@ -241,16 +310,10 @@ def run_shortcut_audit(
             "feature_names": list(feature_names),
         },
         "strong_features": strong,
-        "accepted_justifications": {
-            name: justifications[name]
-            for name in sorted(justifications)
-            if justifications[name].strip()
-        },
-        "unexplained_separation": sorted(unexplained),
+        "shortcut_failures": sorted(failures),
         "perfect_separation": perfect,
-        "reviewed_perfect_separation": sorted(reviewed),
         "audits": audits,
-        "dataset_checksums": dict(sorted((dataset_checksums or {}).items())),
+        "input_digests": checksums,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     machine_path = output_dir / "shortcut-audit.json"
@@ -262,7 +325,12 @@ def run_shortcut_audit(
     return report
 
 
-def require_approved_shortcut_report(path: Path) -> dict[str, Any]:
+def require_approved_shortcut_report(
+    path: Path,
+    *,
+    expected_digests: dict[str, str] | None = None,
+    profile: FeatureProfile | str = FeatureProfile.PRINCIPAL_FULL,
+) -> dict[str, Any]:
     """Load one compatible approved shortcut report."""
     report = json.loads(path.read_text())
     expected = {
@@ -270,12 +338,82 @@ def require_approved_shortcut_report(path: Path) -> dict[str, Any]:
         "dataset_version": DATASET_VERSION,
         "feature_version": FEATURE_VERSION,
         "information_profile": "principal",
+        "feature_profile": FeatureProfile(profile).value,
         "approved": True,
     }
     for key, value in expected.items():
         if report.get(key) != value:
             raise ValueError("the shortcut report is missing or not approved")
+    registry = feature_registry_for(FeatureProfile(profile))
+    stumps = report.get("stumps")
+    logistic = report.get("logistic")
+    if not isinstance(stumps, list) or not isinstance(logistic, dict):
+        raise ValueError("the shortcut report has incomplete audit results")
+    stump_names = tuple(item.get("feature") for item in stumps)
+    logistic_names = tuple(logistic.get("feature_names", ()))
+    if stump_names != registry.names or logistic_names != registry.names:
+        raise ValueError("the shortcut report features do not match the registry")
+    failures = report.get("shortcut_failures")
+    if (
+        failures != []
+        or report.get("strong_features") != []
+        or report.get("perfect_separation") != []
+    ):
+        raise ValueError("the shortcut report contains a non-waivable failure")
+    gate = report.get("gate_balanced_accuracy")
+    stump_scores = [item.get("validation_balanced_accuracy") for item in stumps]
+    logistic_score = logistic.get("validation_balanced_accuracy")
+    if (
+        gate != SHORTCUT_GATE
+        or not all(isinstance(score, int | float) for score in stump_scores)
+        or not isinstance(logistic_score, int | float)
+        or any(score > gate for score in (*stump_scores, logistic_score))
+    ):
+        raise ValueError("the shortcut report contains a non-waivable failure")
+    report_digests = _require_input_digests(report.get("input_digests"))
+    if expected_digests is not None:
+        expected_values = _require_input_digests(expected_digests)
+        if report_digests != expected_values:
+            raise ValueError("the shortcut report input digests do not match")
     return report
+
+
+def _require_input_digests(values: dict[str, str] | None) -> dict[str, str]:
+    """Require all exact shortcut input digests."""
+    digests = dict(values or {})
+    if tuple(sorted(digests)) != tuple(sorted(SHORTCUT_INPUT_DIGESTS)):
+        raise ValueError("the shortcut report needs all eight input digests")
+    if any(
+        len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in digests.values()
+    ):
+        raise ValueError("a shortcut input digest is invalid")
+    return {name: digests[name] for name in SHORTCUT_INPUT_DIGESTS}
+
+
+def _require_registry(
+    registry: FeatureRegistry,
+    profile: FeatureProfile,
+    feature_names: tuple[str, ...],
+) -> None:
+    """Reject an uncategorized or prohibited feature source."""
+    if registry.schema_version != FEATURE_VERSION:
+        raise ShortcutAuditError("the feature registry version is invalid")
+    if registry.profile != profile.value or registry.names != feature_names:
+        raise ShortcutAuditError("the shortcut features do not match the registry")
+    for feature in registry.features:
+        if not feature.category or not feature.source_categories:
+            raise ShortcutAuditError(f"the feature {feature.name} is uncategorized")
+        sources = " ".join(feature.source_fields).lower()
+        token = next(
+            (value for value in PROHIBITED_SOURCE_TOKENS if value in sources),
+            None,
+        )
+        if token is not None:
+            raise ShortcutAuditError(
+                f"the feature {feature.name} uses a prohibited source"
+            )
 
 
 def _thresholds(values: np.ndarray) -> tuple[float, ...]:
@@ -404,24 +542,19 @@ def _readable_report(report: dict[str, Any]) -> str:
         "",
         f"The perfect gate is {report['perfect_gate_balanced_accuracy']:.2f}.",
         "",
-        "## Unexplained separation",
+        "## Shortcut failures",
         "",
     ]
-    unexplained = report["unexplained_separation"]
-    if unexplained:
-        lines.extend(
-            f"- `{name}` has no accepted justification." for name in unexplained
-        )
+    failures = report["shortcut_failures"]
+    if failures:
+        lines.extend(f"- `{name}` exceeds the fixed gate." for name in failures)
     else:
-        lines.append("No unexplained strong separation remains.")
+        lines.append("No strong separation remains.")
     lines.extend(["", "## Perfect separation", ""])
     perfect = report["perfect_separation"]
     if perfect:
-        lines.extend(
-            f"- `{name}` separates the classes exactly and has no review."
-            for name in perfect
-        )
+        lines.extend(f"- `{name}` separates the classes exactly." for name in perfect)
     else:
-        lines.append("No unreviewed perfect separation remains.")
+        lines.append("No perfect separation remains.")
     lines.append("")
     return "\n".join(lines)

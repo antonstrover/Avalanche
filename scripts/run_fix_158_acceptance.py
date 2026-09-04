@@ -20,7 +20,6 @@ from avalanche.control import InformationProfile
 from avalanche.experiments.acceptance import (
     file_checksum,
     load_acceptance_config,
-    load_shortcut_justifications,
     select_acceptance_entries,
     weakest_attack_result,
     write_acceptance_report,
@@ -49,7 +48,12 @@ from avalanche.monitors.dataset import (
     generate_resolved_dataset_entries,
     resolve_dataset_entries,
 )
-from avalanche.monitors.features import FEATURE_NAMES
+from avalanche.monitors.features import (
+    FEATURE_NAMES,
+    MASTER_FEATURE_REGISTRY,
+    FeatureProfile,
+    feature_registry_for,
+)
 from avalanche.monitors.perceptron import TrainingConfig
 from avalanche.monitors.shortcut_audit import (
     run_shortcut_audit,
@@ -115,20 +119,34 @@ def main(argv: list[str] | None = None) -> int:
     validation = frame[frame["split"] == "validation"].reset_index(drop=True)
     dataset_checksums = {
         "dataset_sha256": file_checksum(dataset_path),
-        "manifest_sha256": file_checksum(dataset_path.with_suffix(".manifest.json")),
-        "summary_sha256": file_checksum(dataset_path.with_suffix(".summary.json")),
+        "dataset_manifest_sha256": file_checksum(
+            dataset_path.with_suffix(".manifest.json")
+        ),
+        "dataset_summary_sha256": file_checksum(
+            dataset_path.with_suffix(".summary.json")
+        ),
+        "development_manifest_sha256": file_checksum(
+            REPO_ROOT / "protocols/development/monitor-development-v5.json"
+        ),
+        "candidate_registry_sha256": file_checksum(
+            REPO_ROOT / "protocols/development/model-candidates-v4.json"
+        ),
+        "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+        "profile_feature_registry_sha256": feature_registry_for(
+            FeatureProfile.PRINCIPAL_FULL
+        ).sha256,
+        "label_schema_sha256": file_checksum(
+            REPO_ROOT / "protocols/development/monitor-labels-v2.json"
+        ),
     }
 
     print("Run the shortcut audits.", flush=True)
-    justifications, reviewed = load_shortcut_justifications(args.justifications)
     audit_dir = args.output / "audit"
     audit = run_shortcut_audit(
         train,
         validation,
         audit_dir,
         feature_names=FEATURE_NAMES,
-        accepted_justifications=justifications,
-        reviewed_perfect_separation=reviewed,
         dataset_checksums=dataset_checksums,
     )
     if not audit["approved"]:

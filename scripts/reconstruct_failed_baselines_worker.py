@@ -12,7 +12,6 @@ import torch
 
 from avalanche.control import InformationProfile
 from avalanche.monitors.perceptron import TrainingConfig, save_model
-from avalanche.monitors.splits import split_declared_runs
 from avalanche.monitors.training import (
     FALSE_ALARM_BUDGET,
     SLEEPER_RECALL_GATE,
@@ -43,7 +42,17 @@ def reconstruct(dataset_path: Path, output_dir: Path) -> dict[str, object]:
     """Train both declared models with the imported historical source."""
     frame = load_nonformal_legacy_dataset_v4(dataset_path)
     frame["proposal_label"] = frame["attack_active"]
-    parts = split_declared_runs(frame)
+    roles = {
+        "calm": "train",
+        "lift-failure": "train",
+        "storm": "validation",
+        "busy-weekend": "test",
+    }
+    assigned = frame.assign(split=frame["scenario_family"].map(roles))
+    parts = {
+        name: assigned.loc[assigned["split"] == name].copy()
+        for name in ("train", "validation", "test")
+    }
     profile = InformationProfile.PRINCIPAL
     names = _historical_feature_names(dataset_path, frame)
     config = TrainingConfig(

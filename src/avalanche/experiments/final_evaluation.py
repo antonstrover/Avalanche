@@ -54,7 +54,13 @@ from avalanche.monitors.dataset import (
     DATASET_VERSION,
     LABEL_SCHEMA_VERSION,
 )
-from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.monitors.features import (
+    FEATURE_VERSION,
+    feature_names_for,
+)
+from avalanche.monitors.features import (
+    FeatureProfile as RegistryFeatureProfile,
+)
 from avalanche.monitors.perceptron import MODEL_VERSION
 from avalanche.monitors.training import verify_formal_model_reference
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_KINDS
@@ -72,7 +78,7 @@ REQUIRED_ROOT_SEEDS = 20
 
 
 @dataclass(frozen=True)
-class FeatureProfile:
+class EvaluationFeatureProfile:
     """Define one declared principal ablation or oracle profile."""
 
     name: str
@@ -109,21 +115,19 @@ class EvaluationRun:
 
 
 FEATURE_PROFILES = (
-    FeatureProfile(
-        "principal", ("action", "state", "context", "prediction", "history")
-    ),
-    FeatureProfile("action-only", ("action",)),
-    FeatureProfile("state-only", ("state",)),
-    FeatureProfile("context-only", ("context",)),
-    FeatureProfile("no-history", ("action", "state", "context", "prediction")),
-    FeatureProfile(
-        "oracle-fallback",
-        ("action", "fallback", "state", "context", "prediction", "history"),
+    EvaluationFeatureProfile("principal-full", ()),
+    EvaluationFeatureProfile("proposal-only", ()),
+    EvaluationFeatureProfile("operational-state-only", ()),
+    EvaluationFeatureProfile("operational-context-only", ()),
+    EvaluationFeatureProfile("no-history", ()),
+    EvaluationFeatureProfile(
+        "fallback_oracle",
+        (),
         True,
     ),
-    FeatureProfile(
-        "oracle-true-state",
-        ("action", "state", "context", "true-state", "prediction", "history"),
+    EvaluationFeatureProfile(
+        "true_state_oracle",
+        (),
         True,
     ),
 )
@@ -1345,11 +1349,11 @@ def _events_by_decision_id(
     return indexed
 
 
-def _information_profile(profile: FeatureProfile) -> InformationProfile:
+def _information_profile(profile: EvaluationFeatureProfile) -> InformationProfile:
     """Return the runtime information profile for one feature profile."""
-    if profile.name == "oracle-fallback":
+    if profile.name == "fallback_oracle":
         return InformationProfile.ORACLE_FALLBACK
-    if profile.name == "oracle-true-state":
+    if profile.name == "true_state_oracle":
         return InformationProfile.ORACLE_TRUE_STATE
     return InformationProfile.PRINCIPAL
 
@@ -1371,14 +1375,18 @@ def _verify_model_locks(
     repo_root: Path = REPO_ROOT,
 ) -> dict[str, Any]:
     """Verify every required model lock and return stable records."""
-    required = {"principal", "oracle-fallback", "oracle-true-state"}
+    required = {"principal", "fallback_oracle", "true_state_oracle"}
     if set(model_locks) != required:
         raise ValueError("the evaluation needs three declared model locks")
     result = {}
     for name in sorted(model_locks):
         verified = verify_formal_model_reference(model_locks[name], repo_root=repo_root)
         lock = verified.lock.model_dump(mode="json")
-        expected = name.replace("-", "_") if name != "principal" else "principal"
+        expected = {
+            "principal": "principal",
+            "fallback_oracle": "fallback_oracle",
+            "true_state_oracle": "true_state_oracle",
+        }[name]
         if lock.get("information_profile") != expected:
             raise ValueError("an evaluation model lock has the wrong profile")
         result[name] = lock
@@ -1399,27 +1407,23 @@ def _code_revision() -> str:
 
 def evaluation_feature_names(profile_name: str) -> tuple[str, ...]:
     """Return the declared feature names for one ablation or oracle."""
-    profile = PROFILE_BY_NAME[profile_name]
-    if profile_name == "oracle-fallback":
+    if profile_name == "fallback_oracle":
         return feature_names_for(InformationProfile.ORACLE_FALLBACK)
-    if profile_name == "oracle-true-state":
+    if profile_name == "true_state_oracle":
         return feature_names_for(InformationProfile.ORACLE_TRUE_STATE)
-    names = feature_names_for(InformationProfile.PRINCIPAL)
-    prefixes = tuple(f"{block}_" for block in profile.blocks)
-    return tuple(name for name in names if name.startswith(prefixes))
+    return feature_names_for(RegistryFeatureProfile(profile_name))
 
 
 def principal_ablation_matrix(frame: pd.DataFrame, profile_name: str) -> np.ndarray:
-    """Zero excluded principal blocks without changing the locked schema."""
+    """Return the exact trained profile columns without post-hoc zeroing."""
     profile = PROFILE_BY_NAME[profile_name]
     if profile.oracle_result:
         raise ValueError("an oracle profile needs its declared oracle feature schema")
-    principal = feature_names_for(InformationProfile.PRINCIPAL)
-    included = frozenset(evaluation_feature_names(profile_name))
-    values = frame.loc[:, list(principal)].to_numpy(dtype=np.float32).copy()
-    excluded = [index for index, name in enumerate(principal) if name not in included]
-    values[:, excluded] = 0.0
-    return values
+    names = evaluation_feature_names(profile_name)
+    missing = sorted(set(names) - set(frame))
+    if missing:
+        raise ValueError("the evaluation rows miss profile feature columns")
+    return frame.loc[:, list(names)].to_numpy(dtype=np.float32)
 
 
 def paired_bootstrap_interval(

@@ -485,6 +485,25 @@ def test_stage_completion_reconciles_absolute_final_counts():
     assert stage.metrics["output_bytes"] == 800
 
 
+def test_generic_progress_records_absolute_resolution_counts():
+    metrics = MetricsAggregator()
+    metrics.apply(MetricEvent.create("stage_started", "traces", total_episodes=100))
+    metrics.apply(
+        MetricEvent.create(
+            "stage_progress",
+            "traces",
+            phase="resolving configurations",
+            completed_episodes=32,
+        )
+    )
+
+    stage = metrics.snapshot().stage("traces")
+
+    assert stage.phase == "resolving configurations"
+    assert stage.episodes_completed == 32
+    assert stage.progress_fraction == 0.32
+
+
 def test_stage_failure_sets_the_failure_status_and_counter():
     metrics = MetricsAggregator()
     metrics.apply(MetricEvent.create("stage_started", "training"))

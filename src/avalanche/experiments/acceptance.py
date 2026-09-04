@@ -37,7 +37,7 @@ from avalanche.monitors.dataset import (
     DatasetEntry,
     expand_manifest,
 )
-from avalanche.monitors.features import FEATURE_NAMES, FEATURE_VERSION
+from avalanche.monitors.features import FEATURE_VERSION
 from avalanche.monitors.perceptron import (
     MODEL_VERSION,
     TrainingConfig,
@@ -302,42 +302,21 @@ def weakest_attack_result(
 
 SHORTCUT_JUSTIFICATIONS_VERSION = 1
 DEFAULT_JUSTIFICATIONS_PATH = "configs/experiments/shortcut-justifications.yaml"
-LOGISTIC_AUDIT_KEY = "__logistic__"
 
 
 def load_shortcut_justifications(
     path: Path,
 ) -> tuple[dict[str, str], tuple[str, ...]]:
-    """Load the reviewed reasons for each strong audit result.
-
-    A person writes this file. The audit rejects any strong feature that
-    has no entry, so a generated reason cannot approve one dataset.
-    """
+    """Reject every obsolete principal shortcut waiver."""
     config = load_yaml(path)
     if config.get("shortcut_justifications_version") != SHORTCUT_JUSTIFICATIONS_VERSION:
         raise ValueError("the shortcut justification version is incompatible")
     entries = config.get("justifications") or {}
     if not isinstance(entries, Mapping):
         raise ValueError("the shortcut justifications must be one mapping")
-    known = set(FEATURE_NAMES) | {LOGISTIC_AUDIT_KEY}
-    unknown = sorted(set(entries) - known)
-    if unknown:
-        raise ValueError(
-            f"the shortcut justifications name unknown features: {', '.join(unknown)}"
-        )
-    reasons: dict[str, str] = {}
-    reviewed: list[str] = []
-    for name in sorted(entries):
-        entry = entries[name]
-        if not isinstance(entry, Mapping):
-            raise ValueError(f"the justification for {name!r} must be one mapping")
-        reason = str(entry.get("reason", "")).strip()
-        if not reason:
-            raise ValueError(f"the justification for {name!r} needs a reason")
-        reasons[name] = reason
-        if entry.get("reviewed_perfect_separation") is True:
-            reviewed.append(name)
-    return reasons, tuple(reviewed)
+    if entries:
+        raise ValueError("a principal shortcut failure cannot receive a waiver")
+    return {}, ()
 
 
 def write_acceptance_report(
@@ -524,11 +503,10 @@ def write_acceptance_report(
             for name, lock in oracle_locks.items()
         ),
         "shortcut_report": shortcut.get("approved") is True,
-        # Every accepted reason must come from the reviewed file.
         "shortcut_allowlist": (
-            shortcut.get("accepted_justifications") == reviewed_reasons
-            and shortcut.get("reviewed_perfect_separation") == sorted(reviewed_perfect)
-            and not shortcut.get("perfect_separation")
+            not reviewed_reasons
+            and not reviewed_perfect
+            and not shortcut.get("shortcut_failures")
         ),
         "seed_inventory": dataset_summary.get("seeds")
         == sorted({entry[5] for entry in config["pairs"]}),

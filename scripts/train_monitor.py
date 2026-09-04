@@ -1,13 +1,14 @@
 """Train, calibrate, gate, and lock one process monitor.
 
 Usage:
-    python scripts/train_monitor.py outputs/datasets/monitor-training.parquet \
-        outputs/audit/shortcut-audit.json
+    python scripts/train_monitor.py --dataset-release-lock \
+        artifacts/monitor/datasets/<dataset-release-lock-sha256>.json
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -21,8 +22,13 @@ from avalanche.monitors.artifacts import (
     require_runtime_identity,
     resolve_training_runtime,
 )
-from avalanche.monitors.dataset import validate_generated_dataset
+from avalanche.monitors.dataset import require_current_formal_dataset_rows
+from avalanche.monitors.features import FeatureProfile
 from avalanche.monitors.perceptron import TrainingConfig
+from avalanche.monitors.releases import (
+    DATASET_ASSET_NAMES,
+    load_dataset_release_lock,
+)
 from avalanche.monitors.splits import split_by_manifest_roots
 from avalanche.monitors.training import train_locked_monitor
 from avalanche.observability import (
@@ -43,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="train_monitor")
     parser.add_argument("rows", type=Path, nargs="?")
     parser.add_argument("shortcut_report", type=Path, nargs="?")
+    parser.add_argument("--dataset-release-lock", type=Path)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--epochs", type=int)
@@ -58,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--information-profile",
         choices=[profile.value for profile in InformationProfile],
         default=InformationProfile.PRINCIPAL.value,
+    )
+    parser.add_argument(
+        "--feature-profile",
+        choices=[profile.value for profile in FeatureProfile],
+        default=FeatureProfile.PRINCIPAL_FULL.value,
     )
     parser.add_argument(
         "--no-progress",
@@ -84,8 +96,10 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise ValueError("a formal campaign rejects command-line training settings")
         raise RuntimeError("the formal dataset handoff is not available")
-    if args.rows is None or args.shortcut_report is None:
-        raise ValueError("legacy training needs rows and a shortcut report")
+    if args.dataset_release_lock is None:
+        raise ValueError("formal fitting requires a verified dataset release lock")
+    if args.rows is not None or args.shortcut_report is not None:
+        raise ValueError("formal fitting rejects arbitrary dataset paths")
     development = load_development_manifest(args.development_manifest)
     require_runtime_identity(
         development["bindings"]["training_runtime_sha256"],
@@ -130,8 +144,42 @@ def main(argv: list[str] | None = None) -> int:
                     phase="loading dataset",
                 )
             )
-            frame = pd.read_parquet(args.rows)
-            checksums = validate_generated_dataset(args.rows, frame, profile)
+            lock, dataset_path = load_dataset_release_lock(
+                args.dataset_release_lock,
+                cache_root=REPO_ROOT / "outputs" / "dataset-cache",
+            )
+            local_protocols = {
+                "development_manifest_sha256": _sha256(args.development_manifest),
+                "candidate_registry_sha256": _sha256(
+                    REPO_ROOT / "protocols/development/model-candidates-v4.json"
+                ),
+                "master_feature_registry_sha256": _sha256(
+                    REPO_ROOT / "protocols/development/features-v3/master.json"
+                ),
+                "label_schema_sha256": _sha256(
+                    REPO_ROOT / "protocols/development/monitor-labels-v2.json"
+                ),
+            }
+            for name, actual in local_protocols.items():
+                if getattr(lock, name) != actual:
+                    raise ValueError(f"the dataset lock binds another {name}")
+            frame = pd.read_parquet(dataset_path)
+            require_current_formal_dataset_rows(frame, name="formal fitting")
+            feature_profile = FeatureProfile(args.feature_profile)
+            shortcut_name = f"shortcut-{feature_profile.value}-v3.json"
+            shortcut_path = dataset_path.parent / shortcut_name
+            checksums = {
+                "dataset_sha256": lock.dataset_sha256,
+                "dataset_manifest_sha256": lock.assets[DATASET_ASSET_NAMES[1]].sha256,
+                "dataset_summary_sha256": lock.assets[DATASET_ASSET_NAMES[2]].sha256,
+                "development_manifest_sha256": lock.development_manifest_sha256,
+                "candidate_registry_sha256": lock.candidate_registry_sha256,
+                "master_feature_registry_sha256": (lock.master_feature_registry_sha256),
+                "profile_feature_registry_sha256": lock.feature_profile_sha256[
+                    feature_profile.value
+                ],
+                "label_schema_sha256": lock.label_schema_sha256,
+            }
             parts = split_by_manifest_roots(frame, args.development_manifest)
             train = parts["train"].reset_index(drop=True)
             validation = parts["validation"].reset_index(drop=True)
@@ -149,12 +197,13 @@ def main(argv: list[str] | None = None) -> int:
             train_locked_monitor(
                 train,
                 validation,
-                args.shortcut_report,
+                shortcut_path,
                 args.output,
                 config=TrainingConfig(
                     seed=seed,
                     epochs=epochs,
                     information_profile=profile.value,
+                    feature_profile=feature_profile.value,
                 ),
                 dataset_checksums=checksums,
                 emitter=session.emitter,
@@ -164,6 +213,11 @@ def main(argv: list[str] | None = None) -> int:
             _fail_running_stages(session, stage_id, error)
             raise
     return 0
+
+
+def _sha256(path: Path) -> str:
+    """Return one complete file digest."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def resolve_registry_candidate(

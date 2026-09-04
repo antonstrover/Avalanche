@@ -1,6 +1,10 @@
 """Build versioned feature profiles for the learned process monitor."""
 
+import hashlib
+import json
 from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from enum import StrEnum
 from typing import Any, cast
 
 import numpy as np
@@ -19,7 +23,7 @@ from avalanche.env.actions import PISTE_CLOSE, PISTE_OPEN
 from avalanche.monitors.rules import RuleMonitor, history_action
 from avalanche.sim.topology import EDGE_TYPE_NAMES
 
-FEATURE_VERSION = 4
+FEATURE_VERSION = 3
 HISTORY_LENGTH = 8
 RESTRICTIVE_LIFT_CAPACITY = 0.5
 LIFT = EDGE_TYPE_NAMES.index("lift")
@@ -41,12 +45,12 @@ ACTION_FEATURES = (
 )
 
 FALLBACK_ORACLE_FEATURES = (
-    "oracle_fallback_route_weight_distance",
-    "oracle_fallback_piste_request_distance",
-    "oracle_fallback_lift_capacity_distance",
-    "oracle_fallback_lift_enabled_distance",
-    "oracle_fallback_message_distance",
-    "oracle_fallback_telemetry_distance",
+    "fallback_oracle_route_weight_distance",
+    "fallback_oracle_piste_request_distance",
+    "fallback_oracle_lift_capacity_distance",
+    "fallback_oracle_lift_enabled_distance",
+    "fallback_oracle_message_distance",
+    "fallback_oracle_telemetry_distance",
 )
 
 STATE_FEATURES = (
@@ -69,31 +73,21 @@ CONTEXT_FEATURES = (
     "context_capacity_headroom_min",
     "context_projected_capacity_max",
     "context_evacuation_capacity_min",
-    "context_evacuation_restriction_fraction",
     "context_utility_route_alignment",
     "context_utility_available_capacity",
     "context_fairness_route_gap",
-    "context_fairness_message_gap",
     "context_consistency_action_distance",
     "context_consistency_audit_gap",
 )
 
 TRUE_STATE_ORACLE_FEATURES = (
-    "oracle_true_density_mean",
-    "oracle_true_density_max",
-    "oracle_true_density_high_quantile",
-    "oracle_true_load_mean",
-    "oracle_unique_stranded_skiers",
-    "oracle_dangerous_density_active_fraction",
-    "oracle_true_telemetry_gap_mean",
-)
-
-PREDICTION_FEATURES = (
-    "prediction_capacity_score",
-    "prediction_evacuation_score",
-    "prediction_unfair_allocation_score",
-    "prediction_telemetry_score",
-    "prediction_dangerous_sequence_score",
+    "true_state_oracle_density_mean",
+    "true_state_oracle_density_max",
+    "true_state_oracle_density_high_quantile",
+    "true_state_oracle_load_mean",
+    "true_state_oracle_unique_stranded_skiers",
+    "true_state_oracle_dangerous_density_active_fraction",
+    "true_state_oracle_telemetry_gap_mean",
 )
 
 HISTORY_STEP_FEATURES = (
@@ -113,69 +107,235 @@ def _history_feature_names() -> tuple[str, ...]:
     return tuple(names)
 
 
-PRINCIPAL_FEATURE_NAMES = (
-    ACTION_FEATURES
-    + STATE_FEATURES
-    + CONTEXT_FEATURES
-    + PREDICTION_FEATURES
-    + _history_feature_names()
-)
+class FeatureCategory(StrEnum):
+    """Name one permitted principal feature source."""
 
-FEATURE_NAMES_BY_PROFILE = {
-    InformationProfile.PRINCIPAL: PRINCIPAL_FEATURE_NAMES,
-    InformationProfile.ORACLE_FALLBACK: (
-        ACTION_FEATURES
-        + FALLBACK_ORACLE_FEATURES
-        + STATE_FEATURES
-        + CONTEXT_FEATURES
-        + PREDICTION_FEATURES
-        + _history_feature_names()
+    PROPOSAL = "proposal"
+    OPERATIONAL_STATE = "operational-state"
+    OPERATIONAL_CONTEXT = "operational-context"
+    EXECUTED_HISTORY = "executed-history"
+
+
+class FeatureProfile(StrEnum):
+    """Name one approved principal feature projection."""
+
+    PRINCIPAL_FULL = "principal-full"
+    PROPOSAL_ONLY = "proposal-only"
+    OPERATIONAL_STATE_ONLY = "operational-state-only"
+    OPERATIONAL_CONTEXT_ONLY = "operational-context-only"
+    NO_HISTORY = "no-history"
+
+
+PRINCIPAL_PROFILES = tuple(FeatureProfile)
+PROFILE_CATEGORIES = {
+    FeatureProfile.PRINCIPAL_FULL: frozenset(FeatureCategory),
+    FeatureProfile.PROPOSAL_ONLY: frozenset({FeatureCategory.PROPOSAL}),
+    FeatureProfile.OPERATIONAL_STATE_ONLY: frozenset(
+        {FeatureCategory.OPERATIONAL_STATE}
     ),
-    InformationProfile.ORACLE_TRUE_STATE: (
-        ACTION_FEATURES
-        + STATE_FEATURES
-        + CONTEXT_FEATURES
-        + TRUE_STATE_ORACLE_FEATURES
-        + PREDICTION_FEATURES
-        + _history_feature_names()
+    FeatureProfile.OPERATIONAL_CONTEXT_ONLY: frozenset(
+        {FeatureCategory.OPERATIONAL_CONTEXT}
+    ),
+    FeatureProfile.NO_HISTORY: frozenset(
+        {
+            FeatureCategory.PROPOSAL,
+            FeatureCategory.OPERATIONAL_STATE,
+            FeatureCategory.OPERATIONAL_CONTEXT,
+        }
     ),
 }
 
-FEATURE_NAMES = PRINCIPAL_FEATURE_NAMES
+
+@dataclass(frozen=True)
+class FeatureDefinition:
+    """Define one feature and its complete provenance contract."""
+
+    name: str
+    category: str
+    source_fields: tuple[str, ...]
+    transformation: str
+    units: str
+    provenance_constraints: tuple[str, ...]
+    timestamp_rule: str
+    missingness_rule: str
+    allowed_profiles: tuple[str, ...]
+    source_categories: tuple[str, ...]
+    interaction: bool
+
+
+@dataclass(frozen=True)
+class FeatureRegistry:
+    """Store one ordered master registry or profile projection."""
+
+    schema_version: int
+    registry_kind: str
+    profile: str | None
+    master_feature_registry_sha256: str | None
+    features: tuple[FeatureDefinition, ...]
+
+    def canonical_bytes(self) -> bytes:
+        """Return the exact canonical registry bytes."""
+        payload = {
+            "schema_version": self.schema_version,
+            "registry_kind": self.registry_kind,
+            "profile": self.profile,
+            "master_feature_registry_sha256": self.master_feature_registry_sha256,
+            "features": [asdict(feature) for feature in self.features],
+        }
+        return (
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+
+    @property
+    def sha256(self) -> str:
+        """Return the digest of the complete canonical registry."""
+        return hashlib.sha256(self.canonical_bytes()).hexdigest()
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Return the ordered feature names."""
+        return tuple(feature.name for feature in self.features)
+
+
+def _source_contract(name: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the source fields and categories for one feature."""
+    if name.startswith("action_"):
+        return (("current_proposal.action",), (FeatureCategory.PROPOSAL.value,))
+    if name.startswith("history_"):
+        return (
+            ("executed_actions.simulation_time", "executed_actions.executed_action"),
+            (FeatureCategory.EXECUTED_HISTORY.value,),
+        )
+    if name.startswith("state_wind") or name.startswith("state_visibility"):
+        return (("packet.weather",), (FeatureCategory.OPERATIONAL_CONTEXT.value,))
+    if name.startswith("state_snowfall") or name.startswith("state_temperature"):
+        return (("packet.weather",), (FeatureCategory.OPERATIONAL_CONTEXT.value,))
+    if name == "state_closed_fraction":
+        return (
+            ("packet.edge_availability", "events.visible_failures"),
+            (FeatureCategory.OPERATIONAL_CONTEXT.value,),
+        )
+    if name.startswith("state_"):
+        return (
+            ("packet.demand_density_occupancy_crowding_queue",),
+            (FeatureCategory.OPERATIONAL_STATE.value,),
+        )
+    if name == "context_consistency_audit_gap":
+        return (("audits",), (FeatureCategory.OPERATIONAL_CONTEXT.value,))
+    categories = [FeatureCategory.PROPOSAL.value]
+    fields = ["current_proposal.action", "static.public_topology"]
+    if name == "context_consistency_action_distance":
+        categories.append(FeatureCategory.EXECUTED_HISTORY.value)
+        fields.extend(
+            ("executed_actions.simulation_time", "executed_actions.executed_action")
+        )
+    else:
+        categories.extend(
+            (
+                FeatureCategory.OPERATIONAL_STATE.value,
+                FeatureCategory.OPERATIONAL_CONTEXT.value,
+            )
+        )
+        fields.append("packet.operational_values")
+    return tuple(fields), tuple(categories)
+
+
+def _feature_definition(name: str) -> FeatureDefinition:
+    """Build one complete feature definition."""
+    source_fields, source_categories = _source_contract(name)
+    allowed = tuple(
+        profile.value
+        for profile in PRINCIPAL_PROFILES
+        if set(source_categories)
+        <= {category.value for category in PROFILE_CATEGORIES[profile]}
+    )
+    if not allowed:
+        raise ValueError(f"the feature {name} has no approved profile")
+    return FeatureDefinition(
+        name=name,
+        category=source_categories[0],
+        source_fields=source_fields,
+        transformation="deterministic aggregate",
+        units="dimensionless",
+        provenance_constraints=(
+            "Use only a validated operational envelope.",
+            "Reject a renamed or uncategorized source.",
+        ),
+        timestamp_rule=(
+            "Use only a strict past execution time."
+            if FeatureCategory.EXECUTED_HISTORY.value in source_categories
+            else "Use the current reported packet time."
+        ),
+        missingness_rule="Honor the source mask before aggregation.",
+        allowed_profiles=allowed,
+        source_categories=source_categories,
+        interaction=len(source_categories) > 1,
+    )
+
+
+PRINCIPAL_FEATURE_NAMES = (
+    ACTION_FEATURES + STATE_FEATURES + CONTEXT_FEATURES + _history_feature_names()
+)
+MASTER_FEATURE_REGISTRY = FeatureRegistry(
+    schema_version=FEATURE_VERSION,
+    registry_kind="master",
+    profile=None,
+    master_feature_registry_sha256=None,
+    features=tuple(_feature_definition(name) for name in PRINCIPAL_FEATURE_NAMES),
+)
+FEATURE_REGISTRIES = {
+    profile: FeatureRegistry(
+        schema_version=FEATURE_VERSION,
+        registry_kind="projection",
+        profile=profile.value,
+        master_feature_registry_sha256=MASTER_FEATURE_REGISTRY.sha256,
+        features=tuple(
+            feature
+            for feature in MASTER_FEATURE_REGISTRY.features
+            if profile.value in feature.allowed_profiles
+        ),
+    )
+    for profile in PRINCIPAL_PROFILES
+}
+FEATURE_NAMES = FEATURE_REGISTRIES[FeatureProfile.PRINCIPAL_FULL].names
 FEATURE_COUNT = len(FEATURE_NAMES)
 
-FEATURE_BLOCKS_BY_PROFILE = {
-    InformationProfile.PRINCIPAL: (
-        "action",
-        "state",
-        "context",
-        "prediction",
-        "history",
-    ),
-    InformationProfile.ORACLE_FALLBACK: (
-        "action",
-        "fallback",
-        "state",
-        "context",
-        "prediction",
-        "history",
-    ),
-    InformationProfile.ORACLE_TRUE_STATE: (
-        "action",
-        "state",
-        "context",
-        "true-state",
-        "prediction",
-        "history",
-    ),
-}
+
+def feature_registry_for(profile: FeatureProfile | str) -> FeatureRegistry:
+    """Return one approved principal projection registry."""
+    return FEATURE_REGISTRIES[FeatureProfile(profile)]
 
 
 def feature_names_for(
-    profile: InformationProfile | str,
+    profile: InformationProfile | FeatureProfile | str,
 ) -> tuple[str, ...]:
-    """Return the ordered names for one information profile."""
-    return FEATURE_NAMES_BY_PROFILE[InformationProfile(profile)]
+    """Return the ordered names for one information or feature profile."""
+    try:
+        selected = FeatureProfile(profile)
+    except ValueError:
+        information = InformationProfile(profile)
+        if information is InformationProfile.PRINCIPAL:
+            return FEATURE_NAMES
+        if information is InformationProfile.FALLBACK_ORACLE:
+            return (
+                ACTION_FEATURES
+                + FALLBACK_ORACLE_FEATURES
+                + STATE_FEATURES
+                + CONTEXT_FEATURES
+                + _history_feature_names()
+            )
+        if information is InformationProfile.TRUE_STATE_ORACLE:
+            return (
+                ACTION_FEATURES
+                + STATE_FEATURES
+                + CONTEXT_FEATURES
+                + TRUE_STATE_ORACLE_FEATURES
+                + _history_feature_names()
+            )
+        raise ValueError(
+            "the evaluator truth profile has no learned features"
+        ) from None
+    return feature_registry_for(selected).names
 
 
 class FeatureExtractor:
@@ -187,8 +347,17 @@ class FeatureExtractor:
         rule_monitor: RuleMonitor,
         profile: InformationProfile | str = InformationProfile.PRINCIPAL,
         feature_blocks: tuple[str, ...] | None = None,
+        feature_profile: FeatureProfile | str = FeatureProfile.PRINCIPAL_FULL,
     ) -> None:
         self.profile = InformationProfile(profile)
+        self.feature_profile = FeatureProfile(feature_profile)
+        if (
+            self.profile is not InformationProfile.PRINCIPAL
+            and self.feature_profile is not FeatureProfile.PRINCIPAL_FULL
+        ):
+            raise ValueError(
+                "a privileged diagnostic cannot use a principal projection"
+            )
         if self.profile is InformationProfile.ORACLE_FALLBACK:
             if reference_fallback is None or reference_fallback.policy != "honest":
                 raise ValueError("the fallback oracle needs the honest policy")
@@ -196,13 +365,37 @@ class FeatureExtractor:
             raise ValueError("only the fallback oracle can use a reference fallback")
         self.reference_fallback = reference_fallback
         self.rule_monitor = rule_monitor
-        self.feature_names = feature_names_for(self.profile)
-        allowed = FEATURE_BLOCKS_BY_PROFILE[self.profile]
-        self.feature_blocks = allowed if feature_blocks is None else feature_blocks
-        if len(set(self.feature_blocks)) != len(self.feature_blocks):
-            raise ValueError("the feature blocks must be unique")
-        if set(self.feature_blocks) - set(allowed):
-            raise ValueError("a feature block is incompatible with its profile")
+        if feature_blocks is not None:
+            legacy_profiles = {
+                ("action",): FeatureProfile.PROPOSAL_ONLY,
+                ("state",): FeatureProfile.OPERATIONAL_STATE_ONLY,
+                ("context",): FeatureProfile.OPERATIONAL_CONTEXT_ONLY,
+                ("action", "state", "context"): FeatureProfile.NO_HISTORY,
+                (
+                    "action",
+                    "state",
+                    "context",
+                    "history",
+                ): FeatureProfile.PRINCIPAL_FULL,
+            }
+            try:
+                selected = legacy_profiles[feature_blocks]
+            except KeyError:
+                raise ValueError("use one approved feature profile") from None
+            if (
+                self.feature_profile is not FeatureProfile.PRINCIPAL_FULL
+                and self.feature_profile is not selected
+            ):
+                raise ValueError(
+                    "the feature profile conflicts with the feature blocks"
+                )
+            self.feature_profile = selected
+        self.feature_blocks = feature_blocks
+        self.feature_names = (
+            feature_names_for(self.feature_profile)
+            if self.profile is InformationProfile.PRINCIPAL
+            else feature_names_for(self.profile)
+        )
 
     def reset(self, seed: int) -> None:
         """Reset the optional fallback and the rule predictor."""
@@ -214,6 +407,7 @@ class FeatureExtractor:
         """Return the complete nested feature state."""
         return {
             "profile": self.profile.value,
+            "feature_profile": self.feature_profile.value,
             "feature_names": self.feature_names,
             "feature_blocks": self.feature_blocks,
             "reference_fallback": (
@@ -229,9 +423,14 @@ class FeatureExtractor:
         """Restore the complete nested feature state."""
         if state["profile"] != self.profile.value:
             raise ValueError("the feature profile is incompatible")
+        if state.get("feature_profile", "principal-full") != self.feature_profile.value:
+            raise ValueError("the feature projection is incompatible")
         if tuple(state["feature_names"]) != self.feature_names:
             raise ValueError("the feature names are incompatible")
-        if tuple(state["feature_blocks"]) != self.feature_blocks:
+        restored_blocks = state["feature_blocks"]
+        if (
+            None if restored_blocks is None else tuple(restored_blocks)
+        ) != self.feature_blocks:
             raise ValueError("the feature blocks are incompatible")
         fallback_state = state["reference_fallback"]
         if (self.reference_fallback is None) != (fallback_state is None):
@@ -270,34 +469,17 @@ class FeatureExtractor:
             blocks.append(
                 _true_state_oracle_block(cast(EvaluatorObservation, observation))
             )
-        prediction = self.rule_monitor.predict(observation, proposal, history)
-        blocks.extend(
-            (
-                np.asarray(
-                    [value for _, value in prediction.as_items()], dtype=np.float32
-                ),
-                _history_block(history),
-            )
-        )
+        blocks.append(_history_block(history))
         values = np.concatenate(blocks).astype(np.float32)
+        full_names = feature_names_for(self.profile)
+        if self.profile is InformationProfile.PRINCIPAL:
+            indexes = [full_names.index(name) for name in self.feature_names]
+            values = values[indexes]
         if values.size != len(self.feature_names):
             raise RuntimeError("the feature values do not match their names")
         if not np.all(np.isfinite(values)):
             raise ValueError("the feature vector must contain finite values")
-        included = frozenset(self.feature_blocks)
-        for index, name in enumerate(self.feature_names):
-            if _feature_block(name) not in included:
-                values[index] = 0.0
         return values
-
-
-def _feature_block(name: str) -> str:
-    """Return the declared block for one feature name."""
-    if name.startswith("oracle_fallback_"):
-        return "fallback"
-    if name.startswith("oracle_true_"):
-        return "true-state"
-    return name.split("_", maxsplit=1)[0]
 
 
 def _action_block(action: Mapping[str, np.ndarray]) -> np.ndarray:
@@ -410,14 +592,10 @@ def _context_block(
     evacuation = np.asarray(sorted(rule_monitor.evacuation_edges), dtype=int)
     if evacuation.size == 0:
         evacuation = np.flatnonzero(topology.edge_type == LIFT)
-    restricted = action["piste_requests"][evacuation] == PISTE_CLOSE
-    restricted |= lift_factor[evacuation] < RESTRICTIVE_LIFT_CAPACITY
-
     route_alignment = float(np.sum(added) / max(float(np.sum(demand)), 1.0))
     open_edges = evidence.value("edge_availability").astype(bool)
     available_capacity = float(np.mean(open_edges * lift_factor))
     route_gap = float(np.max(np.ptp(action["route_weights"], axis=0)))
-    message_gap = float(np.max(np.ptp(action["crowd_messages"], axis=1)))
     action_distance = _history_action_distance(action, history)
     audit_gap = _maximum_audit_gap(observation)
     return np.asarray(
@@ -425,11 +603,9 @@ def _context_block(
             float(np.min(headroom)),
             float(np.max(projected)),
             _masked_minimum(lift_factor, evacuation, 1.0),
-            _fraction(restricted),
             route_alignment,
             available_capacity,
             route_gap,
-            message_gap,
             action_distance,
             audit_gap,
         ],

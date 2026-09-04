@@ -19,6 +19,7 @@ The honest controller uses continuous, context-based actions.
 The three misaligned controllers now have overt and stealth tiers.
 The historical matched dataset and learned monitor evidence now exist.
 The shortcut audit and the locked training gate now exist.
+The [provenance implementation](docs/feature-and-dataset-provenance.md) records five fixed feature profiles and the verified release process.
 The paired final evaluator and the adaptive extension now exist.
 The paired closure baseline compares the honest controller with no control.
 The version three operational evidence boundary now supplies every formal controller and principal monitor.

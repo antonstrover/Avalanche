@@ -61,9 +61,12 @@ class InformationProfile(StrEnum):
     """Name the information available to one process monitor."""
 
     PRINCIPAL = "principal"
-    ORACLE_FALLBACK = "oracle_fallback"
-    ORACLE_TRUE_STATE = "oracle_true_state"
+    FALLBACK_ORACLE = "fallback_oracle"
+    TRUE_STATE_ORACLE = "true_state_oracle"
     EVALUATOR_TRUTH = "evaluator_truth"
+
+    ORACLE_FALLBACK = FALLBACK_ORACLE
+    ORACLE_TRUE_STATE = TRUE_STATE_ORACLE
 
 
 class Observation(dict[str, Any]):
@@ -1435,32 +1438,42 @@ type TraceWindow = tuple[Mapping[str, Any], ...]
 class _CanonicalTraceEntry(Mapping[str, Any]):
     """Store one validated executed action as immutable history."""
 
-    __slots__ = ("_action",)
+    __slots__ = ("_action", "_simulation_time")
     _action: FrozenMapping
+    _simulation_time: float
 
-    def __init__(self, action: Mapping[str, Any] | ImmutableAction) -> None:
+    def __init__(
+        self,
+        action: Mapping[str, Any] | ImmutableAction,
+        simulation_time: float,
+    ) -> None:
+        _require_finite_real_scalar(simulation_time, "process history time")
         immutable = freeze_action(action)
         frozen = freeze_evidence(
             {name: getattr(immutable, name) for name in sorted(ACTION_FIELD_NAMES)}
         )
         object.__setattr__(self, "_action", frozen)
+        object.__setattr__(self, "_simulation_time", float(simulation_time))
 
     def __getitem__(self, key: str) -> Any:
-        if key != "executed_action":
-            raise KeyError(key)
-        return self._action
+        if key == "simulation_time":
+            return self._simulation_time
+        if key == "executed_action":
+            return self._action
+        raise KeyError(key)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(("executed_action",))
+        return iter(("simulation_time", "executed_action"))
 
     def __len__(self) -> int:
-        return 1
+        return 2
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Mapping):
             return False
-        return set(other) == {"executed_action"} and (
-            other["executed_action"] == self._action
+        return set(other) == {"simulation_time", "executed_action"} and (
+            float(other["simulation_time"]) == self._simulation_time
+            and other["executed_action"] == self._action
         )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -1469,11 +1482,12 @@ class _CanonicalTraceEntry(Mapping[str, Any]):
 
 def build_history_entry(
     action: Mapping[str, Any] | ImmutableAction,
+    simulation_time: float = 0.0,
 ) -> Mapping[str, Any]:
     """Return one validated immutable history entry."""
     if isinstance(action, Mapping) and set(action) != ACTION_FIELD_NAMES:
         raise ValueError("a process history action has an invalid schema")
-    return _CanonicalTraceEntry(action)
+    return _CanonicalTraceEntry(action, simulation_time)
 
 
 @dataclass(frozen=True)
@@ -1844,12 +1858,19 @@ def sanitize_trace_window(history: TraceWindow) -> TraceWindow:
         return history
     sanitized: list[Mapping[str, Any]] = []
     for entry in history:
-        if set(entry) != {"executed_action"}:
-            raise ValueError("a process history entry must contain one executed action")
+        if set(entry) not in (
+            {"executed_action"},
+            {"simulation_time", "executed_action"},
+        ):
+            raise ValueError(
+                "a process history entry must contain a time and one action"
+            )
         action = entry["executed_action"]
         if not isinstance(action, Mapping) or set(action) != ACTION_FIELD_NAMES:
             raise ValueError("a process history action has an invalid schema")
-        sanitized.append(build_history_entry(action))
+        sanitized.append(
+            build_history_entry(action, float(entry.get("simulation_time", 0.0)))
+        )
     return tuple(sanitized)
 
 

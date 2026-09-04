@@ -433,7 +433,12 @@ class AvalancheEnv(gym.Env):
             "last_adjudication": adjudication_state(self.last_adjudication),
             "last_executed_action": executed_action_state(self.last_executed_action),
             "control_history": tuple(
-                freeze_action(thaw_evidence(entry["executed_action"])).__dict__
+                {
+                    "simulation_time": entry["simulation_time"],
+                    "executed_action": freeze_action(
+                        thaw_evidence(entry["executed_action"])
+                    ).__dict__,
+                }
                 for entry in self._control_history
             ),
             "intervention_history": tuple(
@@ -467,7 +472,11 @@ class AvalancheEnv(gym.Env):
         )
         self.last_evaluator_observation = None
         self._control_history = tuple(
-            build_history_entry(action) for action in state["control_history"]
+            build_history_entry(
+                entry.get("executed_action", entry),
+                float(entry.get("simulation_time", 0.0)),
+            )
+            for entry in state["control_history"]
         )
         self._intervention_history = [
             InterventionRecord(
@@ -686,7 +695,10 @@ class AvalancheEnv(gym.Env):
             self.last_proposal = proposal
             self.last_adjudication = result
             self.last_executed_action = result.executed_action
-            history_entry = build_history_entry(result.executed_action.action)
+            history_entry = build_history_entry(
+                result.executed_action.action,
+                result.executed_action.simulation_time,
+            )
             self._control_history = (
                 *self._control_history,
                 history_entry,

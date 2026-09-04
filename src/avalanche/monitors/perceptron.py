@@ -25,7 +25,11 @@ from torch import nn
 
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
-from avalanche.monitors.features import FEATURE_VERSION, feature_names_for
+from avalanche.monitors.features import (
+    FEATURE_VERSION,
+    FeatureProfile,
+    feature_names_for,
+)
 from avalanche.observability import MetricEmitter, MetricEvent
 
 MODEL_VERSION = 3
@@ -43,6 +47,7 @@ class TrainingConfig:
     hidden_sizes: tuple[int, ...] = (64, 32)
     label: str = ATTACK_LABEL
     information_profile: str = InformationProfile.PRINCIPAL.value
+    feature_profile: str = FeatureProfile.PRINCIPAL_FULL.value
 
 
 @dataclass
@@ -107,7 +112,12 @@ def train_perceptron(
     """Train the perceptron on the training split only."""
     config = config or TrainingConfig()
     profile = InformationProfile(config.information_profile)
-    feature_names = feature_names or feature_names_for(profile)
+    selected_features = (
+        FeatureProfile(config.feature_profile)
+        if profile is InformationProfile.PRINCIPAL
+        else profile
+    )
+    feature_names = feature_names or feature_names_for(selected_features)
     torch.manual_seed(config.seed)
     torch.set_num_threads(1)
 

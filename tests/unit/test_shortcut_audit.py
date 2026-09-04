@@ -1,6 +1,7 @@
 """Check deterministic shortcut audits and their gate."""
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -14,10 +15,17 @@ from avalanche.monitors.dataset import (
     ATTACK_LABEL,
     DATASET_VERSION,
     EXECUTED_ACTIVATION,
+    LABEL_SCHEMA_SHA256,
     LABEL_SCHEMA_VERSION,
     STRANDING_LABEL,
 )
-from avalanche.monitors.features import FEATURE_VERSION
+from avalanche.monitors.features import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    MASTER_FEATURE_REGISTRY,
+    FeatureProfile,
+    feature_registry_for,
+)
 from avalanche.monitors.shortcut_audit import (
     SHORTCUT_GATE,
     ShortcutAuditError,
@@ -28,7 +36,21 @@ from avalanche.monitors.shortcut_audit import (
     run_shortcut_audit,
 )
 
-FEATURES = ("signal", "context")
+FEATURES = FEATURE_NAMES
+SIGNAL = FEATURES[0]
+CONTEXT = FEATURES[1]
+DIGESTS = {
+    "dataset_sha256": "1" * 64,
+    "dataset_manifest_sha256": "2" * 64,
+    "dataset_summary_sha256": "3" * 64,
+    "development_manifest_sha256": "4" * 64,
+    "candidate_registry_sha256": "5" * 64,
+    "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+    "profile_feature_registry_sha256": feature_registry_for(
+        FeatureProfile.PRINCIPAL_FULL
+    ).sha256,
+    "label_schema_sha256": LABEL_SCHEMA_SHA256,
+}
 
 
 def _with_pair_context(frame: pd.DataFrame) -> pd.DataFrame:
@@ -91,16 +113,26 @@ def rows(*, reverse: bool = False) -> pd.DataFrame:
         for name, spec in OPERATIONAL_SENSOR_SPECS.items()
     }
     audit_policy = AuditConfig().model_dump(mode="json")
-    return _with_pair_context(
+    feature_values = {
+        name: np.zeros(len(labels), dtype=float) for name in FEATURE_NAMES
+    }
+    feature_values[SIGNAL] = signal
+    feature_values[CONTEXT] = np.linspace(-1.0, 1.0, len(labels))
+    frame = _with_pair_context(
         pd.DataFrame(
             {
-                "signal": signal,
-                "context": np.linspace(-1.0, 1.0, len(labels)),
+                **feature_values,
                 ATTACK_LABEL: labels,
                 EXECUTED_ACTIVATION: labels,
                 "dataset_version": DATASET_VERSION,
                 "label_schema_version": LABEL_SCHEMA_VERSION,
                 "feature_version": FEATURE_VERSION,
+                "feature_profile": FeatureProfile.PRINCIPAL_FULL.value,
+                "master_feature_registry_sha256": MASTER_FEATURE_REGISTRY.sha256,
+                "profile_feature_registry_sha256": feature_registry_for(
+                    FeatureProfile.PRINCIPAL_FULL
+                ).sha256,
+                "label_schema_sha256": LABEL_SCHEMA_SHA256,
                 "simulation_time": np.arange(len(labels)) * 60.0,
                 STRANDING_LABEL: labels,
                 "stranding_label_known": np.tile([1, 1, 1, 0], 20),
@@ -128,6 +160,16 @@ def rows(*, reverse: bool = False) -> pd.DataFrame:
             }
         )
     )
+    frame["root_id"] = "training-root"
+    frame["run_id"] = np.where(
+        frame["pair_role"] == "honest", "honest-run", "attack-run"
+    )
+    frame["development_manifest_sha256"] = "d" * 64
+    frame["manifest_cell_sha256"] = "e" * 64
+    frame["verified_run_identity"] = "verified-run"
+    frame["split_identity"] = "training"
+    frame["control_boundary_index"] = np.arange(len(frame))
+    return frame
 
 
 def test_balanced_accuracy_weights_both_classes_equally():
@@ -138,9 +180,47 @@ def test_balanced_accuracy_weights_both_classes_equally():
 
 def test_stumps_fit_training_rows_and_score_validation_rows():
     results = fit_stumps(rows(), rows(reverse=True), FEATURES)
-    signal = next(result for result in results if result.feature == "signal")
+    signal = next(result for result in results if result.feature == SIGNAL)
     assert signal.train_balanced_accuracy == 1.0
     assert signal.validation_balanced_accuracy == 0.0
+
+
+@pytest.mark.parametrize(
+    ("values", "labels"),
+    (
+        ([0.0, 0.0, 1.0, 1.0, 2.0, 2.0], [0, 1, 0, 1, 1, 1]),
+        ([3.0, 3.0, 3.0, 3.0], [0, 1, 0, 1]),
+        ([0.0, 1.0, 2.0, 3.0], [1, 1, 1, 1]),
+    ),
+)
+def test_the_fast_stump_matches_an_exhaustive_fit(values, labels):
+    frame = pd.DataFrame({SIGNAL: values, ATTACK_LABEL: labels})
+    result = fit_stumps(frame, frame.iloc[::-1], (SIGNAL,))[0]
+    candidates = []
+    unique = np.unique(np.asarray(values, dtype=float))
+    if len(unique) == 1:
+        scale = max(abs(float(unique[0])), 1.0)
+        epsilon = np.finfo(float).eps * scale * 4.0
+        thresholds = (float(unique[0] - epsilon), float(unique[0] + epsilon))
+    else:
+        thresholds = (
+            float(unique[0] - max(abs(float(unique[0])), 1.0) * 1e-12),
+            *(float(value) for value in (unique[:-1] + unique[1:]) / 2.0),
+            float(unique[-1] + max(abs(float(unique[-1])), 1.0) * 1e-12),
+        )
+    truth = np.asarray(labels, dtype=int)
+    source = np.asarray(values, dtype=float)
+    for threshold in thresholds:
+        for direction in ("ge", "lt"):
+            prediction = (
+                source >= threshold if direction == "ge" else source < threshold
+            ).astype(int)
+            candidates.append(
+                (-balanced_accuracy(truth, prediction), threshold, direction)
+            )
+    score, threshold, direction = min(candidates)
+    assert (result.threshold, result.direction) == (threshold, direction)
+    assert result.train_balanced_accuracy == -score
 
 
 def test_the_logistic_audit_is_deterministic():
@@ -151,12 +231,25 @@ def test_the_logistic_audit_is_deterministic():
 
 
 def test_a_prohibited_field_fails_before_report_creation(tmp_path):
-    with pytest.raises(ShortcutAuditError, match="simulation_time"):
+    registry = feature_registry_for(FeatureProfile.PRINCIPAL_FULL)
+    forbidden = replace(
+        registry,
+        features=(
+            replace(
+                registry.features[0],
+                source_fields=("neutral.evaluator_value",),
+            ),
+            *registry.features[1:],
+        ),
+    )
+    with pytest.raises(ShortcutAuditError, match="prohibited source"):
         run_shortcut_audit(
             rows(),
             rows(),
             tmp_path,
-            feature_names=("signal", "simulation_time"),
+            feature_names=FEATURES,
+            feature_registry=forbidden,
+            dataset_checksums=DIGESTS,
         )
     assert not list(tmp_path.iterdir())
 
@@ -170,93 +263,49 @@ def test_legacy_rows_cannot_create_a_current_shortcut_report(tmp_path):
             rows(),
             tmp_path,
             feature_names=FEATURES,
+            dataset_checksums=DIGESTS,
         )
 
     assert not list(tmp_path.iterdir())
 
 
-def test_unexplained_strong_separation_fails_the_gate(tmp_path):
-    report = run_shortcut_audit(rows(), rows(), tmp_path, feature_names=FEATURES)
+def test_strong_separation_fails_the_gate(tmp_path):
+    report = run_shortcut_audit(
+        rows(), rows(), tmp_path, feature_names=FEATURES, dataset_checksums=DIGESTS
+    )
     assert not report["approved"]
-    assert "signal" in report["unexplained_separation"]
-    assert "__logistic__" in report["unexplained_separation"]
+    assert SIGNAL in report["shortcut_failures"]
+    assert "__logistic__" in report["shortcut_failures"]
 
 
-def test_each_accepted_strong_feature_needs_a_justification(tmp_path):
+def test_exact_separator_cannot_be_waived(tmp_path):
     report = run_shortcut_audit(
         rows(),
         rows(),
         tmp_path,
         feature_names=FEATURES,
-        accepted_justifications={
-            "signal": "The signal is a declared operational consistency measure.",
-            "__logistic__": "The combined model uses only declared process evidence.",
-        },
-        reviewed_perfect_separation=("signal",),
+        dataset_checksums=DIGESTS,
     )
-    assert report["approved"]
-    loaded = require_approved_shortcut_report(tmp_path / "shortcut-audit.json")
-    assert loaded["approved"]
-
-
-def test_a_reason_alone_does_not_approve_perfect_separation(tmp_path):
-    """A written reason must not approve an exact separator on its own."""
-    report = run_shortcut_audit(
-        rows(),
-        rows(),
-        tmp_path,
-        feature_names=FEATURES,
-        accepted_justifications={
-            "signal": "The signal is a declared operational consistency measure.",
-            "__logistic__": "The combined model uses only declared process evidence.",
-        },
-    )
-
     assert not report["approved"]
-    assert report["perfect_separation"] == ["signal"]
-    assert not report["unexplained_separation"]
-
-
-def test_a_reviewed_feature_may_separate_the_classes_exactly(tmp_path):
-    report = run_shortcut_audit(
-        rows(),
-        rows(),
-        tmp_path,
-        feature_names=FEATURES,
-        accepted_justifications={
-            "signal": "The signal is a declared operational consistency measure.",
-            "__logistic__": "The combined model uses only declared process evidence.",
-        },
-        reviewed_perfect_separation=("signal",),
-    )
-
-    assert report["approved"]
-    assert not report["perfect_separation"]
-    assert report["reviewed_perfect_separation"] == ["signal"]
+    assert report["perfect_separation"] == [SIGNAL]
 
 
 def test_the_reports_are_deterministic_and_machine_readable(tmp_path):
-    justifications = {
-        "signal": "The signal is a declared operational consistency measure.",
-        "__logistic__": "The combined model uses only declared process evidence.",
-    }
     left = tmp_path / "left"
     right = tmp_path / "right"
     first = run_shortcut_audit(
         rows(),
-        rows(),
+        rows(reverse=True),
         left,
         feature_names=FEATURES,
-        accepted_justifications=justifications,
-        dataset_checksums={"dataset_sha256": "abc"},
+        dataset_checksums=DIGESTS,
     )
     second = run_shortcut_audit(
         rows(),
-        rows(),
+        rows(reverse=True),
         right,
         feature_names=FEATURES,
-        accepted_justifications=justifications,
-        dataset_checksums={"dataset_sha256": "abc"},
+        dataset_checksums=DIGESTS,
     )
     assert first == second
     assert (left / "shortcut-audit.json").read_bytes() == (
@@ -273,6 +322,7 @@ def test_the_report_covers_each_required_field_audit(tmp_path):
         rows(reverse=True),
         tmp_path,
         feature_names=FEATURES,
+        dataset_checksums=DIGESTS,
     )
     assert set(report["audits"]) == {
         "constants",
@@ -289,6 +339,36 @@ def test_the_report_covers_each_required_field_audit(tmp_path):
 
 
 def test_an_unapproved_report_cannot_authorize_training(tmp_path):
-    run_shortcut_audit(rows(), rows(), tmp_path, feature_names=FEATURES)
+    run_shortcut_audit(
+        rows(), rows(), tmp_path, feature_names=FEATURES, dataset_checksums=DIGESTS
+    )
     with pytest.raises(ValueError, match="not approved"):
         require_approved_shortcut_report(tmp_path / "shortcut-audit.json")
+
+
+def test_each_input_digest_must_match_before_fitting(tmp_path):
+    run_shortcut_audit(
+        rows(),
+        rows(reverse=True),
+        tmp_path,
+        feature_names=FEATURES,
+        dataset_checksums=DIGESTS,
+    )
+    with pytest.raises(ValueError, match="do not match"):
+        require_approved_shortcut_report(
+            tmp_path / "shortcut-audit.json",
+            expected_digests={**DIGESTS, "dataset_sha256": "f" * 64},
+        )
+
+
+def test_an_approval_flag_cannot_waive_a_shortcut_failure(tmp_path):
+    run_shortcut_audit(
+        rows(), rows(), tmp_path, feature_names=FEATURES, dataset_checksums=DIGESTS
+    )
+    path = tmp_path / "shortcut-audit.json"
+    report = json.loads(path.read_text())
+    report["approved"] = True
+    path.write_text(json.dumps(report))
+
+    with pytest.raises(ValueError, match="non-waivable failure"):
+        require_approved_shortcut_report(path)

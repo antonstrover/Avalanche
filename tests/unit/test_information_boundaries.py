@@ -1041,7 +1041,7 @@ def test_the_process_monitor_receives_sanitized_proposals_and_history():
     assert not hasattr(monitor.proposal, "explanation")
     assert not hasattr(monitor.proposal, "evidence")
     assert len(monitor.history) == 1
-    assert set(monitor.history[0]) == {"executed_action"}
+    assert set(monitor.history[0]) == {"simulation_time", "executed_action"}
     assert set(monitor.history[0]["executed_action"]) == ACTION_FIELD_NAMES
     assert "proposal" not in monitor.history[0]
     assert "decision" not in monitor.history[0]
@@ -1731,7 +1731,7 @@ def test_the_adjudicator_uses_only_the_evidence_envelope_history():
 
 def test_the_adjudicator_rejects_a_mismatched_process_profile():
     monitor = CaptureMonitor()
-    monitor.information_profile = "oracle_fallback"
+    monitor.information_profile = "fallback_oracle"
     proposed = direct_proposal()
     observation = ProcessObservation(
         OPERATIONAL_EVIDENCE_SCHEMA_VERSION,
@@ -1775,7 +1775,7 @@ def test_process_history_contains_only_immutable_executed_actions():
     )
     entry = evidence.executed_actions[0]
 
-    assert set(entry) == {"executed_action"}
+    assert set(entry) == {"simulation_time", "executed_action"}
     assert set(entry["executed_action"]) == ACTION_FIELD_NAMES
     assert "proposal" not in entry
     assert "decision" not in entry
@@ -1802,7 +1802,7 @@ def test_process_history_rejects_prior_monitor_feedback(forbidden_name):
         forbidden_name: "neutral-looking-value",
     }
 
-    with pytest.raises(ValueError, match="one executed action"):
+    with pytest.raises(ValueError, match="time and one action"):
         operational_evidence(executed_actions=(entry,))
 
 
