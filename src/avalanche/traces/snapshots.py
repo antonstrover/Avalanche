@@ -209,7 +209,11 @@ def encode_continuation_snapshot(
         snapshot,
         allow_nonfinite=True,
     )
-    _validate_continuation(snapshot, resolved)
+    _validate_continuation(
+        snapshot,
+        resolved,
+        current_compatibility=snapshot["compatibility"],
+    )
     return snapshot
 
 
@@ -309,6 +313,8 @@ def restore_continuation_snapshot(
 def _validate_continuation(
     snapshot: dict[str, Any],
     resolved: ResolvedConfig,
+    *,
+    current_compatibility: dict[str, Any] | None = None,
 ) -> None:
     _require_keys(snapshot, _CONTINUATION_KEYS, "continuation")
     if snapshot["artifact_type"] != CONTINUATION_ARTIFACT_TYPE:
@@ -320,7 +326,7 @@ def _validate_continuation(
     if not isinstance(actual, str) or not hmac.compare_digest(actual, expected):
         raise SnapshotSchemaError("the continuation checksum does not match")
     compatibility = _mapping(snapshot["compatibility"], "compatibility")
-    current = _compatibility_state()
+    current = current_compatibility or _compatibility_state()
     for name, expected_value in current.items():
         if compatibility.get(name) != expected_value:
             raise SnapshotSchemaError(f"the {name} compatibility identity differs")

@@ -3,10 +3,12 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pyarrow.parquet as pq
 
 from avalanche.config import ResolvedConfig
 from avalanche.experiments import run_episode
+from avalanche.traces import EVALUATOR_REPLAY_FILENAME, load_physical_replay_snapshot
 from tests.configuration import resolve_test_configuration
 
 
@@ -25,11 +27,6 @@ def baseline_config(controller: str, root: Path) -> ResolvedConfig:
 def event_payloads(path: Path, event_type: str) -> list[dict]:
     events = [json.loads(line) for line in path.read_text().splitlines()]
     return [event["payload"] for event in events if event["event_type"] == event_type]
-
-
-def snapshot_arrays(row: dict) -> dict[str, dict]:
-    """Index each versioned snapshot array by its stable name."""
-    return {entry["name"]: entry for entry in row["arrays"]}
 
 
 def test_paired_closure_runs_keep_every_skier_safe(tmp_path):
@@ -55,17 +52,27 @@ def test_paired_closure_runs_keep_every_skier_safe(tmp_path):
     assert event_payloads(
         no_control_dir / "events.jsonl", "failure_started"
     ) == event_payloads(honest_dir / "events.jsonl", "failure_started")
-    no_snapshot = pq.read_table(no_control_dir / "snapshots.parquet").to_pylist()[0]
-    honest_snapshot = pq.read_table(honest_dir / "snapshots.parquet").to_pylist()[0]
-    no_arrays = snapshot_arrays(no_snapshot)
-    honest_arrays = snapshot_arrays(honest_snapshot)
+    no_snapshot = pq.read_table(
+        no_control_dir / EVALUATOR_REPLAY_FILENAME
+    ).to_pylist()[0]
+    honest_snapshot = pq.read_table(
+        honest_dir / EVALUATOR_REPLAY_FILENAME
+    ).to_pylist()[0]
+    no_population = load_physical_replay_snapshot(no_snapshot)["state"]["population"]
+    honest_population = load_physical_replay_snapshot(honest_snapshot)["state"][
+        "population"
+    ]
     population_fields = (
-        "population.destination",
-        "population.ability",
-        "population.group",
-        "population.arrival_time",
+        "location_kind",
+        "location_index",
+        "required_travel_seconds",
+        "remaining_travel_seconds",
+        "status",
     )
-    assert all(no_arrays[field] == honest_arrays[field] for field in population_fields)
+    assert all(
+        np.array_equal(no_population[field], honest_population[field])
+        for field in population_fields
+    )
 
     proposals = event_payloads(honest_dir / "events.jsonl", "action_proposed")
     assert any("reroute around closures" in item["explanation"] for item in proposals)

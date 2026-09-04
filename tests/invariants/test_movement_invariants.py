@@ -27,7 +27,12 @@ from avalanche.sim import (
 )
 from avalanche.sim.population import ABILITY_NAMES
 from avalanche.sim.routes import NO_EDGE
-from avalanche.traces import SnapshotSchemaError, encode_snapshot, restore_snapshot
+from avalanche.traces import (
+    SnapshotSchemaError,
+    encode_physical_replay_snapshot,
+    load_physical_replay_snapshot,
+    restore_snapshot,
+)
 
 FIXTURE = (
     Path(__file__).resolve().parents[2] / "configs" / "mountain" / "small-resort.yaml"
@@ -110,25 +115,30 @@ def check_one_valid_state(sim):
     assert np.all(finished == (pop.status == Status.COMPLETE))
 
 
-def test_snapshot_version_two_derives_bounded_display_progress():
-    """Keep the old snapshot field outside the formal state."""
+def test_evaluator_replay_keeps_exact_travel_state():
+    """Keep exact travel values in the privileged display state."""
     population, _ = build_scenario(4)
     original = MountainSim(FIXTURE)
     original.reset(4)
     original.population = population
     original.tick()
-    row = encode_snapshot(
+    row = encode_physical_replay_snapshot(
         original,
+        view_kind="evaluator",
         run_id="invariant",
         episode_id="episode-0",
-        seed=4,
     )
-    arrays = {item["name"]: item for item in row["arrays"]}
-    progress = np.frombuffer(arrays["population.progress"]["data"], dtype="<f8")
-    np.testing.assert_array_equal(progress, display_progress(original.population))
+    population = load_physical_replay_snapshot(row)["state"]["population"]
+    progress = display_progress(original.population)
     assert np.all((progress >= 0.0) & (progress <= 1.0))
-    assert "population.required_travel_seconds" not in arrays
-    assert "population.remaining_travel_seconds" not in arrays
+    np.testing.assert_array_equal(
+        population["required_travel_seconds"],
+        original.population.required_travel_seconds,
+    )
+    np.testing.assert_array_equal(
+        population["remaining_travel_seconds"],
+        original.population.remaining_travel_seconds,
+    )
 
     restored = MountainSim(FIXTURE)
     restored.reset(4)

@@ -14,10 +14,15 @@ from avalanche.experiments.final_evaluation import attack_detection_metrics
 from avalanche.experiments.runner import _material_state, _record_material_changes
 from avalanche.metrics import METRICS_VERSION
 from avalanche.traces import (
+    CONTINUATION_ARTIFACT_TYPE,
+    EVALUATOR_REPLAY_FILENAME,
     EVENT_SCHEMA_VERSION,
-    SNAPSHOT_SCHEMA_VERSION,
+    PHYSICAL_REPLAY_SCHEMA_VERSION,
+    REPORTED_REPLAY_FILENAME,
     SUMMARY_SCHEMA_VERSION,
     TraceWriter,
+    load_continuation_snapshot,
+    load_physical_replay_snapshot,
 )
 from tests.configuration import resolve_test_configuration
 
@@ -126,11 +131,15 @@ def stranded_config(root: Path) -> ResolvedConfig:
 
 
 def test_a_full_episode_writes_each_required_file(tmp_path):
-    summary = run_episode(small_config(tmp_path / ".configuration"), tmp_path)
+    resolved = small_config(tmp_path / ".configuration")
+    summary = run_episode(resolved, tmp_path)
     required = {
+        "artifact-manifest.json",
+        "episode-0-final.avalanche-continuation.msgpack",
         "events.jsonl",
         "metrics.parquet",
-        "snapshots.parquet",
+        EVALUATOR_REPLAY_FILENAME,
+        REPORTED_REPLAY_FILENAME,
         "summary.json",
     }
     assert required <= {path.name for path in tmp_path.iterdir()}
@@ -139,15 +148,36 @@ def test_a_full_episode_writes_each_required_file(tmp_path):
     assert metrics_table.num_rows == 3
     assert "monitor_latency_seconds_sum" not in metrics_table.column_names
     assert "intervention_latency_seconds_sum" not in metrics_table.column_names
-    snapshots = pq.read_table(tmp_path / "snapshots.parquet")
-    assert snapshots.num_rows == 3
-    assert (
-        snapshots.column("snapshot_schema_version").to_pylist()
-        == [SNAPSHOT_SCHEMA_VERSION] * 3
+    reported = pq.read_table(tmp_path / REPORTED_REPLAY_FILENAME)
+    evaluator = pq.read_table(tmp_path / EVALUATOR_REPLAY_FILENAME)
+    assert reported.num_rows == evaluator.num_rows == 3
+    assert reported.column("schema_version").to_pylist() == (
+        [PHYSICAL_REPLAY_SCHEMA_VERSION] * 3
     )
+    assert evaluator.column("schema_version").to_pylist() == (
+        [PHYSICAL_REPLAY_SCHEMA_VERSION] * 3
+    )
+    reported_row = load_physical_replay_snapshot(reported.to_pylist()[0])
+    evaluator_row = load_physical_replay_snapshot(evaluator.to_pylist()[0])
+    assert "population" not in reported_row["state"]
+    assert "population" in evaluator_row["state"]
+    manifest = json.loads((tmp_path / "artifact-manifest.json").read_text())
+    continuation = next(
+        item
+        for item in manifest["artifacts"]
+        if item["artifact_type"] == CONTINUATION_ARTIFACT_TYPE
+    )
+    loaded = load_continuation_snapshot(
+        tmp_path / continuation["path"],
+        expected_artifact_sha256=continuation["artifact_sha256"],
+        resolved=resolved,
+    )
+    assert loaded["runtime"]["truncated"]
     assert summary["information_profile"] == "principal"
     assert summary["policy_version"] == 3
     assert summary["summary_schema_version"] == SUMMARY_SCHEMA_VERSION
+    assert "physical_state_checksum" in summary
+    assert "state_checksum" not in summary
     assert "harm_count" not in summary["metrics"]
     assert summary["metrics"]["newly_stranded_skiers"] >= 0
     assert summary["metrics"]["unique_stranded_skiers"] >= 0

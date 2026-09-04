@@ -70,7 +70,7 @@ uv run avalanche simulate \
 | Weather | `src/avalanche/scenarios/weather.py` | resolves the weather schedule and applies its effects |
 | Failures | `src/avalanche/scenarios/failures.py` | resolves failures and keeps true telemetry separate |
 | Hazards | `src/avalanche/sim/hazards.py` | records dangerous-density warnings and capacity exposures as precursor events |
-| Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and the state checksum |
+| Engine | `src/avalanche/sim/engine.py` | gives `reset`, the movement tick, the observation, and physical checksums |
 | Environment | `src/avalanche/env/adapter.py` | gives fixed Gymnasium spaces and one control interval per step |
 
 There are two mountains.
@@ -117,7 +117,7 @@ Each environment step reports the reward parts and the versioned online metrics.
 It keeps evaluator evidence as an immutable typed object until explicit serialization.
 The scalar fairness metric excludes customer groups without a skier.
 The per-group metric outputs keep zero padding for those groups.
-Seeded episode tests compare periodic checksums and the final named metrics.
+Seeded episode tests compare physical checksums, continuation checksums, and final metrics.
 
 ### The application
 
@@ -238,11 +238,12 @@ The validation and preflight commands print stable configuration evidence.
 `simulate` writes a run directory under `outputs/`.
 The command runs one resolved episode.
 Each formal episode runs through its configured horizon.
-It writes the events, the metrics, the snapshots, the model reference, and the final summary.
-Each version five snapshot stores a physical replay view.
-It derives legacy display progress from the formal travel-time state.
-It does not restore a formal simulator continuation.
-The codec rejects a version five snapshot used for continuation.
+It writes events, metrics, two replay views, a continuation, and the final summary.
+`physical-replay-reported.parquet` contains reported aggregate display state.
+`physical-replay-evaluator.parquet` contains privileged physical display state.
+Neither physical replay file can resume execution.
+The continuation file stores every future-influencing state owner.
+The artifact manifest stores each exact file digest.
 
 ### The simulator, from Python
 
@@ -259,7 +260,7 @@ for _ in range(10):
 
 print(len(sim.population))
 print(sim.population.arrived)
-print(sim.state_checksum())
+print(sim.physical_state_checksum("evaluator"))
 ```
 
 `tests/invariants/test_population_invariants.py` shows the population checks.

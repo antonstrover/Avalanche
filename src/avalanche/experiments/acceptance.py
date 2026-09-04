@@ -50,8 +50,9 @@ from avalanche.scenarios import ROUTE_SENSOR_SCHEMA_VERSION
 from avalanche.scenarios.audits import AUDIT_SCHEMA_VERSION
 from avalanche.scenarios.operational_events import OPERATIONAL_EVENT_SCHEMA_VERSION
 from avalanche.traces import (
+    CONTINUATION_SCHEMA_VERSION,
     EVENT_SCHEMA_VERSION,
-    SNAPSHOT_SCHEMA_VERSION,
+    PHYSICAL_REPLAY_SCHEMA_VERSION,
     SUMMARY_SCHEMA_VERSION,
 )
 
@@ -78,7 +79,8 @@ VERSION_INVENTORY = {
     "route_sensor_schema_version": ROUTE_SENSOR_SCHEMA_VERSION,
     "sensor_policy_schema_version": SensorPolicyConfig().schema_version,
     "shortcut_report_version": SHORTCUT_REPORT_VERSION,
-    "snapshot_schema_version": SNAPSHOT_SCHEMA_VERSION,
+    "continuation_schema_version": CONTINUATION_SCHEMA_VERSION,
+    "physical_replay_schema_version": PHYSICAL_REPLAY_SCHEMA_VERSION,
     "summary_schema_version": SUMMARY_SCHEMA_VERSION,
 }
 

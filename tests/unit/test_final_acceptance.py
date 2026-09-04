@@ -103,6 +103,7 @@ def test_the_acceptance_inventory_records_each_required_version():
         "adaptive_version": 1,
         "audit_schema_version": 2,
         "calibration_version": 2,
+        "continuation_schema_version": 1,
         "dataset_version": 7,
         "envelope_version": 1,
         "event_schema_version": 5,
@@ -114,12 +115,12 @@ def test_the_acceptance_inventory_records_each_required_version():
         "observation_schema_version": 3,
         "operational_event_schema_version": 1,
         "policy_version": 3,
+        "physical_replay_schema_version": 1,
         "proposal_schema_version": 1,
         "route_sensor_schema_version": 3,
         "sensor_policy_schema_version": 2,
         "shortcut_report_version": 2,
-        "snapshot_schema_version": 5,
-        "summary_schema_version": 2,
+        "summary_schema_version": 3,
     }
 
 

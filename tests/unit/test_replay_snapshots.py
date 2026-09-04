@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 
 from avalanche.config import ResolvedConfig
-from avalanche.control import ApprovalChoice, SimulatedApprover
+from avalanche.control import (
+    ApprovalChoice,
+    ApprovalRequest,
+    ApprovalResponse,
+    DecisionType,
+    MonitorDecision,
+    SimulatedApprover,
+)
 from avalanche.controllers import build_controller
 from avalanche.controllers.attacks import AttackLifecycle
 from avalanche.controllers.factory import build_fallback
@@ -322,3 +329,50 @@ def test_a_wrong_continuation_extension_is_rejected_after_parse(tmp_path):
             expected_artifact_sha256=hashlib.sha256(content).hexdigest(),
             resolved=resolved,
         )
+
+
+@pytest.mark.parametrize("phase", ["before", "during", "after"])
+def test_pending_approval_state_restores_at_each_phase(tmp_path, phase):
+    """Restore the relative approval deadline around a pending request."""
+    resolved = resolved_config(tmp_path / phase)
+    env, controller, lifecycle = running_components(resolved)
+    proposal = controller.propose(env.controller_observation())
+    decision = MonitorDecision(
+        risk_score=0.8,
+        decision=DecisionType.ESCALATE,
+        reason_codes=("test_escalation",),
+    )
+    request = ApprovalRequest(
+        decision_id="decision-one",
+        proposal=proposal,
+        decision=decision,
+        safe_fallback=proposal.action,
+        predicted_result=(),
+        deadline_epoch_seconds=9_999_999.0,
+    )
+    if phase == "during":
+        env.adjudicator.pending_approval = request
+        env.adjudicator.pending_approval_remaining_seconds = 12.5
+    if phase == "after":
+        env.adjudicator.last_approval_response = ApprovalResponse(
+            ApprovalChoice.BLOCK
+        )
+    snapshot = encode_continuation_snapshot(
+        env,
+        controller,
+        resolved,
+        attack_lifecycle=lifecycle,
+        trace_state={},
+        runtime_state={},
+    )
+    state = snapshot["adjudicator"]["state"]
+    if phase == "during":
+        assert state["pending_approval"]["deadline_epoch_seconds"] is None
+    restored = restore_continuation_snapshot(snapshot, resolved=resolved)
+    adjudicator = restored["environment"].adjudicator
+
+    assert (adjudicator.pending_approval is not None) == (phase == "during")
+    assert adjudicator.pending_approval_remaining_seconds == (
+        12.5 if phase == "during" else None
+    )
+    assert (adjudicator.last_approval_response is not None) == (phase == "after")

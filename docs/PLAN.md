@@ -767,13 +767,17 @@ Each output directory contains these files:
 config.resolved.yaml
 metadata.json
 metrics.parquet
+physical-replay-reported.parquet
+physical-replay-evaluator.parquet
+episode-0-final.avalanche-continuation.msgpack
+artifact-manifest.json
 summary.json
 events.jsonl or events.parquet
 model-reference.json
 ```
 
 `metadata.json` records the time, the platform, the Python release, the dependency lock hash, and the Git commit.
-The same configuration and the same code must give the same checksum and the same metrics on one platform.
+The same configuration and code must give the same identities and metrics on one platform.
 A small difference between platforms is permitted inside recorded numerical limits.
 
 ## 11 Traces and metrics
@@ -787,6 +791,9 @@ run_id, episode_id, seed, simulation_time, step,
 event_type, actor_id, payload, state_checksum
 ```
 
+The event field is a legacy version five display identity.
+New formal artifacts do not use this generic field name.
+
 The material events include scenario changes, failures, decisions, outcomes, precursors, stranded skiers, and the episode end.
 Each stranding event records its movement boundary, control interval, and newly stranded count.
 
@@ -795,8 +802,13 @@ Each linked decision event uses the control boundary time and checksum.
 The outcome event uses the interval-end time and checksum.
 
 The trace does not hold one record for each skier in each tick.
-The replay snapshots occur at an interval from the configuration.
-They stay in columnar batches.
+Reported and evaluator replay snapshots occur at the configured interval.
+The reported replay excludes exact skier state.
+The evaluator replay includes exact physical display state.
+Both views stay in separate columnar files.
+Neither view can resume execution.
+The continuation file stores every value that can influence future execution.
+The artifact manifest records each exact file digest.
 Each decision event stays at full resolution.
 
 ### 11.2 Online metrics
@@ -1020,7 +1032,7 @@ The user can do these operations:
 - filter the events by controller, monitor, location, severity, or type; and
 - copy a stable link to a run and a time.
 
-The replay uses periodic snapshots and the events between them.
+The replay uses periodic physical snapshots and the events between them.
 A seek loads the nearest snapshot and applies the later events.
 It does not replay the episode from time zero.
 The FastAPI service gives time-window queries and caches the recent frames.
@@ -1153,13 +1165,13 @@ They show these conditions:
 - the monitor data set has no leakage between the splits;
 - a live command changes only the addressed session;
 - a gap in the frame sequence causes a snapshot recovery;
-- a replay seek gives the same state checksum as the simulator; and
+- a replay seek gives the same physical checksum as the simulator; and
 - two paired runs stay aligned in the comparison screen.
 
 ### 14.4 Determinism tests
 
 These tests compare two runs with the same resolved configuration and seed.
-They use periodic checksums and the final metrics.
+They use periodic physical checksums and final continuation checksums.
 A different seed must change one external variable at minimum.
 They run in continuous integration with a small population.
 
@@ -1290,7 +1302,8 @@ The platform is complete for the evaluation when these conditions are true:
 - the report gives the false alarms and the retained performance with the detection results;
 - the control centre can start, pause, step, and show an isolated live session;
 - the application draws the mountain, the pistes, the lifts, the buildings, the skiers, the weather, the failures, the actions, the decisions, and the hazards;
-- the saved traces can rebuild and seek a representative run with the same checksum;
+- the saved traces can seek a run with the same physical checksum;
+- a compatible continuation can resume a run with the same final identity;
 - I can compare two paired runs and the aggregate experiments;
 - the approval demonstration operates and does not change the deterministic protocol;
 - the core integration, accessibility, and browser tests pass; and
