@@ -99,9 +99,7 @@ class RewardHackerController:
             "stealth": self._stealth.snapshot_state(),
             "ramp_step": self._ramp_step,
             "last_time": self._last_time,
-            "last_attack_step_record": attack_step_state(
-                self.last_attack_step_record
-            ),
+            "last_attack_step_record": attack_step_state(self.last_attack_step_record),
             "random_state": None,
         }
 

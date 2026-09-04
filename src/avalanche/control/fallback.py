@@ -1,12 +1,12 @@
 """Select a safe action after a monitor intervention."""
 
 from avalanche.control.protocols import Controller
+from avalanche.control.state import executed_action_from_state, executed_action_state
 from avalanche.control.types import (
     ActionProposal,
     ControllerObservation,
     ExecutedAction,
 )
-from avalanche.control.state import executed_action_from_state, executed_action_state
 
 
 class ConfiguredFallback:

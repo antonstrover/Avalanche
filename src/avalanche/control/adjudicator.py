@@ -297,9 +297,7 @@ class Adjudicator:
                     predicted_result=decision.predicted_result,
                 )
                 self.pending_approval = approval_request
-                self.pending_approval_remaining_seconds = (
-                    self.approval_timeout_seconds
-                )
+                self.pending_approval_remaining_seconds = self.approval_timeout_seconds
                 try:
                     approval_response = self.approval(approval_request)
                     self.last_approval_response = approval_response

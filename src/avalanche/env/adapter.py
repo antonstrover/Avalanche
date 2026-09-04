@@ -430,9 +430,7 @@ class AvalancheEnv(gym.Env):
             "ended": self._ended,
             "last_proposal": proposal_state(self.last_proposal),
             "last_adjudication": adjudication_state(self.last_adjudication),
-            "last_executed_action": executed_action_state(
-                self.last_executed_action
-            ),
+            "last_executed_action": executed_action_state(self.last_executed_action),
             "control_history": tuple(
                 freeze_action(thaw_evidence(entry["executed_action"])).__dict__
                 for entry in self._control_history
@@ -462,9 +460,7 @@ class AvalancheEnv(gym.Env):
         self._seed = int(state["seed"])
         self._ended = bool(state["ended"])
         self.last_proposal = proposal_from_state(state["last_proposal"])
-        self.last_adjudication = adjudication_from_state(
-            state["last_adjudication"]
-        )
+        self.last_adjudication = adjudication_from_state(state["last_adjudication"])
         self.last_executed_action = executed_action_from_state(
             state["last_executed_action"]
         )

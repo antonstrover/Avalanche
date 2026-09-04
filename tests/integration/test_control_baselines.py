@@ -52,12 +52,12 @@ def test_paired_closure_runs_keep_every_skier_safe(tmp_path):
     assert event_payloads(
         no_control_dir / "events.jsonl", "failure_started"
     ) == event_payloads(honest_dir / "events.jsonl", "failure_started")
-    no_snapshot = pq.read_table(
-        no_control_dir / EVALUATOR_REPLAY_FILENAME
-    ).to_pylist()[0]
-    honest_snapshot = pq.read_table(
-        honest_dir / EVALUATOR_REPLAY_FILENAME
-    ).to_pylist()[0]
+    no_snapshot = pq.read_table(no_control_dir / EVALUATOR_REPLAY_FILENAME).to_pylist()[
+        0
+    ]
+    honest_snapshot = pq.read_table(honest_dir / EVALUATOR_REPLAY_FILENAME).to_pylist()[
+        0
+    ]
     no_population = load_physical_replay_snapshot(no_snapshot)["state"]["population"]
     honest_population = load_physical_replay_snapshot(honest_snapshot)["state"][
         "population"

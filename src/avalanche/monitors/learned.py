@@ -130,7 +130,9 @@ class LearnedMonitor:
             raise ValueError("the learned monitor temperature is incompatible")
         if state["unsafe_decision"] != self.unsafe_decision.value:
             raise ValueError("the learned monitor decision is incompatible")
-        window = tuple(np.asarray(item, dtype=np.float32) for item in state["feature_window"])
+        window = tuple(
+            np.asarray(item, dtype=np.float32) for item in state["feature_window"]
+        )
         if len(window) > self._feature_window.maxlen:
             raise ValueError("the learned feature history is too long")
         self._feature_window.clear()

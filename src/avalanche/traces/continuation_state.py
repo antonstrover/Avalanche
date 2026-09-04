@@ -17,7 +17,10 @@ from avalanche.control.types import (
 from avalanche.metrics import OnlineMetrics
 from avalanche.scenarios.audits import AuditChannel, AuditMeasurement
 from avalanche.scenarios.failures import FailureEvent, FailureKind, FailureTransitions
-from avalanche.scenarios.operational_events import OperationalEvent, OperationalEventKind
+from avalanche.scenarios.operational_events import (
+    OperationalEvent,
+    OperationalEventKind,
+)
 from avalanche.scenarios.sensors import RouteSensorChannel, RouteSensorPacket
 from avalanche.scenarios.weather import Weather
 from avalanche.sim.engine import MountainSim
@@ -148,9 +151,7 @@ def restore_simulator_state(sim: MountainSim, state: dict[str, Any]) -> None:
     sim.route_sensor_channel.latest = thaw_state(sensor["latest"])
     sim.route_sensor_packet = thaw_state(sensor["current"])
     sim.route_sensor_channel.pending = thaw_state(sensor["pending"])
-    sim.route_sensor_channel.pending_stranding = thaw_state(
-        sensor["pending_stranding"]
-    )
+    sim.route_sensor_channel.pending_stranding = thaw_state(sensor["pending_stranding"])
     sample_time = sensor["last_sample_time"]
     sim.route_sensor_channel.last_sample_time = (
         None if sample_time is None else float(sample_time)
@@ -208,7 +209,11 @@ def thaw_state(value: Any) -> Any:
         kind = value.get("object_kind")
         if kind == "enum":
             enum_type = _ENUMS.get(value.get("class_name"))
-            if enum_type is None or set(value) != {"object_kind", "class_name", "value"}:
+            if enum_type is None or set(value) != {
+                "object_kind",
+                "class_name",
+                "value",
+            }:
                 raise ValueError("the continuation enum state is invalid")
             return enum_type(thaw_state(value["value"]))
         if kind == "data_class":

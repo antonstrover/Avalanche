@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -220,7 +220,9 @@ class TraceWriter:
         reported_path = self.output_dir / REPORTED_REPLAY_FILENAME
         evaluator_path = self.output_dir / EVALUATOR_REPLAY_FILENAME
         pq.write_table(pa.Table.from_pylist(self.reported_snapshot_rows), reported_path)
-        pq.write_table(pa.Table.from_pylist(self.evaluator_snapshot_rows), evaluator_path)
+        pq.write_table(
+            pa.Table.from_pylist(self.evaluator_snapshot_rows), evaluator_path
+        )
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
         )

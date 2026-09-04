@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import struct
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 import msgpack
@@ -104,22 +104,17 @@ def _encode(value: Any, *, allow_nonfinite: bool) -> Any:
             raise CanonicalEncodingError("a canonical mapping key must be a string")
         ordered = sorted(keys, key=lambda item: item.encode("utf-8"))
         return {
-            key: _encode(value[key], allow_nonfinite=allow_nonfinite)
-            for key in ordered
+            key: _encode(value[key], allow_nonfinite=allow_nonfinite) for key in ordered
         }
     if isinstance(value, tuple):
         return {
             _TYPE: "tuple",
-            "items": [
-                _encode(item, allow_nonfinite=allow_nonfinite) for item in value
-            ],
+            "items": [_encode(item, allow_nonfinite=allow_nonfinite) for item in value],
         }
     if isinstance(value, list):
         return {
             _TYPE: "list",
-            "items": [
-                _encode(item, allow_nonfinite=allow_nonfinite) for item in value
-            ],
+            "items": [_encode(item, allow_nonfinite=allow_nonfinite) for item in value],
         }
     raise CanonicalEncodingError(
         f"the canonical value type {type(value).__name__!r} is unsupported"
@@ -150,12 +145,12 @@ def _encode_float(value: float, *, allow_nonfinite: bool) -> dict[str, Any]:
     return {_TYPE: "float64", "data": _length_prefix(struct.pack("<d", value))}
 
 
-def _encode_array(
-    values: np.ndarray, *, allow_nonfinite: bool
-) -> dict[str, Any]:
+def _encode_array(values: np.ndarray, *, allow_nonfinite: bool) -> dict[str, Any]:
     source = np.asarray(values)
     if source.dtype.kind not in "biuf":
-        raise CanonicalEncodingError(f"the array type {source.dtype.str!r} is unsupported")
+        raise CanonicalEncodingError(
+            f"the array type {source.dtype.str!r} is unsupported"
+        )
     dtype = _little_endian_dtype(source.dtype)
     portable = np.ascontiguousarray(source, dtype=dtype)
     if portable.dtype.kind == "f":
@@ -242,7 +237,9 @@ def _decode_integer(value: dict[str, Any]) -> int:
         raise CanonicalEncodingError("the canonical integer sign is invalid")
     magnitude = _remove_length_prefix(value["magnitude"])
     if magnitude.startswith(b"\x00"):
-        raise CanonicalEncodingError("the canonical integer magnitude has a leading zero")
+        raise CanonicalEncodingError(
+            "the canonical integer magnitude has a leading zero"
+        )
     if sign == 0 and magnitude:
         raise CanonicalEncodingError("a zero integer must have an empty magnitude")
     if sign != 0 and not magnitude:

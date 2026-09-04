@@ -342,7 +342,9 @@ def _validate_component_identities(
 ) -> None:
     env = build_resolved_environment(resolved)
     controller = build_controller(resolved.controller, env.topology)
-    fallback = build_fallback(resolved.fallback.policy, resolved.controller, env.topology)
+    fallback = build_fallback(
+        resolved.fallback.policy, resolved.controller, env.topology
+    )
     monitor = build_monitor(resolved.monitor, resolved.controller, env.topology)
     approval = SimulatedApprover(ApprovalChoice(resolved.approval.simulated_choice))
     expected = {

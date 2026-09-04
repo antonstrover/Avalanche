@@ -354,9 +354,7 @@ def test_pending_approval_state_restores_at_each_phase(tmp_path, phase):
         env.adjudicator.pending_approval = request
         env.adjudicator.pending_approval_remaining_seconds = 12.5
     if phase == "after":
-        env.adjudicator.last_approval_response = ApprovalResponse(
-            ApprovalChoice.BLOCK
-        )
+        env.adjudicator.last_approval_response = ApprovalResponse(ApprovalChoice.BLOCK)
     snapshot = encode_continuation_snapshot(
         env,
         controller,

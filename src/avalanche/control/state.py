@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
+from avalanche.control.adjudicator import AdjudicationResult
 from avalanche.control.approval import (
     ApprovalChoice,
     ApprovalRequest,
     ApprovalResponse,
 )
-from avalanche.control.adjudicator import AdjudicationResult
 from avalanche.control.types import (
     ActionChannel,
     ActionDelta,
@@ -162,9 +162,7 @@ def attack_step_from_state(value: Any) -> AttackStepRecord | None:
             ActionChannel(item) for item in value["affected_channels"]
         ),
         proposal_label=value["proposal_label"],
-        surviving_malicious_delta=_delta_from_state(
-            value["surviving_malicious_delta"]
-        ),
+        surviving_malicious_delta=_delta_from_state(value["surviving_malicious_delta"]),
         selected_action_provenance=(
             None
             if value["selected_action_provenance"] is None
