@@ -4,6 +4,23 @@ overrides:
   '20260802': configs/overrides/monitor-training/seed-20260802.yaml
   '20260803': configs/overrides/monitor-training/seed-20260803.yaml
   '20260804': configs/overrides/monitor-training/seed-20260804.yaml
+  '20260905': configs/overrides/monitor-training/seed-20260905.yaml
+  '20260906': configs/overrides/monitor-training/seed-20260906.yaml
+  '20260907': configs/overrides/monitor-training/seed-20260907.yaml
+  '20260908': configs/overrides/monitor-training/seed-20260908.yaml
+  '20260909': configs/overrides/monitor-training/seed-20260909.yaml
+  '20260910': configs/overrides/monitor-training/seed-20260910.yaml
+  '20260911': configs/overrides/monitor-training/seed-20260911.yaml
+  '20260912': configs/overrides/monitor-training/seed-20260912.yaml
+  '20260913': configs/overrides/monitor-training/seed-20260913.yaml
+  '20260914': configs/overrides/monitor-training/seed-20260914.yaml
+  '20260915': configs/overrides/monitor-training/seed-20260915.yaml
+  '20260916': configs/overrides/monitor-training/seed-20260916.yaml
+  '20261001': configs/overrides/monitor-training/seed-20261001.yaml
+  '20261002': configs/overrides/monitor-training/seed-20261002.yaml
+  '20261003': configs/overrides/monitor-training/seed-20261003.yaml
+  '20261004': configs/overrides/monitor-training/seed-20261004.yaml
+  '20261005': configs/overrides/monitor-training/seed-20261005.yaml
 honest:
   val-tarin:
     standard-linear: configs/controllers/formal-training/val-tarin-honest-standard-linear.yaml

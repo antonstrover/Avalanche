@@ -194,6 +194,25 @@ def test_the_matrix_expands_to_one_entry_for_each_run():
     assert len(identities) == len(entries)
 
 
+def test_the_generation_matrix_covers_every_frozen_development_root():
+    manifest = yaml.safe_load(MANIFEST.read_text())
+    development = json.loads(
+        (REPO / manifest["development_manifest"]).read_text(encoding="utf-8")
+    )
+    entries = expand_manifest(manifest)
+    declared_roots = {
+        record["root_id"]
+        for split in ("training", "validation")
+        for record in development["roots"][split]
+    }
+
+    assert {entry.root_id for entry in entries} == declared_roots
+    assert sum(entry.pair_role == "attack" for entry in entries) == sum(
+        development["counts"][name]
+        for name in ("training_attack_episodes", "validation_attack_episodes")
+    )
+
+
 def test_the_current_manifest_requires_a_stranding_horizon():
     manifest = deepcopy(yaml.safe_load(MANIFEST.read_text()))
     manifest.pop("stranding_horizon_intervals")

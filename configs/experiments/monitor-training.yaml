@@ -11,7 +11,28 @@ policy_variants:
   - conservative-gradual
 monitor: configs/monitors/none.yaml
 component_manifest: configs/experiments/monitor-training-components.yaml
-seeds: [20260801, 20260802, 20260803, 20260804]
+seeds:
+  - 20260801
+  - 20260802
+  - 20260803
+  - 20260804
+  - 20260905
+  - 20260906
+  - 20260907
+  - 20260908
+  - 20260909
+  - 20260910
+  - 20260911
+  - 20260912
+  - 20260913
+  - 20260914
+  - 20260915
+  - 20260916
+  - 20261001
+  - 20261002
+  - 20261003
+  - 20261004
+  - 20261005
 
 families:
   - id: calm

@@ -1340,7 +1340,9 @@ def resolve_entry(entry: DatasetEntry) -> ResolvedConfig:
 def expand_manifest(manifest: dict[str, Any]) -> list[DatasetEntry]:
     """Expand explicit honest and attack pairs from the declared axes."""
     if int(manifest.get("dataset_version", 0)) != DATASET_VERSION:
-        raise ValueError(f"the dataset manifest must use version {DATASET_VERSION}")
+        raise ValueError(
+            f"the dataset generation configuration must use version {DATASET_VERSION}"
+        )
     _stranding_horizon(manifest)
     strengths = [float(value) for value in manifest.get("attack_strengths", ())]
     variants = _required_axis(manifest, "policy_variants")

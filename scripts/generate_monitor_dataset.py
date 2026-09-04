@@ -31,7 +31,11 @@ DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "datasets" / "monitor-development-v5.pa
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="generate_monitor_dataset")
-    parser.add_argument("manifest", type=Path)
+    parser.add_argument(
+        "manifest",
+        type=Path,
+        help="version-five dataset generation YAML",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--limit", type=int, default=None, help="run only the first entries"
