@@ -14,6 +14,7 @@ from avalanche.monitors.splits import (
     SPLIT_NAMES,
     assign_families,
     split_by_family,
+    split_by_manifest_roots,
     split_declared_runs,
 )
 
@@ -102,10 +103,8 @@ def test_a_frame_without_the_family_column_raises_an_error():
 def test_the_declared_split_uses_the_fixed_family_roles():
     parts = split_declared_runs(make_frame())
     assert set(parts["train"]["scenario_family"]) == set(DECLARED_SPLITS.train)
-    assert set(parts["validation"]["scenario_family"]) == set(
-        DECLARED_SPLITS.validation
-    )
-    assert set(parts["test"]["scenario_family"]) == set(DECLARED_SPLITS.test)
+    assert parts["validation"].empty
+    assert parts["test"].empty
 
 
 def test_the_declared_split_keeps_each_complete_run_together():
@@ -113,3 +112,44 @@ def test_the_declared_split_keeps_each_complete_run_together():
     for part in parts.values():
         for _, run in part.groupby("run_id"):
             assert sorted(run["step"]) == list(range(5))
+
+
+def _root_manifest():
+    return {
+        "roots": {
+            "training": [{"root_id": "training-root", "root_seed": 1}],
+            "validation": [{"root_id": "validation-root", "root_seed": 2}],
+        }
+    }
+
+
+def test_busy_weekend_is_development():
+    assert "busy-weekend" in DECLARED_SPLITS.train
+    assert "busy-weekend" not in DECLARED_SPLITS.test
+
+
+def test_forged_row_split_is_ignored():
+    frame = pd.DataFrame(
+        {
+            "verified_run_identity": ["a", "b"],
+            "root_id": ["training-root", "validation-root"],
+            "split_identity": ["validation", "training"],
+            "split": ["validation", "train"],
+            "resolved_config_checksum": ["1" * 64, "2" * 64],
+        }
+    )
+    parts = split_by_manifest_roots(frame, _root_manifest())
+    assert parts["train"]["verified_run_identity"].tolist() == ["a"]
+    assert parts["validation"]["verified_run_identity"].tolist() == ["b"]
+
+
+def test_root_and_config_overlap_fails():
+    frame = pd.DataFrame(
+        {
+            "verified_run_identity": ["a", "b"],
+            "root_id": ["training-root", "validation-root"],
+            "resolved_config_checksum": ["1" * 64, "1" * 64],
+        }
+    )
+    with pytest.raises(ValueError, match="resolved configuration"):
+        split_by_manifest_roots(frame, _root_manifest())

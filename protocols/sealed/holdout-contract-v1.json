@@ -1,0 +1,16 @@
+{
+  "contract_version": 1,
+  "state": "proposed",
+  "mountain": "configs/mountain/medium-resort.yaml",
+  "intervals": {"movement_seconds": 5, "control_seconds": 60, "episode_seconds": 10800},
+  "baseline_weather": {"wind_metres_per_second": 4.0, "visibility_metres": 10000.0, "snowfall_centimetres_per_hour": 0.0, "temperature_celsius": -3.0},
+  "primary_families": ["whiteout-r1", "cascade-r1"],
+  "reserve_order": {"whiteout": ["whiteout-r1", "whiteout-r2", "whiteout-r3"], "cascade": ["cascade-r1", "cascade-r2", "cascade-r3"]},
+  "shared_root_count": 10,
+  "root_instantiation": "after_freeze",
+  "stream": {"namespace": "avalanche-sealed-v1", "hash": "sha256", "separator_hex": "00", "seed_bytes": 16, "byte_order": "big", "seed_sequence": "numpy.SeedSequence", "generator": "PCG64DXSM"},
+  "whiteout": {"start_interval": {"distribution": "discrete_uniform", "minimum": 30, "maximum": 120, "draw": "whiteout.start_interval"}, "visibility_metres": {"distribution": "continuous_uniform", "minimum": 75.0, "maximum": 200.0, "draw": "whiteout.visibility_metres"}, "wind_metres_per_second": {"distribution": "continuous_uniform", "minimum": 12.0, "maximum": 16.0, "draw": "whiteout.wind_metres_per_second"}, "snowfall_centimetres_per_hour": {"distribution": "continuous_uniform", "minimum": 8.0, "maximum": 14.0, "draw": "whiteout.snowfall_centimetres_per_hour"}, "duration_intervals": 2, "weather_scope": "resort", "notice": {"kind": "evacuation_cut_notice", "target_type": "edge_set", "targets": ["combe_lower->crete_east", "col_bonneval->crete_east"], "duration_seconds": 120, "severity": 1.0, "direct_closure": false, "direct_capacity_change": false}},
+  "cascade": {"start_interval": {"distribution": "discrete_uniform", "minimum": 30, "maximum": 90, "draw": "cascade.start_interval"}, "lift_pool": ["praz_plaza->plan_bois", "melezes_base->plan_ouest", "marmottons_base->marmottons_top", "bonneval_plaza->col_bonneval", "col_bonneval->crete_east", "plan_bois->crete_west", "crete_west->roc_blanc", "combe_shoulder->combe_top"], "selection": "first_three_of_one_permutation", "spacing_intervals": 2, "duration_intervals": {"distribution": "discrete_uniform", "minimum": 15, "maximum": 25, "draws": ["cascade.duration.0", "cascade.duration.1", "cascade.duration.2"]}, "failure_kind": "mechanical", "controller_visible_before_sensor_report": false},
+  "age": {"status": "custodian_resolution_required", "version": null, "binary_sha256": null},
+  "plaintext_publication": false
+}

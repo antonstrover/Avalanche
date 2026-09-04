@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 
 from avalanche.monitors.artifacts import load_candidate_registry
 from avalanche.monitors.sampler import build_sampler_epoch
@@ -17,6 +18,7 @@ from avalanche.monitors.training import (
 REPO = Path(__file__).resolve().parents[2]
 RESULT = REPO / "docs" / "monitor-hardening" / "gru-ablation-result.json"
 CANDIDATES = REPO / "protocols/development/model-candidates-v4.json"
+DEVELOPMENT_CONFIG = REPO / "configs/experiments/monitor-training.yaml"
 
 
 def _formal_gru_rows(boundaries: int = 10) -> pd.DataFrame:
@@ -133,3 +135,18 @@ def test_gru_warmup_excludes_seven_boundaries_from_each_run():
         epoch_index=0,
     )
     assert sum(value for _key, value in epoch.warmup_exclusion_counts) == 35
+
+
+def test_busy_weekend_remains_development_history():
+    manifest = yaml.safe_load(DEVELOPMENT_CONFIG.read_text(encoding="utf-8"))
+    families = {record["id"]: record["role"] for record in manifest["families"]}
+    assert families["busy-weekend"] == "development"
+    assert not any(
+        manifest["holdouts"].get(name)
+        for name in (
+            "policy_variants",
+            "strategies",
+            "triggers",
+            "targets",
+        )
+    )

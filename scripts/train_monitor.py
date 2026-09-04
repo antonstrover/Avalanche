@@ -14,9 +14,16 @@ import pandas as pd
 
 from avalanche.config.run_identity import REPO_ROOT
 from avalanche.control import InformationProfile
-from avalanche.monitors.artifacts import CandidateV4, load_candidate_registry
+from avalanche.experiments.protocols import load_development_manifest
+from avalanche.monitors.artifacts import (
+    CandidateV4,
+    load_candidate_registry,
+    require_runtime_identity,
+    resolve_training_runtime,
+)
 from avalanche.monitors.dataset import validate_generated_dataset
 from avalanche.monitors.perceptron import TrainingConfig
+from avalanche.monitors.splits import split_by_manifest_roots
 from avalanche.monitors.training import train_locked_monitor
 from avalanche.observability import (
     MetricEvent,
@@ -26,6 +33,9 @@ from avalanche.observability import (
 )
 
 DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "models" / "monitor-principal"
+DEFAULT_DEVELOPMENT_MANIFEST = (
+    REPO_ROOT / "protocols" / "development" / "monitor-development-v5.json"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--formal-campaign", type=Path)
     parser.add_argument("--candidate-registry", type=Path)
     parser.add_argument("--candidate-name")
+    parser.add_argument(
+        "--development-manifest",
+        type=Path,
+        default=DEFAULT_DEVELOPMENT_MANIFEST,
+    )
     parser.add_argument(
         "--information-profile",
         choices=[profile.value for profile in InformationProfile],
@@ -71,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("the formal dataset handoff is not available")
     if args.rows is None or args.shortcut_report is None:
         raise ValueError("legacy training needs rows and a shortcut report")
+    development = load_development_manifest(args.development_manifest)
+    require_runtime_identity(
+        development["bindings"]["training_runtime_sha256"],
+        resolve_training_runtime(REPO_ROOT / "uv.lock"),
+    )
     seed = 20260825 if args.seed is None else args.seed
     epochs = 60 if args.epochs is None else args.epochs
     candidate = resolve_registry_candidate(
@@ -112,8 +132,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             frame = pd.read_parquet(args.rows)
             checksums = validate_generated_dataset(args.rows, frame, profile)
-            train = frame[frame["split"] == "train"].reset_index(drop=True)
-            validation = frame[frame["split"] == "validation"].reset_index(drop=True)
+            parts = split_by_manifest_roots(frame, args.development_manifest)
+            train = parts["train"].reset_index(drop=True)
+            validation = parts["validation"].reset_index(drop=True)
             if train.empty or validation.empty:
                 message = "the monitor dataset needs training and validation rows"
                 raise ValueError(message)

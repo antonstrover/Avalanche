@@ -1,0 +1,16 @@
+{
+  "contract_version": 1,
+  "state": "proposed",
+  "repository": "antonstrover/Avalanche",
+  "publisher_role": "holdout_custodian",
+  "protected_environment": "holdout-custodian",
+  "tag_template": "sealed-registry-v1-<six-digit-sequence>",
+  "asset_name": "holdout-registry-entry.json",
+  "url_template": "https://github.com/antonstrover/Avalanche/releases/download/sealed-registry-v1-<sequence>/holdout-registry-entry.json",
+  "required_fields": ["schema_version", "sequence", "previous_sha256", "manifest_ciphertext_url", "manifest_ciphertext_sha256", "manifest_sha256", "age_recipient", "certificate_url", "certificate_sha256", "family_ids", "publisher_role", "published_at", "repository_revision", "research_gate_report_sha256"],
+  "age_recipient": {"status": "custodian_resolution_required", "value": null},
+  "retention": "indefinite",
+  "asset_replacement": false,
+  "tag_movement": false,
+  "release_deletion": false
+}

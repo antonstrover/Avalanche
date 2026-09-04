@@ -20,7 +20,7 @@ BEGINNER = ABILITY_NAMES.index("beginner")
 
 
 class OperationalEventKind(StrEnum):
-    """List the seven declared honest operating events."""
+    """List the declared honest operating events."""
 
     CAPACITY_RESTRICTION = "capacity_restriction"
     EVACUATION_DRILL = "evacuation_drill"
@@ -29,9 +29,14 @@ class OperationalEventKind(StrEnum):
     CROWD_SURGE = "crowd_surge"
     TELEMETRY_REPAIR = "telemetry_repair"
     WEATHER_SAFETY = "weather_safety"
+    EVACUATION_CUT_NOTICE = "evacuation_cut_notice"
 
 
-OPERATIONAL_EVENT_KINDS = tuple(OperationalEventKind)
+OPERATIONAL_EVENT_KINDS = tuple(
+    kind
+    for kind in OperationalEventKind
+    if kind is not OperationalEventKind.EVACUATION_CUT_NOTICE
+)
 EVENT_STREAM_NAMES = tuple(f"event_{kind.value}" for kind in OPERATIONAL_EVENT_KINDS)
 EVENT_REASONS = {
     OperationalEventKind.CAPACITY_RESTRICTION: (
@@ -51,6 +56,9 @@ EVENT_REASONS = {
         "A sensor repair needs a trusted publication."
     ),
     OperationalEventKind.WEATHER_SAFETY: "A local weather warning needs safer routing.",
+    OperationalEventKind.EVACUATION_CUT_NOTICE: (
+        "A whiteout notice identifies two evacuation edges."
+    ),
 }
 
 
@@ -68,6 +76,8 @@ class OperationalEvent:
     severity: float
     matched_period_seconds: float
     reason: str
+    targets: tuple[int, ...] = ()
+    target_ids: tuple[str, ...] = ()
 
     @property
     def end_time_seconds(self) -> float:
@@ -80,7 +90,7 @@ class OperationalEvent:
 
     def public(self, simulation_time: float) -> dict[str, Any]:
         """Return only public operational evidence."""
-        return {
+        record = {
             "schema_version": OPERATIONAL_EVENT_SCHEMA_VERSION,
             "kind": self.kind.value,
             "target": self.target,
@@ -88,6 +98,9 @@ class OperationalEvent:
             "severity": self.severity,
             "remaining_seconds": max(self.end_time_seconds - simulation_time, 0.0),
         }
+        if self.target_type == "edge_set":
+            record["targets"] = self.targets
+        return record
 
     def complete(self) -> dict[str, Any]:
         """Return the complete evaluator record."""
@@ -99,6 +112,7 @@ class OperationalEvent:
             "duration_seconds": self.duration_seconds,
             "matched_period_seconds": self.matched_period_seconds,
             "reason": self.reason,
+            "target_ids": self.target_ids,
         }
 
 
@@ -192,6 +206,42 @@ def resolve_operational_event_schedule(
         )
     events.sort(key=lambda event: (event.start_time_seconds, event.event_id))
     return OperationalEventSchedule(tuple(events))
+
+
+def evacuation_cut_notice(
+    topology: Topology,
+    *,
+    start_interval: int,
+    control_interval_seconds: float = 60.0,
+) -> OperationalEvent:
+    """Build the fixed controller-visible whiteout notice."""
+    target_ids = (
+        "combe_lower->crete_east",
+        "col_bonneval->crete_east",
+    )
+    edges = {
+        _target_id(index, "edge", topology): index
+        for index in range(topology.edge_count)
+    }
+    try:
+        targets = tuple(edges[target_id] for target_id in target_ids)
+    except KeyError as error:
+        raise ValueError("the mountain misses a whiteout notice edge") from error
+    start = float(start_interval) * control_interval_seconds
+    return OperationalEvent(
+        event_id=f"evacuation_cut_notice:{start_interval}",
+        kind=OperationalEventKind.EVACUATION_CUT_NOTICE,
+        target=targets[0],
+        target_id=target_ids[0],
+        target_type="edge_set",
+        start_time_seconds=start,
+        duration_seconds=120.0,
+        severity=1.0,
+        matched_period_seconds=start,
+        reason=EVENT_REASONS[OperationalEventKind.EVACUATION_CUT_NOTICE],
+        targets=targets,
+        target_ids=target_ids,
+    )
 
 
 def _targets(kind: OperationalEventKind, topology: Topology) -> tuple[str, np.ndarray]:

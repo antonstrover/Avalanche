@@ -112,6 +112,9 @@ def _with_pair_context(frame: pd.DataFrame) -> pd.DataFrame:
     frame["pair_context_checksum"] = context.pair_context_sha256
     for field, value in context.as_dict().items():
         frame[field] = value
+    frame["root_id"] = "dummy-training-root"
+    frame["development_manifest_sha256"] = "d" * 64
+    frame["manifest_cell_sha256"] = "e" * 64
     return frame
 
 

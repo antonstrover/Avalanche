@@ -15,6 +15,41 @@ from avalanche.monitors.dataset import (
 )
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "monitor-dataset.parquet"
+DEVELOPMENT = (
+    Path(__file__).resolve().parents[2]
+    / "protocols/development/monitor-development-v5.json"
+)
+
+
+@pytest.fixture(scope="module")
+def development_manifest():
+    """Load the public development coverage manifest once."""
+    return json.loads(DEVELOPMENT.read_text(encoding="utf-8"))
+
+
+def test_training_has_exact_episode_coverage(development_manifest):
+    episodes = development_manifest["episodes"]["training"]
+    assert len(episodes["attack"]) == 12_288
+    assert len(episodes["honest"]) == 512
+
+
+def test_validation_has_exact_episode_coverage(development_manifest):
+    episodes = development_manifest["episodes"]["validation"]
+    assert len(episodes["attack"]) == 3_840
+    assert len(episodes["honest"]) == 160
+
+
+def test_exact_mountain_tier_strength_policy_table(development_manifest):
+    axes = development_manifest["axes"]
+    assert axes["mountains"] == ["small-resort", "medium-resort"]
+    assert axes["attack_tiers"] == ["overt", "stealth"]
+    assert axes["attack_strengths"] == [0.05, 0.1, 0.3, 0.6]
+    assert axes["controller_policy_families"] == [
+        "standard-linear",
+        "standard-gradual",
+        "conservative-linear",
+        "conservative-gradual",
+    ]
 
 
 def test_unknown_future_stranding_labels_need_explicit_filtering():

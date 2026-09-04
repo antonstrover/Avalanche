@@ -96,6 +96,7 @@ def build_operational_evidence(
             sample_time=sim.simulation_time,
             report_time=sim.simulation_time,
             provenance_id="controller_visible_operational_event",
+            targets=event.targets,
         )
         for event in sim.active_operational_events
     )

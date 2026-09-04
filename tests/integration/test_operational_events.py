@@ -12,6 +12,7 @@ from avalanche.env import AvalancheEnv
 from avalanche.scenarios.operational_events import (
     EVENT_STREAM_NAMES,
     OPERATIONAL_EVENT_KINDS,
+    evacuation_cut_notice,
     resolve_operational_event_schedule,
 )
 from avalanche.sim import MountainSim, load_topology
@@ -146,3 +147,17 @@ def test_a_seed_repeats_the_complete_event_schedule():
         first.metadata(33)["operational_event_schedule"]
         == second.metadata(33)["operational_event_schedule"]
     )
+
+
+def test_the_whiteout_notice_preserves_both_ordered_edges():
+    topology = load_topology(MOUNTAINS[0])
+    event = evacuation_cut_notice(topology, start_interval=30)
+    public = event.public(1800.0)
+    assert public["kind"] == "evacuation_cut_notice"
+    assert public["target_type"] == "edge_set"
+    assert event.target_ids == (
+        "combe_lower->crete_east",
+        "col_bonneval->crete_east",
+    )
+    assert public["targets"] == event.targets
+    assert event.duration_seconds == 120.0
