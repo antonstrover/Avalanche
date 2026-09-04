@@ -34,7 +34,8 @@ from avalanche.traces.continuation_state import (
 
 PHYSICAL_REPLAY_SCHEMA_VERSION = 1
 CONTINUATION_SCHEMA_VERSION = 1
-SNAPSHOT_SCHEMA_VERSION = PHYSICAL_REPLAY_SCHEMA_VERSION
+SNAPSHOT_SCHEMA_VERSION = 5
+LEGACY_DISPLAY_SCHEMA_VERSIONS = frozenset({3, 4, 5})
 PHYSICAL_REPLAY_ARTIFACT_TYPE = "avalanche.physical_replay_snapshot"
 CONTINUATION_ARTIFACT_TYPE = "avalanche.continuation_snapshot"
 REPORTED_REPLAY_FILENAME = "physical-replay-reported.parquet"
@@ -149,6 +150,24 @@ def load_physical_replay_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     return {**replay, "executable": False}
 
 
+def load_legacy_display_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    """Validate one legacy display row without granting execution use."""
+    value = _mapping(row, "legacy display snapshot")
+    version = value.get("snapshot_schema_version")
+    if version not in LEGACY_DISPLAY_SCHEMA_VERSIONS:
+        raise SnapshotSchemaError("the legacy display schema is unsupported")
+    checksum = value.get("state_checksum")
+    if not isinstance(checksum, str) or not checksum:
+        raise SnapshotSchemaError("the legacy display checksum is invalid")
+    return {
+        "snapshot_schema_version": version,
+        "state_checksum": checksum,
+        "display_row": value,
+        "formal": False,
+        "executable": False,
+    }
+
+
 def encode_snapshot(
     sim: MountainSim,
     *,
@@ -169,7 +188,10 @@ def encode_snapshot(
 def restore_snapshot(sim: MountainSim, row: dict[str, Any]) -> None:
     """Reject execution restoration from every display replay."""
     del sim
-    load_physical_replay_snapshot(row)
+    if "snapshot_schema_version" in row:
+        load_legacy_display_snapshot(row)
+    else:
+        load_physical_replay_snapshot(row)
     raise SnapshotSchemaError("the physical replay is display-only")
 
 

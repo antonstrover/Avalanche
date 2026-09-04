@@ -242,6 +242,7 @@ It writes events, metrics, two replay views, a continuation, and the final summa
 `physical-replay-reported.parquet` contains reported aggregate display state.
 `physical-replay-evaluator.parquet` contains privileged physical display state.
 Neither physical replay file can resume execution.
+The loader keeps version three through five display rows as nonformal data.
 The continuation file stores every future-influencing state owner.
 The artifact manifest stores each exact file digest.
 

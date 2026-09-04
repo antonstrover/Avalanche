@@ -29,6 +29,7 @@ from avalanche.traces import (
     encode_continuation_snapshot,
     encode_physical_replay_snapshot,
     load_continuation_snapshot,
+    load_legacy_display_snapshot,
     load_physical_replay_snapshot,
     restore_continuation_snapshot,
     restore_snapshot,
@@ -326,6 +327,22 @@ def test_cross_type_load_is_rejected(tmp_path):
             expected_artifact_sha256=hashlib.sha256(content).hexdigest(),
             resolved=resolved,
         )
+
+
+@pytest.mark.parametrize("version", [3, 4, 5])
+def test_legacy_display_rows_remain_non_executable(tmp_path, version):
+    """Keep each supported legacy display adapter outside formal state."""
+    row = {
+        "snapshot_schema_version": version,
+        "state_checksum": "legacy-display-identity",
+        "arrays": [],
+    }
+    loaded = load_legacy_display_snapshot(row)
+
+    assert not loaded["formal"]
+    assert not loaded["executable"]
+    with pytest.raises(SnapshotSchemaError, match="display-only"):
+        restore_snapshot(object(), row)
 
 
 def test_a_wrong_continuation_extension_is_rejected_after_parse(tmp_path):
