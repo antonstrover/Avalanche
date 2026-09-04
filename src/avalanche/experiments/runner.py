@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 
@@ -13,7 +13,6 @@ from avalanche.control import (
     ApprovalChoice,
     ProposalEngineeringError,
     SimulatedApprover,
-    StatefulComponent,
     decision_identifier,
     observation_as_json,
 )
@@ -248,7 +247,7 @@ def run_episode(resolved: ResolvedConfig, output_dir: Path) -> dict[str, Any]:
         trace.record_snapshot(env.sim)
     continuation = encode_continuation_snapshot(
         env,
-        cast(StatefulComponent, controller),
+        controller,
         resolved,
         attack_lifecycle=attack_lifecycle,
         trace_state=trace.snapshot_state(),
